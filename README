@@ -1,0 +1,89 @@
+silverlang
+==========
+
+Silver:  A dependently-typed higher-order stateful concurrent language.
+
+
+This repository is for the core syntax and type checking of the Silver
+programming language.  Silver is a language designed for building
+highly robust, verified system.  A brief overview of the features of
+the language follows:
+
+ * Full higher-order dependent types, including types for representing
+   the behavior of computations in a concurrent setting.
+
+ * A realistic model of concurrency, making no assumptions beyond
+   atomic read/write operations.
+
+ * Higher-order polymorphism, eventually to support subtyping.
+
+ * Built-in higher-order predicate logic for defining specifications.
+
+ * Two-stage type checking, with a (decidable) first stage which
+   produces verification conditions for the (undecidable) second
+   stage for pay-as-you-go verification.
+
+ * Designed to facilitate a wide range of uses.
+
+ * Ability to enable or disable components of the type system to
+   facilitate building different "layers" of a system.
+
+
+Concept-
+
+Silver is split into a surface syntax, which focuses on usability,
+design, and software engineering concerns, and a core language, which
+focuses on semantics, type checking, soundness proofs, and
+compilation.  The surface syntax is translated into core, then type
+checked, (optionally) verified, and ultimately compiled.  The language
+is designed this way to get around a frequent problem where the syntax
+of a language is easy to understand and use, but difficult to reason
+about (ie Java), or else easy to reason about but difficult and
+awkward to use (ie Haskell).
+
+The type system and language is designed such that certain features
+can be enabled or disabled for different compilation modes, allowing
+different "layers" of a system to be built using the same language.
+
+Silver core is based on a process algebra which represents concurrent
+computations as generators of sequences of state transitions, with
+state transitions themselves represented as the function space of the
+domain of an algebra of nondeterministic (single-threaded)
+computation, and with individual values represented by a traditional
+domain of primitives, algebraic data types, and functions on them.
+Types are represented as computable sets of computations, values,
+lower-rank types, or propositions.  Propositions are an alternate
+semantic domain that models intuitionistic logic.
+
+For normal execution, we allow computations to operate on and produce
+only values; computing on types or propositions is prohibited.
+However, nothing in the language itself expressly prohibits this;
+rather it an additional rule enforced by the type checker.
+Computations which produce types can be allowed as a kind of
+preprocessor, where computation on propositions provides an effective
+way of implementing a theorem prover for Silver in Silver itself.
+
+Type checking is designed to split into two distinct phases.  The
+first phase is a decidable (or mostly decidable) phase, which makes
+guarantees roughly equivalent to those made by Haskell or Standard
+ML's type systems.  The first phase also produces a set of
+verification conditions, which must be proven to ensure full
+correctness.  The second phase consists of an undecidable procedure
+for discharging the verification conditions.  Generally, the compiler
+will not require the second phase to complete before compiling a
+program.  This is designed to allow a number of different strategies
+for the verification phase ranging over varying levels of soundness,
+including 1) automated theorem proving, 2) interactive (manual)
+theorem proving, 3) embedding proofs in the code, 4) using the
+verification conditions as inputs to a model checking framework, 5)
+deriving debugging or testing information, 6) inserting runtime
+assertions, or 7) ignoring them completely.
+
+
+Status-
+
+Silver represents the implementation side of my (Eric McCorkle's) Ph.D
+dissertation.  As such, there are distinct phases of work planned.
+
+At present, I am converting and exporting an older (and much messier)
+repository into this one.
