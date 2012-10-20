@@ -45,23 +45,52 @@ The type system and language is designed such that certain features
 can be enabled or disabled for different compilation modes, allowing
 different "layers" of a system to be built using the same language.
 
-Argent core is based on a process algebra which represents concurrent
-computations as generators of sequences of state transitions, with
-state transitions themselves represented as the function space of the
-domain of an algebra of nondeterministic (single-threaded)
-computation, and with individual values represented by a traditional
-domain of primitives, algebraic data types, and functions on them.
-Types are represented as computable sets of computations, values,
-lower-rank types, or propositions.  Propositions are an alternate
-semantic domain that models intuitionistic logic.
+Argent core has four kinds of objects: values, types, computations,
+and propositions.  They are described more formally in the next
+section.  There are also (pure) functions over objects, as well as tuples,
+and nondetermisitic choice (all of which are themselves objects).
 
-For normal execution, we allow computations to operate on and produce
-only values; computing on types or propositions is prohibited.
-However, nothing in the language itself expressly prohibits this;
-rather it an additional rule enforced by the type checker.
-Computations which produce types can be allowed as a kind of
-preprocessor, where computation on propositions provides an effective
-way of implementing a theorem prover for Argent in Argent itself.
+Values consist of primitive data types, and by extension, functions,
+tuples/records thereof.
+
+Computations are stateful, possibly non-terminating, possibly
+concurrent procedures, which produce a value (note, unit is a value,
+per se), or continuations, which do not.
+
+Propositions are similar to values except that they model a
+higher-order intuitionistic predicate logic.  The biggest difference
+between propositions and values is that equivalence between values is
+structural equivalence under normalization, which is decidable, while
+equivalence among propositions is full propositional equivalence (ie
+iff), which is not.
+
+Types consist of dependent product and sum types (representing
+functions and tuples/records respectively), and pattern types
+(representing computations), as well as refinement types and type
+variables (some of which are pre-defined, such as integers).  Pattern
+and refinement types are also constructed using propositions; as such,
+equivalence among types is also generally undecidable (though for the
+most part, it is in fact decidable).
+
+Pattern types describe a computation's behavior in a concurrent
+setting in terms of the possible sequences of state transitions that
+might occur (in a manner similar to, but more powerful than regular
+expressions).  Individual states are described using higher-order
+intuitionistic predicate logic (ie functions producing propositions).
+
+Most such descriptions use a higher-order separation logic, which we
+are able to denote in Argent itself, using the more basic higher-order
+intuitionistic logic.
+
+Since equivalence among types and propositions is decidable,
+computations and functions are generally not allowed to operate on
+either domain for normal execution modes, and there is no primitive
+construct which produces a value from a type or proposition.
+
+It may be possible to add constructs based on simple equality (as
+opposed to full equivalence) that would allow computation on types or
+propositions, however.  This opens the door to powerful
+metaprogramming capabilities.
 
 Type checking is designed to split into two distinct phases.  The
 first phase is a decidable (or mostly decidable) phase, which makes
@@ -80,6 +109,34 @@ deriving debugging or testing information, 6) inserting runtime
 assertions, or 7) ignoring them completely.
 
 
+Formal Semantics-
+
+Argent core consists of objects divided into four primitive semantic
+domains: values, computations, types, and propositions, and a "hidden"
+domain of states, as well as functions, tuples/records (ie countable
+products), and nondeterministic choice (ie countable sets) over the
+entire domain of objects, set up in a recursive fashion.  Values
+consist of a variety of primitive data types.  Computations are
+modeled as generators for (countable) sequences of state transitions
+(computable functions over countable vectors of values).  States are
+countable products of the combined domains of values and computations.
+Types are computable sets of objects.  Propositions are a standard
+Heyting algebra construction.  The entire domain is modeled as Hilbert
+space with positive coefficients of either 0 or 1 and the identity 1 +
+1 = 1, which gives rise to a complete, non-empty, 1-bounded
+ultrametric space constructed from non-expanding functors.  The domain
+itself is isomorphic to R (the real numbers).
+
+The execution of a computation is defined by isolation, which is
+represented by a function which maps computations to functions on
+states, taking each constructor on computations to the equivalent one
+in the domain of states.
+
+Note that non-terminating computations can still interact with other
+computations in this model, even though in isolation, they produce no
+meaningful value.
+
+
 Status-
 
 Argent represents the implementation side of my (Eric McCorkle's) Ph.D
@@ -88,11 +145,11 @@ dissertation.  As such, there are distinct phases of work planned.
 At present, I am converting and exporting an older (and much messier)
 repository into this one.
 
-One hurdle is the fact that the type checker needs a multivariate
-polynomial normalization and math library to function properly.  I
-have an old (ugly, inefficient) implementation, but this really ought
-to be done the Right Way (tm), which probably involves calling out to
-FFI.
+One hurdle is the fact that the type checker needs normalization and
+ring operations on multivariate polynomials to function properly (it
+automagically normalizes polynomials for easy equivalence).  I have an
+old (ugly, inefficient) implementation, but this really ought to be
+done the Right Way (tm), which probably involves calling out to FFI.
 
 
 Name-
