@@ -1,0 +1,93 @@
+Name:                   argentlang
+Version:                0.0.0.0
+Synopsis:               The Argent programming language.
+Description:
+  Argent is split into a surface syntax, which focuses on usability,
+  design, and software engineering concerns, and a core language,
+  which focuses on semantics, type checking, soundness proofs, and
+  compilation.  The surface syntax is translated into core, then type
+  checked, (optionally) verified, and ultimately compiled.  The
+  language is designed this way to get around a frequent problem where
+  the syntax of a language is easy to understand and use, but
+  difficult to reason about (ie Java), or else easy to reason about
+  but difficult and awkward to use (ie Haskell).
+
+  The type system and language is designed such that certain features
+  can be enabled or disabled for different compilation modes, allowing
+  different "layers" of a system to be built using the same language.
+
+  Argent core has four kinds of objects: values, types, computations,
+  and propositions.  They are described more formally in the next
+  section.  There are also (pure) functions over objects, as well as
+  tuples, and nondetermisitic choice (all of which are themselves
+  objects).
+
+  Values consist of primitive data types, and by extension, functions,
+  tuples/records thereof.
+
+  Computations are stateful, possibly non-terminating, possibly
+  concurrent procedures, which produce a value (note, unit is a value,
+  per se), or continuations, which do not.
+
+  Propositions are similar to values except that they model a
+  higher-order intuitionistic predicate logic.  The biggest difference
+  between propositions and values is that equivalence between values
+  is structural equivalence under normalization, which is decidable,
+  while equivalence among propositions is full propositional
+  equivalence (ie iff), which is not.
+
+  Types consist of dependent product and sum types (representing
+  functions and tuples/records respectively), and pattern types
+  (representing computations), as well as refinement types and type
+  variables (some of which are pre-defined, such as integers).
+  Pattern and refinement types are also constructed using
+  propositions; as such, equivalence among types is also generally
+  undecidable (though for the most part, it is in fact decidable).
+
+  Pattern types describe a computation's behavior in a concurrent
+  setting in terms of the possible sequences of state transitions that
+  might occur (in a manner similar to, but more powerful than regular
+  expressions).  Individual states are described using higher-order
+  intuitionistic predicate logic (ie functions producing
+  propositions).
+
+  Most such descriptions use a higher-order separation logic, which we
+  are able to denote in Argent itself, using the more basic
+  higher-order intuitionistic logic.
+
+  Since equivalence among types and propositions is decidable,
+  computations and functions are generally not allowed to operate on
+  either domain for normal execution modes, and there is no primitive
+  construct which produces a value from a type or proposition.
+
+  It may be possible to add constructs based on simple equality (as
+  opposed to full equivalence) that would allow computation on types
+  or propositions, however.  This opens the door to powerful
+  metaprogramming capabilities.
+
+  Type checking is designed to split into two distinct phases.  The
+  first phase is a decidable (or mostly decidable) phase, which makes
+  guarantees roughly equivalent to those made by Haskell or Standard
+  ML's type systems.  The first phase also produces a set of
+  verification conditions, which must be proven to ensure full
+  correctness.  The second phase consists of an undecidable procedure
+  for discharging the verification conditions.  Generally, the
+  compiler will not require the second phase to complete before
+  compiling a program.  This is designed to allow a number of
+  different strategies for the verification phase ranging over varying
+  levels of soundness, including 1) automated theorem proving, 2)
+  interactive (manual) theorem proving, 3) embedding proofs in the
+  code, 4) using the verification conditions as inputs to a model
+  checking framework, 5) deriving debugging or testing information, 6)
+  inserting runtime assertions, or 7) ignoring them completely.
+License:                BSD3
+Author:                 Eric McCorkle
+Maintainer:             eric@metricspace.net
+Stability:              Pre-alpha
+Category:               Languages
+Build-type:             Simple
+Cabal-version:          >= 1.9.2
+
+Library
+  build-depends:        base, data-hash, proglang-util, bound
+  exposed-modules:      Language.Argent.Core
