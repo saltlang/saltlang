@@ -52,7 +52,8 @@ import Data.Pos
 import Data.Traversable
 import Prelude hiding (foldr1)
 
--- | A binding.
+-- | A pattern binding.  Represents how to deconstruct a value and
+-- bind it to variables.
 data Binding b t s =
     -- | A projection.  Binds to the names of a record.  This mirrors
     -- a Record term.
@@ -100,7 +101,7 @@ data Binding b t s =
   | Constant (t s)
 --    deriving (Ord, Eq)
 
--- | A Pattern.  Consists of a pattern and a type.  The symbol unused
+-- | A pattern.  Consists of a pattern and a type.  The symbol unused
 -- may occur in pattern terms, in which case it acts as a wildcard.
 data Pattern b t s =
     Pattern {
@@ -114,7 +115,17 @@ data Pattern b t s =
     }
 --    deriving (Ord, Eq)
 
--- | Terms.
+-- | Terms.  Represents pure terms in the language.  Terms are further
+-- subdivided into types, propositions, and elimination and
+-- introduction terms (both of which represent values).
+--
+-- Types and propositions do not support decidable equality, and thus
+-- cannot be computed upon.
+--
+-- Values can be computed upon, and can appear in a pattern match.
+-- Elimination terms are those terms whose type can be inferred in
+-- type checking.  Introduction terms are those terms that require a
+-- type to be checked against.
 data Term b s =
   -- Types.  These do not support decidable equality.  As such, they
   -- cannot be the result of a computation, and cannot appear in
@@ -271,7 +282,8 @@ data Term b s =
   | BadTerm !Pos
 --    deriving (Eq, Ord)
 
--- | Commands
+-- | Commands.  These represent individual statements, or combinations
+-- thereof, which do not bind variables.
 data Cmd b s =
     Value {
       -- | The term representing the value of this command
@@ -287,6 +299,8 @@ data Cmd b s =
       -- | The position in source from which this originates.
       evalPos :: !Pos
     }
+  -- XXX need some kind of a general form case statement, probably
+  -- akin to Fortress' dispatch statement.
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
   | BadCmd !Pos
