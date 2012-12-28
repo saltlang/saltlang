@@ -51,6 +51,7 @@ import Data.Monoid
 import Data.Pos
 import Data.Traversable
 import Prelude hiding (foldr1)
+import Prelude.Extras(Eq1(..), Ord1(..))
 
 -- | A pattern binding.  Represents how to deconstruct a value and
 -- bind it to variables.
@@ -60,6 +61,8 @@ data Binding b t s =
     Project {
       -- | The fields in the record being bound.
       projectBinds :: [(b, Binding b t s)],
+      -- | Whether or not the binding is strict (ie. it omits some names)
+      projectStrict :: !Bool,
       -- | The position in source from which this originates.
       projectPos :: !Pos
     }
@@ -71,6 +74,8 @@ data Binding b t s =
   | Construct {
       -- | The fields in the construction being bound.
       constructBinds :: [(b, Binding b t s)],
+      -- | Whether or not the constructor is strict (ie. it omits some names)
+      constructStrict :: !Bool,
       -- | The position in source from which this originates.
       constructPos :: !Pos
     }
@@ -99,7 +104,7 @@ data Binding b t s =
     }
     -- | A constant.  Constrains the binding to the given value.
   | Constant (t s)
---    deriving (Ord, Eq)
+    deriving (Ord, Eq)
 
 -- | A pattern.  Consists of a pattern and a type.  The symbol unused
 -- may occur in pattern terms, in which case it acts as a wildcard.
@@ -113,7 +118,7 @@ data Pattern b t s =
       -- | The position in source from which this originates.
       patternPos :: !Pos
     }
---    deriving (Ord, Eq)
+    deriving (Ord, Eq)
 
 -- | Terms.  Represents pure terms in the language.  Terms are further
 -- subdivided into types, propositions, and elimination and
@@ -263,9 +268,6 @@ data Term b s =
   | Record {
       -- | The bindings for this record.
       recVals :: [(b, Term b s)],
-      -- | Whether or not this represents all the values in the
-      -- struture.
-      recComplete :: !Bool,
       -- | The position in source from which this originates.
       recPos :: !Pos
     }
@@ -280,7 +282,7 @@ data Term b s =
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
   | BadTerm !Pos
---    deriving (Eq, Ord)
+    deriving (Ord, Eq)
 
 -- | Commands.  These represent individual statements, or combinations
 -- thereof, which do not bind variables.
@@ -304,7 +306,7 @@ data Cmd b s =
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
   | BadCmd !Pos
---    deriving (Eq, Ord)
+    deriving (Ord, Eq)
 
 -- | Computations.  Semantically, computations are generators for
 -- sequences of atomic actions, which are not guaranteed to terminate,
@@ -339,7 +341,237 @@ data Comp b s =
   -- | Placeholder for a malformed computation, allowing type checking
   -- to continue in spite of errors.
   | BadComp !Pos
---    deriving (Ord, Eq)
+    deriving (Ord, Eq)
+
+eqBinds :: (Eq b, Eq s, Eq1 t) =>
+           [(b, Binding b t s)] -> [(b, Binding b t s)] -> Bool
+eqBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
+  (name1 == name2) && (bind1 ==# bind2) && eqBinds binds1 binds2
+eqBinds [] [] = True
+eqBinds _ _ = False
+
+compareBinds :: (Ord b, Ord s, Ord1 t) =>
+           [(b, Binding b t s)] -> [(b, Binding b t s)] -> Ordering
+compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
+  case compare name1 name2 of
+    EQ -> case compare1 bind1 bind2 of
+      EQ -> compareBinds binds1 binds2
+      out -> out
+    out -> out
+compareBinds [] [] = EQ
+compareBinds [] _ = LT
+compareBinds _ [] = GT
+
+instance (Eq b, Eq1 t) => Eq1 (Binding b t) where
+  Project { projectBinds = binds1, projectStrict = strict1 } ==#
+    Project { projectBinds = binds2, projectStrict = strict2 } =
+      (eqBinds binds1 binds2) && (strict1 == strict2)
+  Construct { constructBinds = binds1, constructStrict = strict1 } ==#
+    Construct { constructBinds = binds2, constructStrict = strict2 } =
+      (eqBinds binds1 binds2) && (strict1 == strict2)
+  As { asName = name1, asBind = bind1 } ==#
+    As { asName = name2, asBind = bind2 } =
+      (name1 == name2) && (bind1 ==# bind2)
+  Name { nameSym = name1 } ==# Name { nameSym = name2 } = name1 == name2
+  Constant term1 ==# Constant term2 = term1 ==# term2
+  _ ==# _ = False
+
+instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
+  Pattern { patternBind = bind1, patternType = ty1 } ==#
+    Pattern { patternBind = bind2, patternType = ty2 } =
+      (bind1 ==# bind2) && (ty1 ==# ty2)
+
+instance Eq b => Eq1 (Term b) where
+  ProdType { prodInitArgTy = initty1, prodArgTys = argtys1,
+             prodRetTy = retty1 } ==#
+    ProdType { prodInitArgTy = initty2, prodArgTys = argtys2,
+               prodRetTy = retty2 } =
+      (initty1 ==# initty2) && (argtys1 ==# argtys2) && (retty1 ==# retty2)
+  SumType { sumInit = init1, sumBody = body1 } ==#
+    SumType { sumInit = init2, sumBody = body2 } =
+      (init1 ==# init2) && (body1 ==# body2)
+  RefineType { refinePat = pat1, refineProp = prop1 } ==#
+    RefineType { refinePat = pat2, refineProp = prop2 } =
+      (pat1 ==# pat2) && (prop1 ==# prop2)
+  CompType { compPat = pat1, compSpec = spec1 } ==#
+    CompType { compPat = pat2, compSpec = spec2 } =
+      (pat1 ==# pat2) && (spec1 ==# spec2)
+  Forall { forallPats = pats1, forallProp = prop1 } ==#
+    Forall { forallPats = pats2, forallProp = prop2 } =
+      (pats1 ==# pats2) && (prop1 ==# prop2)
+  Exists { existsPats = pats1, existsProp = prop1 } ==#
+    Exists { existsPats = pats2, existsProp = prop2 } =
+      (pats1 ==# pats2) && (prop1 ==# prop2)
+  Call { callArgs = args1, callFunc = func1 } ==#
+    Call { callArgs = args2, callFunc = func2 } =
+      (args1 ==# args2) && (func1 ==# func2)
+  Var { varSym = sym1 } ==# Var { varSym = sym2 } = sym1 == sym2
+  Typed { typedTerm = term1, typedType = ty1 } ==#
+    Typed { typedTerm = term2, typedType = ty2 } =
+      (term1 ==# term2) && (ty1 ==# ty2)
+  Eta { etaTerm = term1, etaType = ty1 } ==#
+    Eta { etaTerm = term2, etaType = ty2 } =
+      (term1 ==# term2) && (ty1 ==# ty2)
+  Record { recVals = vals1 } ==# Record { recVals = vals2 } = vals1 ==# vals2
+  Fix { fixComps = comps1 } ==# Fix { fixComps = comps2 } = comps1 ==# comps2
+  BadTerm _ ==# BadTerm _ = True
+  _ ==# _ = False
+
+instance Eq b => Eq1 (Cmd b) where
+  Value { valTerm = term1 } ==# Value { valTerm = term2 } = term1 ==# term2
+  Eval { evalTerm = term1 } ==# Eval { evalTerm = term2 } = term1 ==# term2
+  BadCmd _ ==# BadCmd _ = True
+  _ ==# _ = False
+
+instance Eq b => Eq1 (Comp b) where
+  Seq { seqPat = pat1, seqCmd = cmd1, seqNext = next1 } ==#
+    Seq { seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
+      (pat1 ==# pat2) && (cmd1 ==# cmd2) && (next1 ==# next2)
+  End { endCmd = cmd1 } ==# End { endCmd = cmd2 } = cmd1 ==# cmd2
+  BadComp _ ==# BadComp _ = True
+  _ ==# _ = False
+
+instance (Ord b, Ord1 t) => Ord1 (Binding b t) where
+  compare1 (Project { projectBinds = binds1, projectStrict = strict1 })
+           (Project { projectBinds = binds2, projectStrict = strict2 }) =
+    case compare strict1 strict2 of
+      EQ -> compareBinds binds1 binds2
+      out -> out
+  compare1 (Project {}) _ = GT
+  compare1 _ (Project {}) = LT
+  compare1 (Construct { constructBinds = binds1, constructStrict = strict1 })
+           (Construct { constructBinds = binds2, constructStrict = strict2 }) =
+    case compare strict1 strict2 of
+      EQ -> compareBinds binds1 binds2
+      out -> out
+  compare1 (Construct {}) _ = GT
+  compare1 _ (Construct {}) = LT
+  compare1 (As { asName = name1, asBind = bind1 })
+           (As { asName = name2, asBind = bind2 }) =
+    case compare name1 name2 of
+      EQ -> compare1 bind1 bind2
+      out -> out
+  compare1 (As {}) _ = GT
+  compare1 _ (As {}) = LT
+  compare1 (Name { nameSym = name1 }) (Name { nameSym = name2 }) =
+    compare name1 name2
+  compare1 (Name {}) _ = GT
+  compare1 _ (Name {}) = LT
+  compare1 (Constant term1) (Constant term2) = compare1 term1 term2
+
+instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
+  compare1 (Pattern { patternBind = bind1, patternType = ty1 })
+           (Pattern { patternBind = bind2, patternType = ty2 }) =
+    case compare1 bind1 bind2 of
+      EQ -> compare ty1 ty2
+      out -> out
+
+instance Ord b => Ord1 (Term b) where
+  compare1 (ProdType { prodInitArgTy = initty1, prodArgTys = argtys1,
+                       prodRetTy = retty1 })
+           (ProdType { prodInitArgTy = initty2, prodArgTys = argtys2,
+                       prodRetTy = retty2 }) =
+    case compare1 initty1 initty2 of
+      EQ -> case compare1 argtys1 argtys2 of
+        EQ -> compare1 retty1 retty2
+        out -> out
+      out -> out
+  compare1 (ProdType {}) _ = GT
+  compare1 _ (ProdType {}) = LT
+  compare1 (SumType { sumInit = init1, sumBody = body1 })
+           (SumType { sumInit = init2, sumBody = body2 }) =
+    case compare1 init1 init2 of
+      EQ -> compare1 body1 body2
+      out -> out
+  compare1 (SumType {}) _ = GT
+  compare1 _ (SumType {}) = LT
+  compare1 (RefineType { refinePat = pat1, refineProp = prop1 })
+           (RefineType { refinePat = pat2, refineProp = prop2 }) =
+    case compare1 pat1 pat2 of
+      EQ -> compare1 prop1 prop2
+      out -> out
+  compare1 (RefineType {}) _ = GT
+  compare1 _ (RefineType {}) = LT
+  compare1 (CompType { compPat = pat1, compSpec = spec1 })
+           (CompType { compPat = pat2, compSpec = spec2 }) =
+    case compare1 pat1 pat2 of
+      EQ -> compare1 spec1 spec2
+      out -> out
+  compare1 (CompType {}) _ = GT
+  compare1 _ (CompType {}) = LT
+  compare1 (Forall { forallPats = pats1, forallProp = prop1 })
+           (Forall { forallPats = pats2, forallProp = prop2 }) =
+    case compare1 pats1 pats2 of
+      EQ -> compare1 prop1 prop2
+      out -> out
+  compare1 (Forall {}) _ = GT
+  compare1 _ (Forall {}) = LT
+  compare1 (Exists { existsPats = pats1, existsProp = prop1 })
+           (Exists { existsPats = pats2, existsProp = prop2 }) =
+    case compare1 pats1 pats2 of
+       EQ -> compare1 prop1 prop2
+       out -> out
+  compare1 (Exists {}) _ = GT
+  compare1 _ (Exists {}) = LT
+  compare1 (Call { callArgs = args1, callFunc = func1 })
+           (Call { callArgs = args2, callFunc = func2 }) =
+    case compare1 func1 func2 of
+      EQ -> compare1 args1 args2
+      out -> out
+  compare1 (Call {}) _ = GT
+  compare1 _ (Call {}) = LT
+  compare1 (Var { varSym = sym1 }) (Var { varSym = sym2 }) = compare sym1 sym2
+  compare1 (Var {}) _ = GT
+  compare1 _ (Var {}) = LT
+  compare1 (Typed { typedTerm = term1, typedType = ty1 })
+           (Typed { typedTerm = term2, typedType = ty2 }) =
+    case compare1 term1 term2 of
+      EQ -> compare ty1 ty2
+      out -> out
+  compare1 (Typed {}) _ = GT
+  compare1 _ (Typed {}) = LT
+  compare1 (Eta { etaTerm = term1, etaType = ty1 })
+           (Eta { etaTerm = term2, etaType = ty2 }) =
+    case compare1 term1 term2 of
+      EQ -> compare ty1 ty2
+      out -> out
+  compare1 (Eta {}) _ = GT
+  compare1 _ (Eta {}) = LT
+  compare1 (Record { recVals = vals1 }) (Record { recVals = vals2 }) =
+    compare1 vals1 vals2
+  compare1 (Record {}) _ = GT
+  compare1 _ (Record {}) = LT
+  compare1 (Fix { fixComps = comps1 }) (Fix { fixComps = comps2 }) =
+    compare1 comps1 comps2
+  compare1 (Fix {}) _ = GT
+  compare1 _ (Fix {}) = LT
+  compare1 (BadTerm _) (BadTerm _) = EQ
+
+instance Ord b => Ord1 (Cmd b) where
+  compare1 (Value { valTerm = term1 }) (Value { valTerm = term2 }) =
+    compare1 term1 term2
+  compare1 (Value {}) _ = GT
+  compare1 _ (Value {}) = LT
+  compare1 (Eval { evalTerm = term1 }) (Eval { evalTerm = term2 }) =
+    compare1 term1 term2
+  compare1 (Eval {}) _ = GT
+  compare1 _ (Eval {}) = LT
+  compare1 (BadCmd _) (BadCmd _) = EQ
+
+instance Ord b => Ord1 (Comp b) where
+  compare1 (Seq { seqPat = pat1, seqCmd = cmd1, seqNext = next1 })
+          (Seq { seqPat = pat2, seqCmd = cmd2, seqNext = next2 }) =
+    case compare1 pat1 pat2 of
+      EQ -> case compare1 cmd1 cmd2 of
+        EQ -> compare1 next1 next2
+        out -> out
+      out -> out
+  compare1 (Seq {}) _ = GT
+  compare1 _ (Seq {}) = LT
+  compare1 (End { endCmd = cmd1 }) (End { endCmd = cmd2 }) = compare1 cmd1 cmd2
+  compare1 (End {}) _ = GT
+  compare1 _ (End {}) = LT
+  compare1 (BadComp _) (BadComp _) = EQ
 
 instance Position (t s) => Position (Binding b t s) where
   pos (Project { projectPos = p }) = p
@@ -389,8 +621,10 @@ instance (Hashable b, Hashable (f (Var b a)), Hashable a, Monad f) =>
 
 instance (Hashable b, Hashable s, Hashable (t s)) =>
          Hashable (Binding b t s) where
-  hash (Project { projectBinds = binds }) = hashInt 1 `combine` hash binds
-  hash (Construct { constructBinds = binds }) = hashInt 2 `combine` hash binds
+  hash (Project { projectBinds = binds, projectStrict = strict }) =
+    hashInt 1 `combine` hash strict `combine` hash binds
+  hash (Construct { constructBinds = binds, constructStrict = strict }) =
+    hashInt 2 `combine` hash strict `combine` hash binds
   hash (As { asName = name, asBind = bind }) =
     hashInt 3 `combine` hash name `combine` hash bind
   hash (Name { nameSym = name }) = hashInt 4 `combine` hash name
@@ -424,8 +658,7 @@ instance (Hashable b, Hashable s) => Hashable (Term b s) where
   hash (Eta { etaTerm = term, etaType = ty }) =
     hashInt 10 `combine` hash term `combine` hash ty
 --  hash (Lambda {}) = hashInt 11
-  hash (Record { recVals = vals, recComplete = complete }) =
-    hashInt 12 `combine` hash vals `combine` hash complete
+  hash (Record { recVals = vals }) = hashInt 12 `combine` hash vals
   hash (Fix { fixComps = comps }) =
     hashInt 13 `combine` hash comps
   hash (BadTerm _) = hashInt 0
