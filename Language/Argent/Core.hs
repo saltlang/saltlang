@@ -27,7 +27,7 @@
 -- OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
-{-# OPTIONS_GHC -funbox-strict-fields -Wall #-}
+{-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# Language FlexibleInstances, FlexibleContexts, UndecidableInstances #-}
 
 -- | The Argent core language.  Argent's surface syntax is
