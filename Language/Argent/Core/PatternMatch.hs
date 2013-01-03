@@ -38,11 +38,14 @@ module Language.Argent.Core.PatternMatch(
        patternMatch
        ) where
 
+import Data.Default
 import Language.Argent.Core
+
+import qualified Data.Map as Map
 
 -- | Given sorted lists of bindings and terms, attempt to match them up
 -- and produce a unifier
-zipBinds :: (Eq b, Eq s) =>
+zipBinds :: (Default b, Eq b, Eq s) =>
             Bool -> [(b, Binding b (Term b) s)] -> [(b, Term b s)] ->
             [(b, Term b s)] -> Maybe [(b, Term b s)]
 zipBinds strict ((name, bind) : binds)
@@ -65,19 +68,19 @@ zipBinds False [] _ result = return result
 zipBinds _ _ _ _ = Nothing
 
 -- | Tail-recursive work function for pattern matching
-patternMatchTail :: (Eq b, Eq s) =>
-                 [(b, (Term b s))] -> Binding b (Term b) s -> Term b s ->
-                 Maybe [(b, (Term b s))]
+patternMatchTail :: (Default b, Eq b, Eq s) =>
+                    [(b, (Term b s))] -> Binding b (Term b) s -> Term b s ->
+                    Maybe [(b, (Term b s))]
 -- Projection pairs up with a record
 patternMatchTail result (Project { projectBinds = binds,
                                    projectStrict = strict })
                  (Record { recVals = vals }) =
-  zipBinds strict binds vals result
+  zipBinds strict (Map.toAscList binds) (Map.toAscList vals) result
 -- Constructions pair up with function
 patternMatchTail result (Construct { constructBinds = binds,
-                                  constructStrict = strict })
-              (Call { callArgs = args }) =
-  zipBinds strict binds args result
+                                     constructStrict = strict })
+                        (Call { callArgs = args }) =
+  zipBinds strict (Map.toAscList binds) (Map.toAscList args) result
 -- As bindings bind the current term and then continue
 patternMatchTail result (As { asName = name, asBind = bind }) t =
   patternMatchTail ((name, t) : result) bind t
@@ -95,7 +98,7 @@ patternMatchTail _ _ _ = Nothing
 -- represented by the binding.  If the match succeeds, return a
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
-patternMatch :: (Eq b, Eq s) =>
+patternMatch :: (Default b, Eq b, Eq s) =>
                 Binding b (Term b) s -> Term b s -> Maybe [(b, (Term b s))]
 patternMatch =
     patternMatchTail []
