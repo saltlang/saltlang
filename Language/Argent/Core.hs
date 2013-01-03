@@ -216,6 +216,9 @@ data Term b s =
   -- and so on.
   | Call {
       -- | The arguments to the call.  These are introduction terms.
+      -- This list must be sorted by the bound variable, and bound
+      -- variables must be unique (in essence, this must be what you'd
+      -- expect from Map.toList)
       callArgs :: [(b, Term b s)],
       -- | The function being called.  This must be an elimination
       -- term.
@@ -254,19 +257,18 @@ data Term b s =
     }
   -- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
-{-
   | Lambda {
-      -- XXX Figure out how to represent lambdas, possibly as lists of
-      -- pattern/scopes
+      lambdaCases :: [(Pattern b (Term b) s, Scope b (Term b) s)],
       -- | The position in source from which this originates.
       lambdaPos :: !Pos
     }
--}
   -- | A structure.  Structures can be named or ordered in the surface
   -- syntax.  Ordered structures are transliterated into named
   -- structures, with the fields "1", "2", and so on.
   | Record {
-      -- | The bindings for this record.
+      -- | The bindings for this record.  This list must be sorted by
+      -- the bound variable, and bound variables must be unique (in
+      -- essence, this must be what you'd expect from Map.toList).
       recVals :: [(b, Term b s)],
       -- | The position in source from which this originates.
       recPos :: !Pos
@@ -350,8 +352,16 @@ eqBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
 eqBinds [] [] = True
 eqBinds _ _ = False
 
+eqCases :: (Eq b, Eq s, Eq1 t, Monad t) =>
+           [(Pattern b t s, Scope b t s)] ->
+           [(Pattern b t s, Scope b t s)] -> Bool
+eqCases ((pat1, body1) : cases1) ((pat2, body2) : cases2) =
+  (pat1 ==# pat2) && (body1 ==# body2) && eqCases cases1 cases2
+eqCases [] [] = True
+eqCases _ _ = False
+
 compareBinds :: (Ord b, Ord s, Ord1 t) =>
-           [(b, Binding b t s)] -> [(b, Binding b t s)] -> Ordering
+                [(b, Binding b t s)] -> [(b, Binding b t s)] -> Ordering
 compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
   case compare name1 name2 of
     EQ -> case compare1 bind1 bind2 of
@@ -361,6 +371,19 @@ compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
 compareBinds [] [] = EQ
 compareBinds [] _ = LT
 compareBinds _ [] = GT
+
+compareCases :: (Ord b, Ord s, Ord1 t, Monad t) =>
+                [(Pattern b t s, Scope b t s)] ->
+                [(Pattern b t s, Scope b t s)] -> Ordering
+compareCases ((pat1, body1) : cases1) ((pat2, body2) : cases2) =
+  case compare1 pat1 pat2 of
+    EQ -> case compare1 body1 body2 of
+      EQ -> compareCases cases1 cases2
+      out -> out
+    out -> out
+compareCases [] [] = EQ
+compareCases [] _ = LT
+compareCases _ [] = GT
 
 instance (Eq b, Eq1 t) => Eq1 (Binding b t) where
   Project { projectBinds = binds1, projectStrict = strict1 } ==#
@@ -412,6 +435,8 @@ instance Eq b => Eq1 (Term b) where
   Eta { etaTerm = term1, etaType = ty1 } ==#
     Eta { etaTerm = term2, etaType = ty2 } =
       (term1 ==# term2) && (ty1 ==# ty2)
+  Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
+    eqCases cases1 cases2
   Record { recVals = vals1 } ==# Record { recVals = vals2 } = vals1 ==# vals2
   Fix { fixComps = comps1 } ==# Fix { fixComps = comps2 } = comps1 ==# comps2
   BadTerm _ ==# BadTerm _ = True
@@ -537,6 +562,10 @@ instance Ord b => Ord1 (Term b) where
       out -> out
   compare1 (Eta {}) _ = GT
   compare1 _ (Eta {}) = LT
+  compare1 (Lambda { lambdaCases = cases1 }) (Lambda { lambdaCases = cases2 }) =
+    compareCases cases1 cases2
+  compare1 (Lambda {}) _ = GT
+  compare1 _ (Lambda {}) = LT
   compare1 (Record { recVals = vals1 }) (Record { recVals = vals2 }) =
     compare1 vals1 vals2
   compare1 (Record {}) _ = GT
@@ -594,7 +623,7 @@ instance Position (Term b s) where
   pos (Var { varPos = p }) = p
   pos (Typed { typedPos = p }) = p
   pos (Eta { etaPos = p }) = p
---  pos (Lambda { lambdaPos = p }) = p
+  pos (Lambda { lambdaPos = p }) = p
   pos (Record { recPos = p }) = p
   pos (Fix { fixPos = p }) = p
   pos (BadTerm p) = p
@@ -657,7 +686,7 @@ instance (Hashable b, Hashable s) => Hashable (Term b s) where
     hashInt 9 `combine` hash term `combine` hash ty
   hash (Eta { etaTerm = term, etaType = ty }) =
     hashInt 10 `combine` hash term `combine` hash ty
---  hash (Lambda {}) = hashInt 11
+  hash (Lambda { lambdaCases = cases }) = hashInt 11 `combine` hash cases
   hash (Record { recVals = vals }) = hashInt 12 `combine` hash vals
   hash (Fix { fixComps = comps }) =
     hashInt 13 `combine` hash comps
@@ -710,7 +739,8 @@ instance Functor (Term b) where
     t { typedTerm = fmap f term, typedType = fmap f ty }
   fmap f t @ (Eta { etaTerm = term, etaType = ty }) =
     t { etaTerm = fmap f term, etaType = fmap f ty }
---  fmap f t @ (Lambda {}) = t {}
+  fmap f t @ (Lambda { lambdaCases = cases }) =
+    t { lambdaCases = fmap (\(pat, body) -> (fmap f pat, fmap f body)) cases }
   fmap f t @ (Record { recVals = vals }) =
     t { recVals = fmap (\(name, term) -> (name, fmap f term)) vals }
   fmap f t @ (Fix { fixComps = comps }) =
@@ -763,7 +793,8 @@ instance Foldable (Term b) where
     foldMap f term `mappend` foldMap f ty
   foldMap f (Eta { etaTerm = term, etaType = ty }) =
     foldMap f term `mappend` foldMap f ty
---  foldMap f t @ (Lambda {}) = t {}
+  foldMap f (Lambda { lambdaCases = cases }) =
+    foldMap (\(pat, body) -> foldMap f pat `mappend` foldMap f body) cases
   foldMap f (Record { recVals = vals }) =
     foldMap (\(_, term) -> foldMap f term) vals
   foldMap f (Fix { fixComps = comps }) =
@@ -837,7 +868,10 @@ instance Traversable (Term b) where
   traverse f t @ (Eta { etaTerm = term, etaType = ty }) =
     (\term' ty' -> t { etaTerm = term', etaType = ty' }) <$>
       traverse f term <*> traverse f ty
---  fmap f t @ (Lambda {}) = t {}
+  traverse f t @ (Lambda { lambdaCases = cases }) =
+    (\cases' -> t { lambdaCases = cases' }) <$>
+      traverse (\(pat, body) -> (\pat' body' -> (pat', body')) <$>
+                 traverse f pat <*> traverse f body) cases
   traverse f t @ (Record { recVals = vals }) =
     (\vals' -> t { recVals = vals' }) <$>
       traverse (\(name, term) ->
@@ -932,7 +966,9 @@ instance Monad (Term b) where
   Var { varSym = sym } >>= f = f sym
   t @ (Typed { typedTerm = term, typedType = ty }) >>= f =
     t { typedTerm = term >>= f, typedType = ty >>= f }
---  fmap f t @ (Lambda {}) = t {}
+  t @ (Lambda { lambdaCases = cases }) >>= f =
+    t { lambdaCases = fmap (\(pat, body) -> (patSubstTerm f pat,
+                                             body >>>= f)) cases }
   t @ (Record { recVals = vals }) >>= f =
     t { recVals = fmap (\(name, term) -> (name, term >>= f)) vals }
   t @ (Fix { fixComps = comps }) >>= f =
@@ -991,7 +1027,10 @@ termSubstComp f (Var { varSym = sym }) =
         fixPos = substpos }
 termSubstComp f t @ (Typed { typedTerm = term, typedType = ty }) =
   t { typedTerm = termSubstComp f term, typedType = termSubstComp f ty }
---  fmap f t @ (Lambda {}) = t {}
+termSubstComp f t @ (Lambda { lambdaCases = cases }) =
+  t { lambdaCases = fmap (\(pat, body) -> (patSubstComp f pat,
+                                           body >>>= termSubstComp f . return))
+                         cases }
 termSubstComp f t @ (Record { recVals = vals }) =
   t { recVals = fmap (\(name, term) -> (name, termSubstComp f term)) vals }
 termSubstComp f t @ (Fix { fixComps = comps }) =
