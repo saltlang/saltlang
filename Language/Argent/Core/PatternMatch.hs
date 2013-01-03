@@ -31,6 +31,9 @@
 
 -- | Pattern matching implementation.  This module contains a single
 -- function which implements the pattern matching functionality.
+--
+-- The single function in this module attempts to create a unifier
+-- from a pattern and a term.
 module Language.Argent.Core.PatternMatch(
        patternMatch
        ) where
