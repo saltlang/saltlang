@@ -90,7 +90,7 @@ data Binding b t s =
     -- example "x as (y, z)".
   | As {
       -- | The outer name, to which the entire datatype is bound.
-      asName :: b,
+      asName :: !b,
       -- | The inner binding, which further deconstructs the binding.
       asBind :: Binding b t s,
       -- | The position in source from which this originates.
@@ -104,7 +104,7 @@ data Binding b t s =
     -- defining another constructor for it.
   | Name {
       -- | The bound variable type being bound.
-      nameSym :: b,
+      nameSym :: !b,
       -- | The position in source from which this originates.
       namePos :: !Pos
     }
@@ -144,22 +144,30 @@ data Term b s =
 
   -- | Dependent product type.  This is the type given to functions.
     ProdType {
-      -- | The type of the first argument.
-      prodInitArgTy :: Term b s,
-      -- | The types of subsequent arguments, which can reference all
-      -- previous arguments
-      prodArgTys :: [Scope () (Term b) s],
-      -- | The return type of the function.
-      prodRetTy :: Scope () (Term b) s,
+      -- | The binding order for arguments.  This is used to determine
+      -- the order in which to evaluate scopes.
+      prodBindOrder :: [b],
+      -- | The binding names and types of all arguments.  The first
+      -- argument in the binding order is a degenerate scope; the
+      -- remaining scopes may reference any previous arguments in the
+      -- binding order, but not themselves or any future arguments.
+      prodArgTys :: Map b (Scope b (Term b) s),
+      -- | The return type of the function, which can reference the
+      -- value of any argument by their binding name.
+      prodRetTy :: Scope b (Term b) s,
       -- | The position in source from which this originates.
       prodTypePos :: !Pos
     }
   -- | Dependent sum type.  This is the type given to structures.
   | SumType {
-      -- | The first element of the sum type.
-      sumInit :: Term b s,
-      -- | The remaining elements of the sum type
-      sumBody :: [Scope () (Term b) s],
+      -- | The binding order for elements.  This is used to determine
+      -- the order in which to evaluate the scopes.
+      sumBindOrder :: [b],
+      -- | The remaining elements of the sum type.  The first element
+      -- in the binding order is a degenerate scope; the remaining
+      -- scopes may reference any previous elements from the binding
+      -- order, but not themselves or any future scopes.
+      sumBody :: Map b (Scope b (Term b) s),
       -- | The position in source from which this originates.
       sumTypePos :: !Pos
     }
@@ -236,7 +244,7 @@ data Term b s =
   -- this is an elimination term.
   | Var {
       -- | The underlying symbol.
-      varSym :: s,
+      varSym :: !s,
       -- | The position in source from which this originates.
       varPos :: !Pos
     }
@@ -263,6 +271,10 @@ data Term b s =
     }
   -- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
+  --
+  -- Lambdas will ultimately need to be extended to support
+  -- overloading, which adds an inherent multiple dispatch ability.
+  -- This is obviousy highly nontrivial to implement.
   | Lambda {
       lambdaCases :: [(Pattern b (Term b) s, Scope b (Term b) s)],
       -- | The position in source from which this originates.
@@ -294,6 +306,17 @@ data Term b s =
 
 -- | Commands.  These represent individual statements, or combinations
 -- thereof, which do not bind variables.
+--
+-- We don't need alot of control flow structures.  Loops are handled
+-- by the Fix structure, conditionals are handled by the pattern
+-- matching inherent in Lambdas.  Widening and narrowing (ie typecase
+-- and downcast) can be effectively handled by adding a multiple
+-- dispatch capability).
+--
+-- The Core-to-LLVM compiler should therefore be smart enough to
+-- figure out when it can implement a Fix as a loop, and when it can
+-- inline lambdas, and when it can figure out dispatch decisions
+-- statically.  This is also desirable in its own right.
 data Cmd b s =
     Value {
       -- | The term representing the value of this command
@@ -309,8 +332,6 @@ data Cmd b s =
       -- | The position in source from which this originates.
       evalPos :: !Pos
     }
-  -- XXX need some kind of a general form case statement, probably
-  -- akin to Fortress' dispatch statement.
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
   | BadCmd !Pos
@@ -413,14 +434,14 @@ instance (Default b, Eq b, Eq1 t) => Eq1 (Pattern b t) where
       (bind1 ==# bind2) && (ty1 ==# ty2)
 
 instance (Default b, Eq b) => Eq1 (Term b) where
-  ProdType { prodInitArgTy = initty1, prodArgTys = argtys1,
+  ProdType { prodBindOrder = bindord1, prodArgTys = argtys1,
              prodRetTy = retty1 } ==#
-    ProdType { prodInitArgTy = initty2, prodArgTys = argtys2,
+    ProdType { prodBindOrder = bindord2, prodArgTys = argtys2,
                prodRetTy = retty2 } =
-      (initty1 ==# initty2) && (argtys1 ==# argtys2) && (retty1 ==# retty2)
-  SumType { sumInit = init1, sumBody = body1 } ==#
-    SumType { sumInit = init2, sumBody = body2 } =
-      (init1 ==# init2) && (body1 ==# body2)
+      (bindord1 == bindord2) && (argtys1 ==# argtys2) && (retty1 ==# retty2)
+  SumType { sumBindOrder = bindord1, sumBody = body1 } ==#
+    SumType { sumBindOrder = bindord2, sumBody = body2 } =
+      (bindord1 == bindord2) && (body1 ==# body2)
   RefineType { refinePat = pat1, refineProp = prop1 } ==#
     RefineType { refinePat = pat2, refineProp = prop2 } =
       (pat1 ==# pat2) && (prop1 ==# prop2)
@@ -500,20 +521,20 @@ instance (Default b, Ord b, Ord1 t) => Ord1 (Pattern b t) where
       out -> out
 
 instance (Default b, Ord b) => Ord1 (Term b) where
-  compare1 (ProdType { prodInitArgTy = initty1, prodArgTys = argtys1,
+  compare1 (ProdType { prodBindOrder = bindord1, prodArgTys = argtys1,
                        prodRetTy = retty1 })
-           (ProdType { prodInitArgTy = initty2, prodArgTys = argtys2,
+           (ProdType { prodBindOrder = bindord2, prodArgTys = argtys2,
                        prodRetTy = retty2 }) =
-    case compare1 initty1 initty2 of
-      EQ -> case compare1 argtys1 argtys2 of
-        EQ -> compare1 retty1 retty2
+    case compare1 retty1 retty2 of
+      EQ -> case compare bindord1 bindord2 of
+        EQ -> compare1 argtys1 argtys2
         out -> out
       out -> out
   compare1 (ProdType {}) _ = GT
   compare1 _ (ProdType {}) = LT
-  compare1 (SumType { sumInit = init1, sumBody = body1 })
-           (SumType { sumInit = init2, sumBody = body2 }) =
-    case compare1 init1 init2 of
+  compare1 (SumType { sumBindOrder = bindord1, sumBody = body1 })
+           (SumType { sumBindOrder = bindord2, sumBody = body2 }) =
+    case compare1 bindord1 bindord2 of
       EQ -> compare1 body1 body2
       out -> out
   compare1 (SumType {}) _ = GT
@@ -663,12 +684,12 @@ instance (Default b, Hashable b, Hashable s, Hashable (t s)) =>
     hash term `combine` hash ty
 
 instance (Default b, Hashable b, Hashable s) => Hashable (Term b s) where
-  hash (ProdType { prodInitArgTy = initty, prodArgTys = argtys,
+  hash (ProdType { prodBindOrder = bindord, prodArgTys = argtys,
                    prodRetTy = retty }) =
-    hashInt 1 `combine` hash initty `combine`
+    hashInt 1 `combine` hash bindord `combine`
     hash argtys `combine` hash retty
-  hash (SumType { sumInit = initty, sumBody = body }) =
-    hashInt 2 `combine` hash initty `combine` hash body
+  hash (SumType { sumBindOrder = bindord, sumBody = body }) =
+    hashInt 2 `combine` hash bindord `combine` hash body
   hash (RefineType { refinePat = pat, refineProp = prop }) =
     hashInt 3 `combine` hash pat `combine` hash prop
   hash (CompType { compPat = pat, compSpec = spec }) =
@@ -715,12 +736,10 @@ instance Functor t => Functor (Pattern b t) where
     p { patternBind = fmap f term, patternType = fmap f ty }
 
 instance Functor (Term b) where
-  fmap f t @ (ProdType { prodInitArgTy = initty, prodArgTys = argtys,
-                         prodRetTy = retty }) =
-    t { prodInitArgTy = fmap f initty, prodArgTys = fmap (fmap f) argtys,
-        prodRetTy = fmap f retty }
-  fmap f t @ (SumType { sumInit = initty, sumBody = body }) =
-    t { sumInit = fmap f initty, sumBody = fmap (fmap f) body }
+  fmap f t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+    t { prodArgTys = fmap (fmap f) argtys, prodRetTy = fmap f retty }
+  fmap f t @ (SumType { sumBody = body }) =
+    t { sumBody = fmap (fmap f) body }
   fmap f t @ (RefineType { refinePat = pat, refineProp = prop }) =
     t { refinePat = fmap f pat, refineProp = fmap f prop }
   fmap f t @ (CompType { compPat = pat, compSpec = spec }) =
@@ -769,12 +788,9 @@ instance Foldable t => Foldable (Pattern b t) where
     foldMap f term `mappend` foldMap f ty
 
 instance Foldable (Term b) where
-  foldMap f (ProdType { prodInitArgTy = initty, prodArgTys = argtys,
-                        prodRetTy = retty }) =
-    foldMap f initty `mappend` foldMap (foldMap f) argtys `mappend`
-    foldMap f retty
-  foldMap f (SumType { sumInit = initty, sumBody = body }) =
-    foldMap f initty `mappend` foldMap (foldMap f) body
+  foldMap f (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+    foldMap (foldMap f) argtys `mappend` foldMap f retty
+  foldMap f (SumType { sumBody = body }) = foldMap (foldMap f) body
   foldMap f (RefineType { refinePat = pat, refineProp = prop }) =
     foldMap f pat `mappend` foldMap f prop
   foldMap f (CompType { compPat = pat, compSpec = spec }) =
@@ -823,15 +839,11 @@ instance Traversable t => Traversable (Pattern b t) where
       traverse f term <*> traverse f ty
 
 instance Traversable (Term b) where
-  traverse f t @ (ProdType { prodInitArgTy = initty, prodArgTys = argtys,
-                             prodRetTy = retty }) =
-    (\initty' argtys' retty' -> t { prodInitArgTy = initty',
-                                    prodArgTys = argtys',
-                                    prodRetTy = retty' }) <$>
-      traverse f initty <*> traverse (traverse f) argtys <*> traverse f retty
-  traverse f t @ (SumType { sumInit = initty, sumBody = body }) =
-    (\initty' body' -> t { sumInit = initty', sumBody = body' }) <$>
-      traverse f initty <*> traverse (traverse f) body
+  traverse f t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+    (\argtys' retty' -> t { prodArgTys = argtys', prodRetTy = retty' }) <$>
+      traverse (traverse f) argtys <*> traverse f retty
+  traverse f t @ (SumType { sumBody = body }) =
+    (\body' -> t { sumBody = body' }) <$> traverse (traverse f) body
   traverse f t @ (RefineType { refinePat = pat, refineProp = prop }) =
     (\pat' prop' -> t { refinePat = pat', refineProp = prop' }) <$>
       traverse f pat <*> traverse f prop
@@ -928,12 +940,10 @@ compSubstTerm _ (BadComp p) = BadComp p
 instance Default b => Monad (Term b) where
   return sym = Var { varSym = sym, varPos = injectpos }
 
-  t @ (ProdType { prodInitArgTy = initty, prodArgTys = argtys,
-                  prodRetTy = retty }) >>= f =
-    t { prodInitArgTy = initty >>= f, prodArgTys = fmap (>>>= f) argtys,
-        prodRetTy = retty >>>= f }
-  t @ (SumType { sumInit = initty, sumBody = body }) >>= f =
-    t { sumInit = initty >>= f, sumBody = fmap (>>>= f) body }
+  t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) >>= f =
+    t { prodArgTys = fmap (>>>= f) argtys, prodRetTy = retty >>>= f }
+  t @ (SumType { sumBody = body }) >>= f =
+    t { sumBody = fmap (>>>= f) body }
   t @ (RefineType { refinePat = pat, refineProp = prop }) >>= f =
     t { refinePat = patSubstTerm f pat, refineProp = prop >>>= f }
   t @ (CompType { compPat = pat, compSpec = spec }) >>= f =
@@ -975,14 +985,11 @@ patSubstComp f p @ (Pattern { patternBind = bind, patternType = ty }) =
   p { patternBind = bindSubstComp f bind, patternType = termSubstComp f ty }
 
 termSubstComp :: Default c => (a -> Comp c b) -> Term c a -> Term c b
-termSubstComp f t @ (ProdType { prodInitArgTy = initty, prodArgTys = argtys,
-                                prodRetTy = retty }) =
-  t { prodInitArgTy = termSubstComp f initty,
-      prodArgTys = fmap (>>>= termSubstComp f . return) argtys,
+termSubstComp f t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+  t { prodArgTys = fmap (>>>= termSubstComp f . return) argtys,
       prodRetTy = retty >>>= termSubstComp f . return }
-termSubstComp f t @ (SumType { sumInit = initty, sumBody = body }) =
-  t { sumInit = termSubstComp f initty,
-      sumBody = fmap (>>>= termSubstComp f . return) body }
+termSubstComp f t @ (SumType { sumBody = body }) =
+  t { sumBody = fmap (>>>= termSubstComp f . return) body }
 termSubstComp f t @ (RefineType { refinePat = pat, refineProp = prop }) =
   t { refineProp = prop >>>= termSubstComp f . return,
       refinePat = patSubstComp f pat }
