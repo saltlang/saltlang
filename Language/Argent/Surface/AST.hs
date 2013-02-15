@@ -36,6 +36,7 @@ import Data.Traversable
 import Language.Argent.Surface.Common
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
+import Text.Format
 
 -- | Declarations.  These represent static declarations inside a
 -- scope.  Note: some of these can be built from others.
@@ -109,6 +110,15 @@ data Exp
       -- | The position in source from which this arises.
       compoundPos :: !Pos
     }
+    -- | Typed expression.  Sets the type of a given expression.
+  | Typed {
+      -- | The expression whose type is being set.
+      typedVal :: Exp sym,
+      -- | The type.
+      typedType :: Exp sym,
+      -- | The position in source from which this arises.
+      typedPos :: !Pos
+    }
     -- | Reference to a name.  Note: this is all handled with the
     -- Bound framework.
   | Sym {
@@ -155,6 +165,9 @@ instance Eq1 Compound where
 
 instance Eq1 Exp where
   (Sym { symName = name1 }) ==# (Sym { symName = name2 }) = name1 == name2
+  (Typed { typedVal = val1, typedType = ty1 }) ==#
+    (Typed { typedVal = val2, typedType = ty2 }) =
+      (val1 ==# val2) && (ty1 ==# ty2)
   (Compound { compoundBody = body1 }) ==#
     (Compound { compoundBody = body2 }) = body1 ==# body2
   _ ==# _ = False
@@ -211,6 +224,13 @@ instance Ord1 Exp where
     compare body1 body2
   compare1 (Compound {}) _ = GT
   compare1 _ (Compound {}) = LT
+  compare1 (Typed { typedVal = val1, typedType = ty1 })
+           (Typed { typedVal = val2, typedType = ty2 }) =
+    case compare val1 val2 of
+      EQ -> compare ty1 ty2
+      out -> out
+  compare1 (Typed {}) _ = GT
+  compare1 _ (Typed {}) = LT
   compare1 (Sym { symName = name1 })
            (Sym { symName = name2 }) =
     compare name1 name2
@@ -243,6 +263,7 @@ instance Position (Compound sym) where
 
 instance Position (Exp sym) where
   pos (Compound { compoundPos = p }) = p
+  pos (Typed { typedPos = p }) = p
   pos (Sym { symPos = p }) = p
 
 instance Position (Binding sym) where
@@ -266,7 +287,9 @@ instance Hashable sym => Hashable (Compound sym) where
 
 instance Hashable sym => Hashable (Exp sym) where
   hash (Compound { compoundBody = body }) = hashInt 1 `combine` hash body
-  hash (Sym { symName = name }) = hashInt 2 `combine` hash name
+  hash (Typed { typedVal = val, typedType = ty }) =
+    hashInt 2 `combine` hash val `combine` hash ty
+  hash (Sym { symName = name }) = hashInt 3 `combine` hash name
 
 instance Hashable sym => Hashable (Binding sym) where
   hash (Binding { bindingName = name, bindingType = ty }) =
@@ -289,6 +312,8 @@ instance Functor Compound where
 
 instance Functor Exp where
   fmap f e @ (Sym { symName = name }) = e { symName = f name }
+  fmap f e @ (Typed { typedVal = val, typedType = ty }) =
+    e { typedVal = fmap f val, typedType = fmap f ty }
   fmap f e @ (Compound { compoundBody = body }) =
     e { compoundBody = fmap (fmap f) body }
 
@@ -312,6 +337,8 @@ instance Foldable Compound where
 
 instance Foldable Exp where
   foldMap f (Sym { symName = name }) = f name
+  foldMap f (Typed { typedVal = val, typedType = ty }) =
+    foldMap f val `mappend` foldMap f ty
   foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
 
 instance Foldable Binding where
@@ -341,6 +368,9 @@ instance Traversable Compound where
 instance Traversable Exp where
   traverse f e @ (Sym { symName = name }) =
     (\name' -> e { symName = name' }) <$> f name
+  traverse f e @ (Typed { typedVal = val, typedType = ty }) =
+    (\val' ty' -> e { typedVal = val', typedType = ty' }) <$>
+      traverse f val <*> traverse f ty
   traverse f e @ (Compound { compoundBody = body }) =
     (\body' -> e { compoundBody = body' }) <$> traverse (traverse f) body
 
@@ -348,3 +378,49 @@ instance Traversable Binding where
   traverse f b @ (Binding { bindingName = name, bindingType = ty }) =
     (\name' ty' -> b { bindingName = name', bindingType = ty' }) <$>
       f name <*> traverse f ty
+
+instance Format sym => Format (Decl sym) where
+  format (Scope { scopeName = name, scopeClass = cls,
+                  scopeSuperTypes = supers, scopeParams = params,
+                  scopeBody = body }) =
+    let
+      header = show cls <+> name
+      withparams = case params of
+        [] -> header
+        params' -> parenList header params'
+      withsupers = case supers of
+        [] -> withparams
+        supers' -> withparams <+> colon <+>
+          (nest 2 (sep (punctuate comma supers')))
+    in
+      braceBlock withsupers body
+  format (Value { valueName = name, valueMutable = True,
+                  valueType = Just ty, valueInit = val }) =
+    name <+> colon <+> nest 2 (sep [format "mutable", format ty,
+                                    equals, format val])
+  format (Value { valueName = name, valueMutable = False,
+                  valueType = Just ty, valueInit = val }) =
+    name <+> colon <+> nest 2 (sep [format ty, equals, format val])
+  format (Value { valueName = name, valueMutable = True,
+                  valueType = Nothing, valueInit = val }) =
+    name <+> colon <+> nest 2 (sep [format "mutable", equals, format val])
+  format (Value { valueName = name, valueMutable = False,
+                  valueType = Nothing, valueInit = val }) =
+    name <+> equals <+> nest 2 val
+  format (Invariant { invName = name, invProp = prop }) =
+    hang (format "invariant" <+> name <+> equals) 2 prop
+
+instance Format sym => Format (Compound sym) where
+  format (Decl d) = format d
+  format (Exp e) = format e
+
+instance Format sym => Format (Exp sym) where
+  format (Compound { compoundBody = body }) =
+    block 2 (lbrace) (sep body) rbrace
+  format (Typed { typedVal = val, typedType = ty }) =
+    hang (val <+> colon) 2 ty
+  format (Sym { symName = name }) = format name
+
+instance Format sym => Format (Binding sym) where
+  format (Binding { bindingName = name, bindingType = ty }) =
+    hang (name <+> colon) 2 ty
