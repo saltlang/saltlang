@@ -19,6 +19,9 @@
 -- | The Abstract Syntax Tree, as yielded by a parser.  This is
 -- rendered into surface syntax by Collect, which gathers all entries
 -- into a table.
+--
+-- Note that this structure isn't meant to be processed in any truly
+-- meaningful way.
 module Language.Argent.Surface.AST(
        ScopeClass(..),
        Decl(..),
@@ -30,7 +33,7 @@ module Language.Argent.Surface.AST(
 import Control.Applicative
 import Data.Foldable
 import Data.Hash
-import Data.Monoid
+import Data.Monoid hiding ((<>))
 import Data.Pos
 import Data.Traversable
 import Language.Argent.Surface.Common
@@ -119,6 +122,24 @@ data Exp
       -- | The position in source from which this arises.
       typedPos :: !Pos
     }
+    -- | A sequence of expressions.  This represents a function call,
+    -- possibly with inorder symbols.  This is re-parsed once the
+    -- inorder symbols are known.
+  | Seq {
+      -- | The sequence of expressions.
+      seqVals :: [Exp sym],
+      -- | The position in source from which this arises.
+      seqPos :: !Pos
+    }
+    -- | A record literal.  Note that we might see mixed tuple-style
+    -- and record style.  This construct is also used to encode
+    -- structure types.
+  | Record {
+      -- | The fields in this record expression.
+      recFields :: [Entry sym],
+      -- | The position in source from which this arises.
+      recPos :: !Pos
+    }
     -- | Reference to a name.  Note: this is all handled with the
     -- Bound framework.
   | Sym {
@@ -127,6 +148,20 @@ data Exp
       -- | The position in source from which this arises.
       symPos :: !Pos
     }
+
+data Entry sym =
+    -- | A named field.  This sets a specific field or argument to a
+    -- certain value.
+    Named {
+      -- | The name of the field or argument being set.
+      namedName :: !sym,
+      -- | The value to which the field or argument is set.
+      namedVal :: Exp sym,
+      -- | The position in source from which this arises.
+      namedPos :: !Pos
+    }
+    -- | Unnamed field.  This is just an expression.
+  | Unnamed (Exp sym)
 
 -- | A simple name binding.
 data Binding
@@ -165,6 +200,9 @@ instance Eq1 Compound where
 
 instance Eq1 Exp where
   (Sym { symName = name1 }) ==# (Sym { symName = name2 }) = name1 == name2
+  (Seq { seqVals = vals1 }) ==# (Seq { seqVals = vals2 }) = vals1 ==# vals2
+  (Record { recFields = fields1 }) ==# (Record { recFields = fields2 }) =
+    fields1 ==# fields2  
   (Typed { typedVal = val1, typedType = ty1 }) ==#
     (Typed { typedVal = val2, typedType = ty2 }) =
       (val1 ==# val2) && (ty1 ==# ty2)
@@ -172,10 +210,23 @@ instance Eq1 Exp where
     (Compound { compoundBody = body2 }) = body1 ==# body2
   _ ==# _ = False
 
+instance Eq1 Entry where
+  (Named { namedName = name1, namedVal = val1 }) ==#
+    (Named { namedName = name2, namedVal = val2 }) =
+    (name1 == name2) && (val1 ==# val2)
+  (Unnamed e1) ==# (Unnamed e2) = e1 ==# e2
+  _ ==# _ = False
+
+instance Eq1 Binding where
+  (Binding { bindingName = name1, bindingType = ty1 }) ==#
+    (Binding { bindingName = name2, bindingType = ty2 }) =
+    (name1 == name2) && (ty1 ==# ty2)
+
 instance Eq sym => Eq (Decl sym) where (==) = (==#)
 instance Eq sym => Eq (Compound sym) where (==) = (==#)
 instance Eq sym => Eq (Exp sym) where (==) = (==#)
 instance Eq sym => Eq (Binding sym) where (==) = (==#)
+instance Eq sym => Eq (Entry sym) where (==) = (==#)
 
 instance Ord1 Decl where
   compare1 (Scope { scopeName = name1, scopeClass = cls1, scopeBody = body1,
@@ -224,6 +275,14 @@ instance Ord1 Exp where
     compare body1 body2
   compare1 (Compound {}) _ = GT
   compare1 _ (Compound {}) = LT
+  compare1 (Seq { seqVals = vals1 }) (Seq { seqVals = vals2 }) =
+    compare vals1 vals2
+  compare1 (Seq {}) _ = GT
+  compare1 _ (Seq {}) = LT
+  compare1 (Record { recFields = fields1 }) (Record { recFields = fields2 }) =
+    compare1 fields1 fields2
+  compare1 (Record {}) _ = GT
+  compare1 _ (Record {}) = LT
   compare1 (Typed { typedVal = val1, typedType = ty1 })
            (Typed { typedVal = val2, typedType = ty2 }) =
     case compare val1 val2 of
@@ -231,8 +290,7 @@ instance Ord1 Exp where
       out -> out
   compare1 (Typed {}) _ = GT
   compare1 _ (Typed {}) = LT
-  compare1 (Sym { symName = name1 })
-           (Sym { symName = name2 }) =
+  compare1 (Sym { symName = name1 }) (Sym { symName = name2 }) =
     compare name1 name2
 
 instance Ord1 Binding where
@@ -242,15 +300,21 @@ instance Ord1 Binding where
       EQ -> compare1 ty1 ty2
       out -> out
 
+instance Ord1 Entry where
+  compare1 (Named { namedName = name1, namedVal = val1 })
+           (Named { namedName = name2, namedVal = val2 }) =
+    case compare name1 name2 of
+      EQ -> compare1 val1 val2
+      out -> out
+  compare1 (Named {}) _ = GT
+  compare1 _ (Named {}) = LT
+  compare1 (Unnamed e1) (Unnamed e2) = compare1 e1 e2
+
 instance Ord sym => Ord (Decl sym) where compare = compare1
 instance Ord sym => Ord (Compound sym) where compare = compare1
 instance Ord sym => Ord (Exp sym) where compare = compare1
 instance Ord sym => Ord (Binding sym) where compare = compare1
-
-instance Eq1 Binding where
-  (Binding { bindingName = name1, bindingType = ty1 }) ==#
-    (Binding { bindingName = name2, bindingType = ty2 }) =
-    (name1 == name2) && (ty1 ==# ty2)
+instance Ord sym => Ord (Entry sym) where compare = compare1
 
 instance Position (Decl sym) where
   pos (Scope { scopePos = p }) = p
@@ -264,10 +328,16 @@ instance Position (Compound sym) where
 instance Position (Exp sym) where
   pos (Compound { compoundPos = p }) = p
   pos (Typed { typedPos = p }) = p
+  pos (Seq { seqPos = p }) = p
+  pos (Record { recPos = p }) = p
   pos (Sym { symPos = p }) = p
 
 instance Position (Binding sym) where
   pos (Binding { bindingPos = p }) = p
+
+instance Position (Entry sym) where
+  pos (Named { namedPos = p }) = p
+  pos (Unnamed e) = pos e
 
 instance Hashable sym => Hashable (Decl sym) where
   hash (Scope { scopeName = name, scopeClass = cls, scopeParams = params,
@@ -289,11 +359,18 @@ instance Hashable sym => Hashable (Exp sym) where
   hash (Compound { compoundBody = body }) = hashInt 1 `combine` hash body
   hash (Typed { typedVal = val, typedType = ty }) =
     hashInt 2 `combine` hash val `combine` hash ty
-  hash (Sym { symName = name }) = hashInt 3 `combine` hash name
+  hash (Seq { seqVals = vals }) = hashInt 3 `combine` hash vals
+  hash (Record { recFields = fields }) = hashInt 4 `combine` hash fields
+  hash (Sym { symName = name }) = hashInt 5 `combine` hash name
 
 instance Hashable sym => Hashable (Binding sym) where
   hash (Binding { bindingName = name, bindingType = ty }) =
     hash name `combine` hash ty
+
+instance Hashable sym => Hashable (Entry sym) where
+  hash (Named { namedName = name, namedVal = val }) =
+    hashInt 1 `combine` hash name `combine` hash val
+  hash (Unnamed e) = hashInt 2 `combine` hash e
 
 instance Functor Decl where
   fmap f d @ (Scope { scopeName = name, scopeSuperTypes = supers,
@@ -312,6 +389,9 @@ instance Functor Compound where
 
 instance Functor Exp where
   fmap f e @ (Sym { symName = name }) = e { symName = f name }
+  fmap f e @ (Seq { seqVals = vals }) = e { seqVals = fmap (fmap f) vals }
+  fmap f e @ (Record { recFields = fields }) =
+    e { recFields = fmap (fmap f) fields }
   fmap f e @ (Typed { typedVal = val, typedType = ty }) =
     e { typedVal = fmap f val, typedType = fmap f ty }
   fmap f e @ (Compound { compoundBody = body }) =
@@ -320,6 +400,11 @@ instance Functor Exp where
 instance Functor Binding where
   fmap f b @ (Binding { bindingName = name, bindingType = ty }) =
     b { bindingName = f name, bindingType = fmap f ty }
+
+instance Functor Entry where
+  fmap f e @ (Named { namedName = name, namedVal = val }) =
+    e { namedName = f name, namedVal = fmap f val }
+  fmap f (Unnamed e) = Unnamed (fmap f e)
 
 instance Foldable Decl where
   foldMap f (Scope { scopeName = name, scopeSuperTypes = supers,
@@ -337,6 +422,8 @@ instance Foldable Compound where
 
 instance Foldable Exp where
   foldMap f (Sym { symName = name }) = f name
+  foldMap f (Seq { seqVals = vals }) = foldMap (foldMap f) vals
+  foldMap f (Record { recFields = fields }) = foldMap (foldMap f) fields
   foldMap f (Typed { typedVal = val, typedType = ty }) =
     foldMap f val `mappend` foldMap f ty
   foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
@@ -344,6 +431,11 @@ instance Foldable Exp where
 instance Foldable Binding where
   foldMap f (Binding { bindingName = name, bindingType = ty }) =
     f name `mappend` foldMap f ty
+
+instance Foldable Entry where
+  foldMap f (Named { namedName = name, namedVal = val }) =
+    f name `mappend` foldMap f val
+  foldMap f (Unnamed e) = foldMap f e
 
 instance Traversable Decl where
   traverse f d @ (Scope { scopeName = name, scopeSuperTypes = supers,
@@ -371,6 +463,10 @@ instance Traversable Exp where
   traverse f e @ (Typed { typedVal = val, typedType = ty }) =
     (\val' ty' -> e { typedVal = val', typedType = ty' }) <$>
       traverse f val <*> traverse f ty
+  traverse f e @ (Seq { seqVals = vals }) =
+    (\vals' -> e { seqVals = vals' }) <$> traverse (traverse f) vals
+  traverse f e @ (Record { recFields = fields }) =
+    (\fields' -> e { recFields = fields' }) <$> traverse (traverse f) fields
   traverse f e @ (Compound { compoundBody = body }) =
     (\body' -> e { compoundBody = body' }) <$> traverse (traverse f) body
 
@@ -378,6 +474,12 @@ instance Traversable Binding where
   traverse f b @ (Binding { bindingName = name, bindingType = ty }) =
     (\name' ty' -> b { bindingName = name', bindingType = ty' }) <$>
       f name <*> traverse f ty
+
+instance Traversable Entry where
+  traverse f e @ (Named { namedName = name, namedVal = val }) =
+    (\name' val' -> e { namedName = name', namedVal = val' }) <$>
+      f name <*> traverse f val
+  traverse f (Unnamed e) = Unnamed <$> traverse f e
 
 instance Format sym => Format (Decl sym) where
   format (Scope { scopeName = name, scopeClass = cls,
@@ -419,8 +521,22 @@ instance Format sym => Format (Exp sym) where
     block 2 (lbrace) (sep body) rbrace
   format (Typed { typedVal = val, typedType = ty }) =
     hang (val <+> colon) 2 ty
+  format (Seq { seqVals = vals }) = nest 2 (sep vals)
+  format (Record { recFields = fields }) =
+    lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
   format (Sym { symName = name }) = format name
 
 instance Format sym => Format (Binding sym) where
   format (Binding { bindingName = name, bindingType = ty }) =
     hang (name <+> colon) 2 ty
+
+instance Format sym => Format (Entry sym) where
+  format (Named { namedName = name, namedVal = val }) =
+    hang val 2 (format "as" <+> name)
+  format (Unnamed e) = format e
+
+instance Format sym => Show (Decl sym) where
+  show = show . format
+
+instance Format sym => Show (Exp sym) where
+  show = show . format
