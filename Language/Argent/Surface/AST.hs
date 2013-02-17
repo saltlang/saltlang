@@ -14,6 +14,7 @@
 -- along with this program; if not, write to the Free Software
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
+{-# LANGUAGE FlexibleContexts #-}
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 
 -- | The Abstract Syntax Tree, as yielded by a parser.  This is
@@ -26,7 +27,9 @@ module Language.Argent.Surface.AST(
        ScopeClass(..),
        Decl(..),
        Compound(..),
+       Pattern(..),
        Exp(..),
+       Entry(..),
        Binding(..)
        ) where
 
@@ -101,6 +104,48 @@ data Compound
     -- | A declaration.
   | Decl !(Decl sym)
 
+-- | A pattern, for pattern match expressions.
+data Pattern
+       -- | The type of a symbol
+       sym =
+    -- | A constructor.  Mirrors a call expression.
+    Construct {
+      -- | The name of the constructor.
+      constructName :: sym,
+      -- | Whether or not the binding is strict (ie. it omits some args)
+      constructStrict :: !Bool,
+      -- | The arguments to the constructor.
+      constructArgs :: [Entry Pattern sym],
+      -- | The position in source from which this arises.
+      constructPos :: !Pos
+    }
+    -- | A projection.  Mirrors a record expression.
+  | Project {
+      -- | The fields being projected.
+      projectFields :: [Entry Pattern sym],
+      -- | Whether or not the binding is strict (ie. it omits some fields)
+      projectStrict :: !Bool,
+      -- | The position in source from which this arises.
+      projectPos :: !Pos
+    }
+    -- | An as pattern.  Captures part of a pattern as a name, but
+    -- continues to match.
+  | As {
+      -- | The name to bind.
+      asName :: !sym,
+      -- | The sub-pattern to match.
+      asPat :: Pattern sym,
+      -- | The position in source from which this arises.
+      asPos :: !Pos
+    }
+    -- | A name binding.  Binds the given name to the contents.
+  | Name {
+      -- | The name to bind.
+      nameSym :: !sym,
+      -- | The position in source from which this arises.
+      namePos :: !Pos
+    }
+
 -- | Expressions.  These represent computed values of any type.
 data Exp
        -- | The type of a symbol
@@ -136,7 +181,7 @@ data Exp
     -- structure types.
   | Record {
       -- | The fields in this record expression.
-      recFields :: [Entry sym],
+      recFields :: [Entry Exp sym],
       -- | The position in source from which this arises.
       recPos :: !Pos
     }
@@ -149,19 +194,24 @@ data Exp
       symPos :: !Pos
     }
 
-data Entry sym =
+-- | An entry in a record field or call argument list.
+data Entry
+       -- | The type constructor to build the content.
+       con
+       -- | The type of a symbol
+       sym =
     -- | A named field.  This sets a specific field or argument to a
     -- certain value.
     Named {
       -- | The name of the field or argument being set.
       namedName :: !sym,
       -- | The value to which the field or argument is set.
-      namedVal :: Exp sym,
+      namedVal :: con sym,
       -- | The position in source from which this arises.
       namedPos :: !Pos
     }
     -- | Unnamed field.  This is just an expression.
-  | Unnamed (Exp sym)
+  | Unnamed (con sym)
 
 -- | A simple name binding.
 data Binding
@@ -198,6 +248,21 @@ instance Eq1 Compound where
   Decl d1 ==# Decl d2 = d1 ==# d2
   _ ==# _ = False
 
+instance Eq1 Pattern where
+  (Construct { constructName = name1, constructStrict = strict1,
+               constructArgs = args1 }) ==#
+    (Construct { constructName = name2, constructStrict = strict2,
+                 constructArgs = args2 }) =
+      (strict1 == strict2) && (name1 == name2) && (args1 == args2)
+  (Project { projectFields = fields1, projectStrict = strict1 }) ==#
+    (Project { projectFields = fields2, projectStrict = strict2 }) =
+      (fields1 ==# fields2) && (strict1 == strict2)
+  (As { asName = name1, asPat = pat1 }) ==#
+    (As { asName = name2, asPat = pat2 }) =
+      (name1 == name2) && (pat1 ==# pat2)
+  (Name { nameSym = name1 }) ==# (Name { nameSym = name2 }) = name1 == name2
+  _ ==# _ = False
+
 instance Eq1 Exp where
   (Sym { symName = name1 }) ==# (Sym { symName = name2 }) = name1 == name2
   (Seq { seqVals = vals1 }) ==# (Seq { seqVals = vals2 }) = vals1 ==# vals2
@@ -210,7 +275,7 @@ instance Eq1 Exp where
     (Compound { compoundBody = body2 }) = body1 ==# body2
   _ ==# _ = False
 
-instance Eq1 Entry where
+instance Eq1 con => Eq1 (Entry con) where
   (Named { namedName = name1, namedVal = val1 }) ==#
     (Named { namedName = name2, namedVal = val2 }) =
     (name1 == name2) && (val1 ==# val2)
@@ -226,7 +291,7 @@ instance Eq sym => Eq (Decl sym) where (==) = (==#)
 instance Eq sym => Eq (Compound sym) where (==) = (==#)
 instance Eq sym => Eq (Exp sym) where (==) = (==#)
 instance Eq sym => Eq (Binding sym) where (==) = (==#)
-instance Eq sym => Eq (Entry sym) where (==) = (==#)
+instance (Eq1 con, Eq sym) => Eq (Entry con sym) where (==) = (==#)
 
 instance Ord1 Decl where
   compare1 (Scope { scopeName = name1, scopeClass = cls1, scopeBody = body1,
@@ -293,6 +358,35 @@ instance Ord1 Exp where
   compare1 (Sym { symName = name1 }) (Sym { symName = name2 }) =
     compare name1 name2
 
+instance Ord1 Pattern where
+  compare1 (Construct { constructName = name1, constructStrict = strict1,
+                        constructArgs = args1 })
+           (Construct { constructName = name2, constructStrict = strict2,
+                        constructArgs = args2 }) =
+    case compare strict1 strict2 of
+      EQ -> case compare name1 name2 of
+        EQ -> compare1 args1 args2
+        out -> out
+      out -> out
+  compare1 (Construct {}) _ = GT
+  compare1 _ (Construct {}) = LT
+  compare1 (Project { projectFields = fields1, projectStrict = strict1 })
+           (Project { projectFields = fields2, projectStrict = strict2 }) =
+    case compare strict1 strict2 of
+      EQ -> compare1 fields1 fields2
+      out -> out
+  compare1 (Project {}) _ = GT
+  compare1 _ (Project {}) = LT
+  compare1 (As { asName = name1, asPat = pat1 })
+           (As { asName = name2, asPat = pat2 }) =
+    case compare name1 name2 of
+      EQ -> compare1 pat1 pat2
+      out -> out
+  compare1 (As {}) _ = GT
+  compare1 _ (As {}) = LT
+  compare1 (Name { nameSym = name1 }) (Name { nameSym = name2 }) =
+    compare name1 name2
+
 instance Ord1 Binding where
   compare1 (Binding { bindingName = name1, bindingType = ty1 })
            (Binding { bindingName = name2, bindingType = ty2 }) =
@@ -300,7 +394,7 @@ instance Ord1 Binding where
       EQ -> compare1 ty1 ty2
       out -> out
 
-instance Ord1 Entry where
+instance Ord1 con => Ord1 (Entry con) where
   compare1 (Named { namedName = name1, namedVal = val1 })
            (Named { namedName = name2, namedVal = val2 }) =
     case compare name1 name2 of
@@ -314,7 +408,7 @@ instance Ord sym => Ord (Decl sym) where compare = compare1
 instance Ord sym => Ord (Compound sym) where compare = compare1
 instance Ord sym => Ord (Exp sym) where compare = compare1
 instance Ord sym => Ord (Binding sym) where compare = compare1
-instance Ord sym => Ord (Entry sym) where compare = compare1
+instance (Ord1 con, Ord sym) => Ord (Entry con sym) where compare = compare1
 
 instance Position (Decl sym) where
   pos (Scope { scopePos = p }) = p
@@ -332,10 +426,16 @@ instance Position (Exp sym) where
   pos (Record { recPos = p }) = p
   pos (Sym { symPos = p }) = p
 
+instance Position (Pattern sym) where
+  pos (Construct { constructPos = p }) = p
+  pos (Project { projectPos = p }) = p
+  pos (As { asPos = p }) = p
+  pos (Name { namePos = p }) = p
+
 instance Position (Binding sym) where
   pos (Binding { bindingPos = p }) = p
 
-instance Position (Entry sym) where
+instance Position (con sym) => Position (Entry con sym) where
   pos (Named { namedPos = p }) = p
   pos (Unnamed e) = pos e
 
@@ -363,11 +463,21 @@ instance Hashable sym => Hashable (Exp sym) where
   hash (Record { recFields = fields }) = hashInt 4 `combine` hash fields
   hash (Sym { symName = name }) = hashInt 5 `combine` hash name
 
+instance Hashable sym => Hashable (Pattern sym) where
+  hash (Construct { constructName = name, constructStrict = strict,
+                    constructArgs = args }) =
+    hashInt 1 `combine` hash name `combine` hash strict `combine` hash args
+  hash (Project { projectStrict = strict, projectFields = fields }) =
+    hashInt 2 `combine` hash strict `combine` hash fields
+  hash (As { asName = name, asPat = pat }) =
+    hashInt 3 `combine` hash name `combine` hash pat
+  hash (Name { nameSym = name }) = hashInt 4 `combine` hash name
+
 instance Hashable sym => Hashable (Binding sym) where
   hash (Binding { bindingName = name, bindingType = ty }) =
     hash name `combine` hash ty
 
-instance Hashable sym => Hashable (Entry sym) where
+instance (Hashable sym, Hashable (con sym)) => Hashable (Entry con sym) where
   hash (Named { namedName = name, namedVal = val }) =
     hashInt 1 `combine` hash name `combine` hash val
   hash (Unnamed e) = hashInt 2 `combine` hash e
@@ -397,11 +507,20 @@ instance Functor Exp where
   fmap f e @ (Compound { compoundBody = body }) =
     e { compoundBody = fmap (fmap f) body }
 
+instance Functor Pattern where
+  fmap f p @ (Construct { constructName = name, constructArgs = args }) =
+    p { constructName = f name, constructArgs = fmap (fmap f) args }
+  fmap f p @ (Project { projectFields = fields }) =
+    p { projectFields = fmap (fmap f) fields }
+  fmap f p @ (As { asName = name, asPat = pat }) =
+    p { asName = f name, asPat = fmap f pat }
+  fmap f p @ (Name { nameSym = name }) = p { nameSym = f name }
+
 instance Functor Binding where
   fmap f b @ (Binding { bindingName = name, bindingType = ty }) =
     b { bindingName = f name, bindingType = fmap f ty }
 
-instance Functor Entry where
+instance Functor con => Functor (Entry con) where
   fmap f e @ (Named { namedName = name, namedVal = val }) =
     e { namedName = f name, namedVal = fmap f val }
   fmap f (Unnamed e) = Unnamed (fmap f e)
@@ -428,11 +547,19 @@ instance Foldable Exp where
     foldMap f val `mappend` foldMap f ty
   foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
 
+instance Foldable Pattern where
+  foldMap f (Construct { constructName = name, constructArgs = args }) =
+    f name `mappend` foldMap (foldMap f) args
+  foldMap f (Project { projectFields = fields }) = foldMap (foldMap f) fields
+  foldMap f (As { asName = name, asPat = pat }) =
+    f name `mappend` foldMap f pat
+  foldMap f (Name { nameSym = name }) = f name
+
 instance Foldable Binding where
   foldMap f (Binding { bindingName = name, bindingType = ty }) =
     f name `mappend` foldMap f ty
 
-instance Foldable Entry where
+instance Foldable con => Foldable (Entry con) where
   foldMap f (Named { namedName = name, namedVal = val }) =
     f name `mappend` foldMap f val
   foldMap f (Unnamed e) = foldMap f e
@@ -470,12 +597,25 @@ instance Traversable Exp where
   traverse f e @ (Compound { compoundBody = body }) =
     (\body' -> e { compoundBody = body' }) <$> traverse (traverse f) body
 
+instance Traversable Pattern where
+  traverse f p @ (Construct { constructName = name, constructArgs = args }) =
+    (\name' args' -> p { constructName = name', constructArgs = args' }) <$>
+      f name <*> traverse (traverse f) args
+  traverse f p @ (Project { projectFields = fields }) =
+    (\fields' -> p { projectFields = fields' }) <$>
+      traverse (traverse f) fields
+  traverse f p @ (As { asName = name, asPat = pat }) =
+    (\name' pat' -> p { asName = name', asPat = pat' }) <$>
+      f name <*> traverse f pat
+  traverse f p @ (Name { nameSym = name }) =
+    (\name' -> p { nameSym = name' }) <$> f name
+
 instance Traversable Binding where
   traverse f b @ (Binding { bindingName = name, bindingType = ty }) =
     (\name' ty' -> b { bindingName = name', bindingType = ty' }) <$>
       f name <*> traverse f ty
 
-instance Traversable Entry where
+instance Traversable con => Traversable (Entry con) where
   traverse f e @ (Named { namedName = name, namedVal = val }) =
     (\name' val' -> e { namedName = name', namedVal = val' }) <$>
       f name <*> traverse f val
@@ -526,11 +666,29 @@ instance Format sym => Format (Exp sym) where
     lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
   format (Sym { symName = name }) = format name
 
+
+instance Format sym => Format (Pattern sym) where
+  format (Project { projectFields = fields, projectStrict = True }) =
+    lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
+  format (Project { projectFields = fields, projectStrict = False }) =
+    let
+      withdots = (map format fields) ++ [format "..."]
+    in
+    lparen <> (nest 2 (sep (punctuate comma withdots))) <> rparen
+  format (Construct { constructName = name, constructArgs = args,
+                      constructStrict = True }) = parenList name args
+  format (Construct { constructName = name, constructArgs = args,
+                      constructStrict = False }) =
+    parenList name ((map format args) ++ [format "..."])
+  format (As { asName = name, asPat = pat }) =
+    format pat <+> format "as" <+> format name
+  format (Name { nameSym = name }) = format name
+
 instance Format sym => Format (Binding sym) where
   format (Binding { bindingName = name, bindingType = ty }) =
     hang (name <+> colon) 2 ty
 
-instance Format sym => Format (Entry sym) where
+instance (Format sym, Format (con sym)) => Format (Entry con sym) where
   format (Named { namedName = name, namedVal = val }) =
     hang val 2 (format "as" <+> name)
   format (Unnamed e) = format e
