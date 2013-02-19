@@ -30,7 +30,8 @@ module Language.Argent.Surface.AST(
        Pattern(..),
        Exp(..),
        Entry(..),
-       Binding(..)
+       Binding(..),
+       Case(..)
        ) where
 
 import Control.Applicative
@@ -47,7 +48,7 @@ import Text.Format
 -- | Declarations.  These represent static declarations inside a
 -- scope.  Note: some of these can be built from others.
 data Decl
-       -- | The type of a symbol
+       -- | The type of a symbol.
        sym =
     -- | Scope entities.  This is a common structure for a number of
     -- entity declarations that all have the same structure: modules,
@@ -97,7 +98,7 @@ data Decl
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
 data Compound
-       -- | The type of a symbol
+       -- | The type of a symbol.
        sym =
     -- | An ordinary expression.
     Exp !(Exp sym)
@@ -157,7 +158,7 @@ data Pattern
 
 -- | Expressions.  These represent computed values of any type.
 data Exp
-       -- | The type of a symbol
+       -- | The type of a symbol.
        sym =
     -- | An expression that may contain declarations as well as
     -- expressions.
@@ -166,6 +167,18 @@ data Exp
       compoundBody :: [Compound sym],
       -- | The position in source from which this arises.
       compoundPos :: !Pos
+    }
+    -- | Match statement.  Given a set of (possibly typed) patterns,
+    -- find the meet of all types above the argument's type in the
+    -- cases, then apply the first pattern for the meet type that
+    -- matches the argument.
+  | Match {
+      -- | The argument to the match statement.
+      matchVal :: Exp sym,
+      -- | The cases, in order.
+      matchCases :: [Case sym],
+      -- | The position in source from which this arises.
+      matchPos :: !Pos
     }
 {-
   | Lambda {
@@ -213,7 +226,7 @@ data Exp
 data Entry
        -- | The type constructor to build the content.
        con
-       -- | The type of a symbol
+       -- | The type of a symbol.
        sym =
     -- | A named field.  This sets a specific field or argument to a
     -- certain value.
@@ -230,15 +243,28 @@ data Entry
 
 -- | A simple name binding.
 data Binding
-       -- | The type of a symbol
+       -- | The type of a symbol.
        sym =
   Binding {
     -- | The name being bound.
     bindingName :: !sym,
     -- | The type assigned to the bound name.
     bindingType :: Exp sym,
-      -- | The position in source from which this arises.
+    -- | The position in source from which this arises.
     bindingPos :: !Pos
+  }
+
+-- | A case in a match statement or a function definition.
+data Case
+      -- | The type of a symbol.
+      sym =
+  Case {
+    -- | The pattern to match for this case.
+    casePat :: Pattern sym,
+    -- | The expression to execute for this case.
+    caseBody :: Exp sym,
+    -- | The position in source from which this arises.
+    casePos :: !Pos
   }
 
 instance Eq1 Decl where
@@ -289,6 +315,9 @@ instance Eq1 Exp where
   (Ascribe { ascribeVal = val1, ascribeType = ty1 }) ==#
     (Ascribe { ascribeVal = val2, ascribeType = ty2 }) =
       (val1 ==# val2) && (ty1 ==# ty2)
+  (Match { matchVal = val1, matchCases = cases1 }) ==#
+    (Match { matchVal = val2, matchCases = cases2 }) =
+      (val1 ==# val2) && (cases1 ==# cases2)
   (Compound { compoundBody = body1 }) ==#
     (Compound { compoundBody = body2 }) = body1 ==# body2
   _ ==# _ = False
@@ -305,10 +334,16 @@ instance Eq1 Binding where
     (Binding { bindingName = name2, bindingType = ty2 }) =
     (name1 == name2) && (ty1 ==# ty2)
 
+instance Eq1 Case where
+  (Case { caseBody = body1, casePat = pat1 }) ==#
+    (Case { caseBody = body2, casePat = pat2 }) =
+      (body1 ==# body2) && (pat1 ==# pat2)
+
 instance Eq sym => Eq (Decl sym) where (==) = (==#)
 instance Eq sym => Eq (Compound sym) where (==) = (==#)
 instance Eq sym => Eq (Exp sym) where (==) = (==#)
 instance Eq sym => Eq (Binding sym) where (==) = (==#)
+instance Eq sym => Eq (Case sym) where (==) = (==#)
 instance (Eq1 con, Eq sym) => Eq (Entry con sym) where (==) = (==#)
 
 instance Ord1 Decl where
@@ -358,6 +393,13 @@ instance Ord1 Exp where
     compare body1 body2
   compare1 (Compound {}) _ = GT
   compare1 _ (Compound {}) = LT
+  compare1 (Match { matchVal = val1, matchCases = cases1 })
+           (Match { matchVal = val2, matchCases = cases2 }) =
+    case compare1 val1 val2 of
+      EQ -> compare1 cases1 cases2
+      out -> out
+  compare1 (Match {}) _ = GT
+  compare1 _ (Match {}) = LT
   compare1 (Seq { seqVals = vals1 }) (Seq { seqVals = vals2 }) =
     compare vals1 vals2
   compare1 (Seq {}) _ = GT
@@ -419,6 +461,13 @@ instance Ord1 Binding where
       EQ -> compare1 ty1 ty2
       out -> out
 
+instance Ord1 Case where
+  compare1 (Case { casePat = pat1, caseBody = body1 })
+           (Case { casePat = pat2, caseBody = body2 }) =
+    case compare1 pat1 pat2 of
+      EQ -> compare1 body1 body2
+      out -> out
+
 instance Ord1 con => Ord1 (Entry con) where
   compare1 (Named { namedName = name1, namedVal = val1 })
            (Named { namedName = name2, namedVal = val2 }) =
@@ -433,6 +482,7 @@ instance Ord sym => Ord (Decl sym) where compare = compare1
 instance Ord sym => Ord (Compound sym) where compare = compare1
 instance Ord sym => Ord (Exp sym) where compare = compare1
 instance Ord sym => Ord (Binding sym) where compare = compare1
+instance Ord sym => Ord (Case sym) where compare = compare1
 instance (Ord1 con, Ord sym) => Ord (Entry con sym) where compare = compare1
 
 instance Position (Decl sym) where
@@ -446,6 +496,7 @@ instance Position (Compound sym) where
 
 instance Position (Exp sym) where
   pos (Compound { compoundPos = p }) = p
+  pos (Match { matchPos = p }) = p
   pos (Ascribe { ascribePos = p }) = p
   pos (Seq { seqPos = p }) = p
   pos (Record { recPos = p }) = p
@@ -460,6 +511,9 @@ instance Position (Pattern sym) where
 
 instance Position (Binding sym) where
   pos (Binding { bindingPos = p }) = p
+
+instance Position (Case sym) where
+  pos (Case { casePos = p }) = p
 
 instance Position (con sym) => Position (Entry con sym) where
   pos (Named { namedPos = p }) = p
@@ -483,11 +537,13 @@ instance Hashable sym => Hashable (Compound sym) where
 
 instance Hashable sym => Hashable (Exp sym) where
   hash (Compound { compoundBody = body }) = hashInt 1 `combine` hash body
+  hash (Match { matchVal = val, matchCases = cases }) =
+    hashInt 2 `combine` hash val `combine` hash cases
   hash (Ascribe { ascribeVal = val, ascribeType = ty }) =
-    hashInt 2 `combine` hash val `combine` hash ty
-  hash (Seq { seqVals = vals }) = hashInt 3 `combine` hash vals
-  hash (Record { recFields = fields }) = hashInt 4 `combine` hash fields
-  hash (Sym { symName = name }) = hashInt 5 `combine` hash name
+    hashInt 3 `combine` hash val `combine` hash ty
+  hash (Seq { seqVals = vals }) = hashInt 4 `combine` hash vals
+  hash (Record { recFields = fields }) = hashInt 5 `combine` hash fields
+  hash (Sym { symName = name }) = hashInt 6 `combine` hash name
 
 instance Hashable sym => Hashable (Pattern sym) where
   hash (Construct { constructName = name, constructStrict = strict,
@@ -504,6 +560,10 @@ instance Hashable sym => Hashable (Pattern sym) where
 instance Hashable sym => Hashable (Binding sym) where
   hash (Binding { bindingName = name, bindingType = ty }) =
     hash name `combine` hash ty
+
+instance Hashable sym => Hashable (Case sym) where
+  hash (Case { casePat = pat, caseBody = body }) =
+    hash pat `combine` hash body
 
 instance (Hashable sym, Hashable (con sym)) => Hashable (Entry con sym) where
   hash (Named { namedName = name, namedVal = val }) =
@@ -532,6 +592,8 @@ instance Functor Exp where
     e { recFields = fmap (fmap f) fields }
   fmap f e @ (Ascribe { ascribeVal = val, ascribeType = ty }) =
     e { ascribeVal = fmap f val, ascribeType = fmap f ty }
+  fmap f e @ (Match { matchVal = val, matchCases = cases }) =
+    e { matchVal = fmap f val, matchCases = fmap (fmap f) cases }
   fmap f e @ (Compound { compoundBody = body }) =
     e { compoundBody = fmap (fmap f) body }
 
@@ -549,6 +611,10 @@ instance Functor Pattern where
 instance Functor Binding where
   fmap f b @ (Binding { bindingName = name, bindingType = ty }) =
     b { bindingName = f name, bindingType = fmap f ty }
+
+instance Functor Case where
+  fmap f b @ (Case { casePat = pat, caseBody = body }) =
+    b { casePat = fmap f pat, caseBody = fmap f body }
 
 instance Functor con => Functor (Entry con) where
   fmap f e @ (Named { namedName = name, namedVal = val }) =
@@ -575,6 +641,8 @@ instance Foldable Exp where
   foldMap f (Record { recFields = fields }) = foldMap (foldMap f) fields
   foldMap f (Ascribe { ascribeVal = val, ascribeType = ty }) =
     foldMap f val `mappend` foldMap f ty
+  foldMap f (Match { matchVal = val, matchCases = cases }) =
+    foldMap f val `mappend` foldMap (foldMap f) cases
   foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
 
 instance Foldable Pattern where
@@ -590,6 +658,10 @@ instance Foldable Pattern where
 instance Foldable Binding where
   foldMap f (Binding { bindingName = name, bindingType = ty }) =
     f name `mappend` foldMap f ty
+
+instance Foldable Case where
+  foldMap f (Case { casePat = pat, caseBody = body }) =
+    foldMap f pat `mappend` foldMap f body
 
 instance Foldable con => Foldable (Entry con) where
   foldMap f (Named { namedName = name, namedVal = val }) =
@@ -626,6 +698,9 @@ instance Traversable Exp where
     (\vals' -> e { seqVals = vals' }) <$> traverse (traverse f) vals
   traverse f e @ (Record { recFields = fields }) =
     (\fields' -> e { recFields = fields' }) <$> traverse (traverse f) fields
+  traverse f e @ (Match { matchVal = val, matchCases = cases }) =
+    (\val' cases' -> e { matchVal = val', matchCases = cases' }) <$>
+      traverse f val <*> traverse (traverse f) cases
   traverse f e @ (Compound { compoundBody = body }) =
     (\body' -> e { compoundBody = body' }) <$> traverse (traverse f) body
 
@@ -649,6 +724,11 @@ instance Traversable Binding where
   traverse f b @ (Binding { bindingName = name, bindingType = ty }) =
     (\name' ty' -> b { bindingName = name', bindingType = ty' }) <$>
       f name <*> traverse f ty
+
+instance Traversable Case where
+  traverse f b @ (Case { casePat = pat, caseBody = body }) =
+    (\pat' body' -> b { casePat = pat', caseBody = body' }) <$>
+      traverse f pat <*> traverse f body
 
 instance Traversable con => Traversable (Entry con) where
   traverse f e @ (Named { namedName = name, namedVal = val }) =
@@ -694,13 +774,14 @@ instance Format sym => Format (Compound sym) where
 instance Format sym => Format (Exp sym) where
   format (Compound { compoundBody = body }) =
     block 2 (lbrace) (sep body) rbrace
+  format (Match { matchVal = val, matchCases = cases }) =
+    hang (format "match" <+> val) 2 (sep (punctuate (format "|") cases))
   format (Ascribe { ascribeVal = val, ascribeType = ty }) =
     hang (val <+> colon) 2 ty
   format (Seq { seqVals = vals }) = nest 2 (sep vals)
   format (Record { recFields = fields }) =
     lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
   format (Sym { symName = name }) = format name
-
 
 instance Format sym => Format (Pattern sym) where
   format (Project { projectFields = fields, projectStrict = True }) =
@@ -724,6 +805,10 @@ instance Format sym => Format (Pattern sym) where
 instance Format sym => Format (Binding sym) where
   format (Binding { bindingName = name, bindingType = ty }) =
     hang (name <+> colon) 2 ty
+
+instance Format sym => Format (Case sym) where
+  format (Case { casePat = pat, caseBody = body }) =
+    hang (pat <+> equals) 2 body
 
 instance (Format sym, Format (con sym)) => Format (Entry con sym) where
   format (Named { namedName = name, namedVal = val }) =
