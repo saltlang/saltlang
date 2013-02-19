@@ -180,12 +180,15 @@ data Exp
       -- | The position in source from which this arises.
       matchPos :: !Pos
     }
-{-
-  | Lambda {
+    -- | Function expression (lambda).  Has the same form and
+    -- semantics as a match statement (in fact, match statements are
+    -- transliterated into calls to constant functions).
+  | Func {
+      -- | The cases for the function.
+      funcCases :: [Case sym],
       -- | The position in source from which this arises.
       funcPos :: !Pos
     }
--}
     -- | Ascribe expression.  Fixes the type of a given expression.
   | Ascribe {
       -- | The expression whose type is being set.
@@ -315,6 +318,8 @@ instance Eq1 Exp where
   (Ascribe { ascribeVal = val1, ascribeType = ty1 }) ==#
     (Ascribe { ascribeVal = val2, ascribeType = ty2 }) =
       (val1 ==# val2) && (ty1 ==# ty2)
+  (Func { funcCases = cases1 }) ==#
+    (Func { funcCases = cases2 }) = cases1 ==# cases2
   (Match { matchVal = val1, matchCases = cases1 }) ==#
     (Match { matchVal = val2, matchCases = cases2 }) =
       (val1 ==# val2) && (cases1 ==# cases2)
@@ -393,6 +398,10 @@ instance Ord1 Exp where
     compare body1 body2
   compare1 (Compound {}) _ = GT
   compare1 _ (Compound {}) = LT
+  compare1 (Func { funcCases = cases1 }) (Func { funcCases = cases2 }) = 
+    compare1 cases1 cases2
+  compare1 (Func {}) _ = GT
+  compare1 _ (Func {}) = LT
   compare1 (Match { matchVal = val1, matchCases = cases1 })
            (Match { matchVal = val2, matchCases = cases2 }) =
     case compare1 val1 val2 of
@@ -496,6 +505,7 @@ instance Position (Compound sym) where
 
 instance Position (Exp sym) where
   pos (Compound { compoundPos = p }) = p
+  pos (Func { funcPos = p }) = p
   pos (Match { matchPos = p }) = p
   pos (Ascribe { ascribePos = p }) = p
   pos (Seq { seqPos = p }) = p
@@ -537,13 +547,14 @@ instance Hashable sym => Hashable (Compound sym) where
 
 instance Hashable sym => Hashable (Exp sym) where
   hash (Compound { compoundBody = body }) = hashInt 1 `combine` hash body
+  hash (Func { funcCases = cases }) = hashInt 2 `combine` hash cases
   hash (Match { matchVal = val, matchCases = cases }) =
-    hashInt 2 `combine` hash val `combine` hash cases
+    hashInt 3 `combine` hash val `combine` hash cases
   hash (Ascribe { ascribeVal = val, ascribeType = ty }) =
-    hashInt 3 `combine` hash val `combine` hash ty
-  hash (Seq { seqVals = vals }) = hashInt 4 `combine` hash vals
-  hash (Record { recFields = fields }) = hashInt 5 `combine` hash fields
-  hash (Sym { symName = name }) = hashInt 6 `combine` hash name
+    hashInt 4 `combine` hash val `combine` hash ty
+  hash (Seq { seqVals = vals }) = hashInt 5 `combine` hash vals
+  hash (Record { recFields = fields }) = hashInt 6 `combine` hash fields
+  hash (Sym { symName = name }) = hashInt 7 `combine` hash name
 
 instance Hashable sym => Hashable (Pattern sym) where
   hash (Construct { constructName = name, constructStrict = strict,
@@ -594,6 +605,8 @@ instance Functor Exp where
     e { ascribeVal = fmap f val, ascribeType = fmap f ty }
   fmap f e @ (Match { matchVal = val, matchCases = cases }) =
     e { matchVal = fmap f val, matchCases = fmap (fmap f) cases }
+  fmap f e @ (Func { funcCases = cases }) =
+    e { funcCases = fmap (fmap f) cases }
   fmap f e @ (Compound { compoundBody = body }) =
     e { compoundBody = fmap (fmap f) body }
 
@@ -641,6 +654,7 @@ instance Foldable Exp where
   foldMap f (Record { recFields = fields }) = foldMap (foldMap f) fields
   foldMap f (Ascribe { ascribeVal = val, ascribeType = ty }) =
     foldMap f val `mappend` foldMap f ty
+  foldMap f (Func { funcCases = cases }) = foldMap (foldMap f) cases
   foldMap f (Match { matchVal = val, matchCases = cases }) =
     foldMap f val `mappend` foldMap (foldMap f) cases
   foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
@@ -698,6 +712,8 @@ instance Traversable Exp where
     (\vals' -> e { seqVals = vals' }) <$> traverse (traverse f) vals
   traverse f e @ (Record { recFields = fields }) =
     (\fields' -> e { recFields = fields' }) <$> traverse (traverse f) fields
+  traverse f e @ (Func { funcCases = cases }) =
+    (\cases' -> e { funcCases = cases' }) <$> traverse (traverse f) cases
   traverse f e @ (Match { matchVal = val, matchCases = cases }) =
     (\val' cases' -> e { matchVal = val', matchCases = cases' }) <$>
       traverse f val <*> traverse (traverse f) cases
@@ -774,6 +790,7 @@ instance Format sym => Format (Compound sym) where
 instance Format sym => Format (Exp sym) where
   format (Compound { compoundBody = body }) =
     block 2 (lbrace) (sep body) rbrace
+  format (Func { funcCases = cases }) = (sep (punctuate (format "|") cases))
   format (Match { matchVal = val, matchCases = cases }) =
     hang (format "match" <+> val) 2 (sep (punctuate (format "|") cases))
   format (Ascribe { ascribeVal = val, ascribeType = ty }) =
