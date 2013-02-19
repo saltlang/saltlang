@@ -128,6 +128,15 @@ data Pattern
       -- | The position in source from which this arises.
       projectPos :: !Pos
     }
+    -- | A typed pattern.  Fixes the type of a pattern.
+  | Typed {
+      -- | The pattern whose type is being fixed.
+      typedPat :: Pattern sym,
+      -- | The type to which the pattern is fixed.
+      typedType :: Exp sym,
+      -- | The position in source from which this arises.
+      typedPos :: !Pos
+    }
     -- | An as pattern.  Captures part of a pattern as a name, but
     -- continues to match.
   | As {
@@ -167,11 +176,11 @@ data Exp
     -- | Ascribe expression.  Fixes the type of a given expression.
   | Ascribe {
       -- | The expression whose type is being set.
-      typedVal :: Exp sym,
+      ascribeVal :: Exp sym,
       -- | The type.
-      typedType :: Exp sym,
+      ascribeType :: Exp sym,
       -- | The position in source from which this arises.
-      typedPos :: !Pos
+      ascribePos :: !Pos
     }
     -- | A sequence of expressions.  This represents a function call,
     -- possibly with inorder symbols.  This is re-parsed once the
@@ -263,6 +272,9 @@ instance Eq1 Pattern where
   (Project { projectFields = fields1, projectStrict = strict1 }) ==#
     (Project { projectFields = fields2, projectStrict = strict2 }) =
       (fields1 ==# fields2) && (strict1 == strict2)
+  (Typed { typedPat = pat1, typedType = ty1 }) ==#
+    (Typed { typedPat = pat2, typedType = ty2 }) =
+      (pat1 ==# pat2) && (ty1 ==# ty2)
   (As { asName = name1, asPat = pat1 }) ==#
     (As { asName = name2, asPat = pat2 }) =
       (name1 == name2) && (pat1 ==# pat2)
@@ -274,8 +286,8 @@ instance Eq1 Exp where
   (Seq { seqVals = vals1 }) ==# (Seq { seqVals = vals2 }) = vals1 ==# vals2
   (Record { recFields = fields1 }) ==# (Record { recFields = fields2 }) =
     fields1 ==# fields2  
-  (Ascribe { typedVal = val1, typedType = ty1 }) ==#
-    (Ascribe { typedVal = val2, typedType = ty2 }) =
+  (Ascribe { ascribeVal = val1, ascribeType = ty1 }) ==#
+    (Ascribe { ascribeVal = val2, ascribeType = ty2 }) =
       (val1 ==# val2) && (ty1 ==# ty2)
   (Compound { compoundBody = body1 }) ==#
     (Compound { compoundBody = body2 }) = body1 ==# body2
@@ -354,8 +366,8 @@ instance Ord1 Exp where
     compare1 fields1 fields2
   compare1 (Record {}) _ = GT
   compare1 _ (Record {}) = LT
-  compare1 (Ascribe { typedVal = val1, typedType = ty1 })
-           (Ascribe { typedVal = val2, typedType = ty2 }) =
+  compare1 (Ascribe { ascribeVal = val1, ascribeType = ty1 })
+           (Ascribe { ascribeVal = val2, ascribeType = ty2 }) =
     case compare val1 val2 of
       EQ -> compare ty1 ty2
       out -> out
@@ -383,6 +395,13 @@ instance Ord1 Pattern where
       out -> out
   compare1 (Project {}) _ = GT
   compare1 _ (Project {}) = LT
+  compare1 (Typed { typedPat = pat1, typedType = ty1 })
+           (Typed { typedPat = pat2, typedType = ty2 }) =
+    case compare1 pat1 pat2 of
+      EQ -> compare1 ty1 ty2
+      out -> out
+  compare1 (Typed {}) _ = GT
+  compare1 _ (Typed {}) = LT
   compare1 (As { asName = name1, asPat = pat1 })
            (As { asName = name2, asPat = pat2 }) =
     case compare name1 name2 of
@@ -427,7 +446,7 @@ instance Position (Compound sym) where
 
 instance Position (Exp sym) where
   pos (Compound { compoundPos = p }) = p
-  pos (Ascribe { typedPos = p }) = p
+  pos (Ascribe { ascribePos = p }) = p
   pos (Seq { seqPos = p }) = p
   pos (Record { recPos = p }) = p
   pos (Sym { symPos = p }) = p
@@ -435,6 +454,7 @@ instance Position (Exp sym) where
 instance Position (Pattern sym) where
   pos (Construct { constructPos = p }) = p
   pos (Project { projectPos = p }) = p
+  pos (Typed { typedPos = p }) = p
   pos (As { asPos = p }) = p
   pos (Name { namePos = p }) = p
 
@@ -463,7 +483,7 @@ instance Hashable sym => Hashable (Compound sym) where
 
 instance Hashable sym => Hashable (Exp sym) where
   hash (Compound { compoundBody = body }) = hashInt 1 `combine` hash body
-  hash (Ascribe { typedVal = val, typedType = ty }) =
+  hash (Ascribe { ascribeVal = val, ascribeType = ty }) =
     hashInt 2 `combine` hash val `combine` hash ty
   hash (Seq { seqVals = vals }) = hashInt 3 `combine` hash vals
   hash (Record { recFields = fields }) = hashInt 4 `combine` hash fields
@@ -475,8 +495,10 @@ instance Hashable sym => Hashable (Pattern sym) where
     hashInt 1 `combine` hash name `combine` hash strict `combine` hash args
   hash (Project { projectStrict = strict, projectFields = fields }) =
     hashInt 2 `combine` hash strict `combine` hash fields
+  hash (Typed { typedPat = pat, typedType = ty }) =
+    hashInt 3 `combine` hash pat `combine` hash ty
   hash (As { asName = name, asPat = pat }) =
-    hashInt 3 `combine` hash name `combine` hash pat
+    hashInt 4 `combine` hash name `combine` hash pat
   hash (Name { nameSym = name }) = hashInt 4 `combine` hash name
 
 instance Hashable sym => Hashable (Binding sym) where
@@ -508,8 +530,8 @@ instance Functor Exp where
   fmap f e @ (Seq { seqVals = vals }) = e { seqVals = fmap (fmap f) vals }
   fmap f e @ (Record { recFields = fields }) =
     e { recFields = fmap (fmap f) fields }
-  fmap f e @ (Ascribe { typedVal = val, typedType = ty }) =
-    e { typedVal = fmap f val, typedType = fmap f ty }
+  fmap f e @ (Ascribe { ascribeVal = val, ascribeType = ty }) =
+    e { ascribeVal = fmap f val, ascribeType = fmap f ty }
   fmap f e @ (Compound { compoundBody = body }) =
     e { compoundBody = fmap (fmap f) body }
 
@@ -518,6 +540,8 @@ instance Functor Pattern where
     p { constructName = f name, constructArgs = fmap (fmap f) args }
   fmap f p @ (Project { projectFields = fields }) =
     p { projectFields = fmap (fmap f) fields }
+  fmap f p @ (Typed { typedPat = pat, typedType = ty }) =
+    p { typedPat = fmap f pat, typedType = fmap f ty }
   fmap f p @ (As { asName = name, asPat = pat }) =
     p { asName = f name, asPat = fmap f pat }
   fmap f p @ (Name { nameSym = name }) = p { nameSym = f name }
@@ -549,7 +573,7 @@ instance Foldable Exp where
   foldMap f (Sym { symName = name }) = f name
   foldMap f (Seq { seqVals = vals }) = foldMap (foldMap f) vals
   foldMap f (Record { recFields = fields }) = foldMap (foldMap f) fields
-  foldMap f (Ascribe { typedVal = val, typedType = ty }) =
+  foldMap f (Ascribe { ascribeVal = val, ascribeType = ty }) =
     foldMap f val `mappend` foldMap f ty
   foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
 
@@ -557,6 +581,8 @@ instance Foldable Pattern where
   foldMap f (Construct { constructName = name, constructArgs = args }) =
     f name `mappend` foldMap (foldMap f) args
   foldMap f (Project { projectFields = fields }) = foldMap (foldMap f) fields
+  foldMap f (Typed { typedPat = pat, typedType = ty }) =
+    foldMap f pat `mappend` foldMap f ty
   foldMap f (As { asName = name, asPat = pat }) =
     f name `mappend` foldMap f pat
   foldMap f (Name { nameSym = name }) = f name
@@ -593,8 +619,8 @@ instance Traversable Compound where
 instance Traversable Exp where
   traverse f e @ (Sym { symName = name }) =
     (\name' -> e { symName = name' }) <$> f name
-  traverse f e @ (Ascribe { typedVal = val, typedType = ty }) =
-    (\val' ty' -> e { typedVal = val', typedType = ty' }) <$>
+  traverse f e @ (Ascribe { ascribeVal = val, ascribeType = ty }) =
+    (\val' ty' -> e { ascribeVal = val', ascribeType = ty' }) <$>
       traverse f val <*> traverse f ty
   traverse f e @ (Seq { seqVals = vals }) =
     (\vals' -> e { seqVals = vals' }) <$> traverse (traverse f) vals
@@ -610,6 +636,9 @@ instance Traversable Pattern where
   traverse f p @ (Project { projectFields = fields }) =
     (\fields' -> p { projectFields = fields' }) <$>
       traverse (traverse f) fields
+  traverse f p @ (Typed { typedPat = pat, typedType = ty }) =
+    (\pat' ty' -> p { typedPat = pat', typedType = ty' }) <$>
+      traverse f pat <*> traverse f ty
   traverse f p @ (As { asName = name, asPat = pat }) =
     (\name' pat' -> p { asName = name', asPat = pat' }) <$>
       f name <*> traverse f pat
@@ -665,7 +694,7 @@ instance Format sym => Format (Compound sym) where
 instance Format sym => Format (Exp sym) where
   format (Compound { compoundBody = body }) =
     block 2 (lbrace) (sep body) rbrace
-  format (Ascribe { typedVal = val, typedType = ty }) =
+  format (Ascribe { ascribeVal = val, ascribeType = ty }) =
     hang (val <+> colon) 2 ty
   format (Seq { seqVals = vals }) = nest 2 (sep vals)
   format (Record { recFields = fields }) =
@@ -686,6 +715,8 @@ instance Format sym => Format (Pattern sym) where
   format (Construct { constructName = name, constructArgs = args,
                       constructStrict = False }) =
     parenList name ((map format args) ++ [format "..."])
+  format (Typed { typedPat = pat, typedType = ty }) =
+    hang (pat <+> colon) 2 ty
   format (As { asName = name, asPat = pat }) =
     format pat <+> format "as" <+> format name
   format (Name { nameSym = name }) = format name
