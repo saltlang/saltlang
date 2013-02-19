@@ -158,8 +158,14 @@ data Exp
       -- | The position in source from which this arises.
       compoundPos :: !Pos
     }
-    -- | Typed expression.  Sets the type of a given expression.
-  | Typed {
+{-
+  | Lambda {
+      -- | The position in source from which this arises.
+      funcPos :: !Pos
+    }
+-}
+    -- | Ascribe expression.  Fixes the type of a given expression.
+  | Ascribe {
       -- | The expression whose type is being set.
       typedVal :: Exp sym,
       -- | The type.
@@ -268,8 +274,8 @@ instance Eq1 Exp where
   (Seq { seqVals = vals1 }) ==# (Seq { seqVals = vals2 }) = vals1 ==# vals2
   (Record { recFields = fields1 }) ==# (Record { recFields = fields2 }) =
     fields1 ==# fields2  
-  (Typed { typedVal = val1, typedType = ty1 }) ==#
-    (Typed { typedVal = val2, typedType = ty2 }) =
+  (Ascribe { typedVal = val1, typedType = ty1 }) ==#
+    (Ascribe { typedVal = val2, typedType = ty2 }) =
       (val1 ==# val2) && (ty1 ==# ty2)
   (Compound { compoundBody = body1 }) ==#
     (Compound { compoundBody = body2 }) = body1 ==# body2
@@ -348,13 +354,13 @@ instance Ord1 Exp where
     compare1 fields1 fields2
   compare1 (Record {}) _ = GT
   compare1 _ (Record {}) = LT
-  compare1 (Typed { typedVal = val1, typedType = ty1 })
-           (Typed { typedVal = val2, typedType = ty2 }) =
+  compare1 (Ascribe { typedVal = val1, typedType = ty1 })
+           (Ascribe { typedVal = val2, typedType = ty2 }) =
     case compare val1 val2 of
       EQ -> compare ty1 ty2
       out -> out
-  compare1 (Typed {}) _ = GT
-  compare1 _ (Typed {}) = LT
+  compare1 (Ascribe {}) _ = GT
+  compare1 _ (Ascribe {}) = LT
   compare1 (Sym { symName = name1 }) (Sym { symName = name2 }) =
     compare name1 name2
 
@@ -421,7 +427,7 @@ instance Position (Compound sym) where
 
 instance Position (Exp sym) where
   pos (Compound { compoundPos = p }) = p
-  pos (Typed { typedPos = p }) = p
+  pos (Ascribe { typedPos = p }) = p
   pos (Seq { seqPos = p }) = p
   pos (Record { recPos = p }) = p
   pos (Sym { symPos = p }) = p
@@ -457,7 +463,7 @@ instance Hashable sym => Hashable (Compound sym) where
 
 instance Hashable sym => Hashable (Exp sym) where
   hash (Compound { compoundBody = body }) = hashInt 1 `combine` hash body
-  hash (Typed { typedVal = val, typedType = ty }) =
+  hash (Ascribe { typedVal = val, typedType = ty }) =
     hashInt 2 `combine` hash val `combine` hash ty
   hash (Seq { seqVals = vals }) = hashInt 3 `combine` hash vals
   hash (Record { recFields = fields }) = hashInt 4 `combine` hash fields
@@ -502,7 +508,7 @@ instance Functor Exp where
   fmap f e @ (Seq { seqVals = vals }) = e { seqVals = fmap (fmap f) vals }
   fmap f e @ (Record { recFields = fields }) =
     e { recFields = fmap (fmap f) fields }
-  fmap f e @ (Typed { typedVal = val, typedType = ty }) =
+  fmap f e @ (Ascribe { typedVal = val, typedType = ty }) =
     e { typedVal = fmap f val, typedType = fmap f ty }
   fmap f e @ (Compound { compoundBody = body }) =
     e { compoundBody = fmap (fmap f) body }
@@ -543,7 +549,7 @@ instance Foldable Exp where
   foldMap f (Sym { symName = name }) = f name
   foldMap f (Seq { seqVals = vals }) = foldMap (foldMap f) vals
   foldMap f (Record { recFields = fields }) = foldMap (foldMap f) fields
-  foldMap f (Typed { typedVal = val, typedType = ty }) =
+  foldMap f (Ascribe { typedVal = val, typedType = ty }) =
     foldMap f val `mappend` foldMap f ty
   foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
 
@@ -587,7 +593,7 @@ instance Traversable Compound where
 instance Traversable Exp where
   traverse f e @ (Sym { symName = name }) =
     (\name' -> e { symName = name' }) <$> f name
-  traverse f e @ (Typed { typedVal = val, typedType = ty }) =
+  traverse f e @ (Ascribe { typedVal = val, typedType = ty }) =
     (\val' ty' -> e { typedVal = val', typedType = ty' }) <$>
       traverse f val <*> traverse f ty
   traverse f e @ (Seq { seqVals = vals }) =
@@ -659,7 +665,7 @@ instance Format sym => Format (Compound sym) where
 instance Format sym => Format (Exp sym) where
   format (Compound { compoundBody = body }) =
     block 2 (lbrace) (sep body) rbrace
-  format (Typed { typedVal = val, typedType = ty }) =
+  format (Ascribe { typedVal = val, typedType = ty }) =
     hang (val <+> colon) 2 ty
   format (Seq { seqVals = vals }) = nest 2 (sep vals)
   format (Record { recFields = fields }) =
