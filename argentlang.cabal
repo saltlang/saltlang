@@ -89,5 +89,5 @@ Build-type:             Simple
 Cabal-version:          >= 1.9.2
 
 Library
-  build-depends:        base, data-hash, proglang-util, bound
+  build-depends:        base, data-hash, proglang-util, bound, containers
   exposed-modules:      Language.Argent.Core
