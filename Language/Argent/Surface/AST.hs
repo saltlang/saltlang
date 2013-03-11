@@ -14,7 +14,7 @@
 -- along with this program; if not, write to the Free Software
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances #-}
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 
 -- | The Abstract Syntax Tree, as yielded by a parser.  This is
@@ -41,8 +41,10 @@ import Data.Monoid hiding ((<>))
 import Data.Pos
 import Data.Traversable
 import Language.Argent.Surface.Common
+import Prelude hiding (sequence)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
+import Test.QuickCheck
 import Text.Format
 
 -- | Declarations.  These represent static declarations inside a
@@ -837,3 +839,109 @@ instance Format sym => Show (Decl sym) where
 
 instance Format sym => Show (Exp sym) where
   show = show . format
+
+arbitraryPos :: Pos
+arbitraryPos = internal "arbitrary"
+
+operatorChars :: [Char]
+operatorChars = "!@$%^&*-+/~=<>?|"
+
+idChars :: [Char]
+idChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPGRSTUVWXYZ_"
+
+numChars :: [Char]
+numChars = "0123456789"
+
+arbitraryNumber :: Gen String
+arbitraryNumber = listOf1 (elements numChars)
+
+arbitraryOperator :: Gen String
+arbitraryOperator = listOf1 (elements operatorChars)
+
+arbitraryName :: Gen String
+arbitraryName =
+  do
+    first <- elements idChars
+    rest <- listOf (elements (idChars ++ numChars))
+    return (first : rest)
+
+arbitraryIdentifier :: Gen String
+arbitraryIdentifier = oneof [ arbitraryOperator, arbitraryName ]
+
+arbitrarySymbol :: Gen String
+arbitrarySymbol = oneof [ arbitraryNumber, arbitraryOperator, arbitraryName ]
+
+arbitraryExp :: Int -> Gen (Exp String)
+arbitraryExp size =
+  let
+    arbitraryAscribe :: Gen (Exp String)
+    arbitraryAscribe =
+      do
+        valsize <- choose (0, size - 1)
+        val <- arbitraryExp valsize
+        ty <- arbitraryExp (size - valsize)
+        return Ascribe { ascribeVal = val, ascribeType = ty,
+                         ascribePos = arbitraryPos }
+
+    arbitrarySeq :: Gen (Exp String)
+    arbitrarySeq =
+      let
+        arbitraryExpList :: Int -> Gen ([Exp String])
+        arbitraryExpList 0 = return []
+        arbitraryExpList listsize =
+          do
+            thissize <- choose (0, listsize - 1)
+            this <- arbitraryExp thissize
+            rest <- arbitraryExpList (listsize - thissize - 1)
+            return (this : rest)
+      in do
+        vals <- arbitraryExpList size
+        return Seq { seqVals = vals, seqPos = arbitraryPos }
+
+    arbitraryRecord :: Gen (Exp String)
+    arbitraryRecord =
+      let
+        arbitraryUnnamedFields :: Int -> Gen [Entry Exp String]
+        arbitraryUnnamedFields 0 = return []
+        arbitraryUnnamedFields listsize =
+          do
+            thissize <- choose (0, listsize - 1)
+            this <- arbitraryExp thissize
+            rest <- arbitraryUnnamedFields (listsize - thissize - 1)
+            return (Unnamed this : rest)
+
+        arbitraryNamedFields :: Int -> Gen [Entry Exp String]
+        arbitraryNamedFields 0 = return []
+        arbitraryNamedFields listsize =
+          do
+            thissize <- choose (0, listsize - 1)
+            sym <- arbitraryName
+            this <- arbitraryExp thissize
+            rest <- arbitraryNamedFields (listsize - thissize - 1)
+            return (Named { namedName = sym, namedVal = this,
+                            namedPos = arbitraryPos } : rest)
+      in do
+        fields <- oneof [ arbitraryUnnamedFields size,
+                          arbitraryNamedFields size ]
+        return Record { recFields = fields, recPos = arbitraryPos }
+
+    arbitrarySym :: Gen (Exp String)
+    arbitrarySym =
+      do
+        name <- arbitrarySymbol
+        return Sym { symName = name, symPos = internal "arbitrary" }
+  in case size of
+    0 -> arbitrarySym
+    1 -> oneof [
+        arbitraryAscribe,
+        arbitrarySym
+      ]
+    _ -> oneof [
+        arbitraryAscribe,
+        arbitrarySeq,
+        arbitraryRecord,
+        arbitrarySym
+      ]
+
+instance Arbitrary (Exp String) where
+  arbitrary = sized arbitraryExp
