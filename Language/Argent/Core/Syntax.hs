@@ -35,17 +35,21 @@ import Control.Monad
 import Control.Monad.Trans
 import Data.Default
 import Data.Foldable
-import Data.Hash
+import Data.Hashable
+import Data.Hashable.Extras
 import Data.Hash.ExtraInstances()
 import Data.Map(Map)
 import Data.Monoid
 import Data.Pos
+--import Data.Set(Set)
 import Data.Traversable
 import Prelude hiding (foldr1)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
+--import Test.QuickCheck
 
 import qualified Data.Map as Map
+--import qualified Data.Set as Set
 
 -- | A pattern binding.  Represents how to deconstruct a value and
 -- bind it to variables.
@@ -474,410 +478,434 @@ instance (Default b, Eq b) => Eq1 (Comp b) where
   _ ==# _ = False
 
 instance (Default b, Ord b, Ord1 t) => Ord1 (Binding b t) where
-  compare1 (Project { projectBinds = binds1, projectStrict = strict1 })
-           (Project { projectBinds = binds2, projectStrict = strict2 }) =
+  compare1 Project { projectBinds = binds1, projectStrict = strict1 }
+           Project { projectBinds = binds2, projectStrict = strict2 } =
     case compare strict1 strict2 of
       EQ -> compareBinds (Map.toAscList binds1) (Map.toAscList binds2)
       out -> out
-  compare1 (Project {}) _ = GT
-  compare1 _ (Project {}) = LT
-  compare1 (Construct { constructBinds = binds1, constructStrict = strict1 })
-           (Construct { constructBinds = binds2, constructStrict = strict2 }) =
+  compare1 Project {} _ = GT
+  compare1 _ Project {} = LT
+  compare1 Construct { constructBinds = binds1, constructStrict = strict1 }
+           Construct { constructBinds = binds2, constructStrict = strict2 } =
     case compare strict1 strict2 of
       EQ -> compareBinds (Map.toAscList binds1) (Map.toAscList binds2)
       out -> out
-  compare1 (Construct {}) _ = GT
-  compare1 _ (Construct {}) = LT
-  compare1 (As { asName = name1, asBind = bind1 })
-           (As { asName = name2, asBind = bind2 }) =
+  compare1 Construct {} _ = GT
+  compare1 _ Construct {} = LT
+  compare1 As { asName = name1, asBind = bind1 }
+           As { asName = name2, asBind = bind2 } =
     case compare name1 name2 of
       EQ -> compare1 bind1 bind2
       out -> out
-  compare1 (As {}) _ = GT
-  compare1 _ (As {}) = LT
-  compare1 (Name { nameSym = name1 }) (Name { nameSym = name2 }) =
+  compare1 As {} _ = GT
+  compare1 _ As {} = LT
+  compare1 Name { nameSym = name1 } Name { nameSym = name2 } =
     compare name1 name2
-  compare1 (Name {}) _ = GT
-  compare1 _ (Name {}) = LT
+  compare1 Name {} _ = GT
+  compare1 _ Name {} = LT
   compare1 (Constant term1) (Constant term2) = compare1 term1 term2
 
 instance (Default b, Ord b, Ord1 t) => Ord1 (Pattern b t) where
-  compare1 (Pattern { patternBind = bind1, patternType = ty1 })
-           (Pattern { patternBind = bind2, patternType = ty2 }) =
+  compare1 Pattern { patternBind = bind1, patternType = ty1 }
+           Pattern { patternBind = bind2, patternType = ty2 } =
     case compare1 bind1 bind2 of
       EQ -> compare ty1 ty2
       out -> out
 
 instance (Default b, Ord b) => Ord1 (Term b) where
-  compare1 (ProdType { prodBindOrder = bindord1, prodArgTys = argtys1,
-                       prodRetTy = retty1 })
-           (ProdType { prodBindOrder = bindord2, prodArgTys = argtys2,
-                       prodRetTy = retty2 }) =
+  compare1 ProdType { prodBindOrder = bindord1, prodArgTys = argtys1,
+                      prodRetTy = retty1 }
+           ProdType { prodBindOrder = bindord2, prodArgTys = argtys2,
+                      prodRetTy = retty2 } =
     case compare1 retty1 retty2 of
       EQ -> case compare bindord1 bindord2 of
         EQ -> compare1 argtys1 argtys2
         out -> out
       out -> out
-  compare1 (ProdType {}) _ = GT
-  compare1 _ (ProdType {}) = LT
-  compare1 (SumType { sumBindOrder = bindord1, sumBody = body1 })
-           (SumType { sumBindOrder = bindord2, sumBody = body2 }) =
+  compare1 ProdType {} _ = GT
+  compare1 _ ProdType {} = LT
+  compare1 SumType { sumBindOrder = bindord1, sumBody = body1 }
+           SumType { sumBindOrder = bindord2, sumBody = body2 } =
     case compare1 bindord1 bindord2 of
       EQ -> compare1 body1 body2
       out -> out
-  compare1 (SumType {}) _ = GT
-  compare1 _ (SumType {}) = LT
-  compare1 (RefineType { refinePat = pat1, refineProp = prop1 })
-           (RefineType { refinePat = pat2, refineProp = prop2 }) =
+  compare1 SumType {} _ = GT
+  compare1 _ SumType {} = LT
+  compare1 RefineType { refinePat = pat1, refineProp = prop1 }
+           RefineType { refinePat = pat2, refineProp = prop2 } =
     case compare1 pat1 pat2 of
       EQ -> compare1 prop1 prop2
       out -> out
-  compare1 (RefineType {}) _ = GT
-  compare1 _ (RefineType {}) = LT
-  compare1 (CompType { compPat = pat1, compSpec = spec1 })
-           (CompType { compPat = pat2, compSpec = spec2 }) =
+  compare1 RefineType {} _ = GT
+  compare1 _ RefineType {} = LT
+  compare1 CompType { compPat = pat1, compSpec = spec1 }
+           CompType { compPat = pat2, compSpec = spec2 } =
     case compare1 pat1 pat2 of
       EQ -> compare1 spec1 spec2
       out -> out
-  compare1 (CompType {}) _ = GT
-  compare1 _ (CompType {}) = LT
-  compare1 (Forall { forallPats = pats1, forallProp = prop1 })
-           (Forall { forallPats = pats2, forallProp = prop2 }) =
+  compare1 CompType {} _ = GT
+  compare1 _ CompType {} = LT
+  compare1 Forall { forallPats = pats1, forallProp = prop1 }
+           Forall { forallPats = pats2, forallProp = prop2 } =
     case compare1 pats1 pats2 of
       EQ -> compare1 prop1 prop2
       out -> out
-  compare1 (Forall {}) _ = GT
-  compare1 _ (Forall {}) = LT
-  compare1 (Exists { existsPats = pats1, existsProp = prop1 })
-           (Exists { existsPats = pats2, existsProp = prop2 }) =
+  compare1 Forall {} _ = GT
+  compare1 _ Forall {} = LT
+  compare1 Exists { existsPats = pats1, existsProp = prop1 }
+           Exists { existsPats = pats2, existsProp = prop2 } =
     case compare1 pats1 pats2 of
        EQ -> compare1 prop1 prop2
        out -> out
-  compare1 (Exists {}) _ = GT
-  compare1 _ (Exists {}) = LT
-  compare1 (Call { callArgs = args1, callFunc = func1 })
-           (Call { callArgs = args2, callFunc = func2 }) =
+  compare1 Exists {} _ = GT
+  compare1 _ Exists {} = LT
+  compare1 Call { callArgs = args1, callFunc = func1 }
+           Call { callArgs = args2, callFunc = func2 } =
     case compare1 func1 func2 of
       EQ -> compare1 args1 args2
       out -> out
-  compare1 (Call {}) _ = GT
-  compare1 _ (Call {}) = LT
-  compare1 (Var { varSym = sym1 }) (Var { varSym = sym2 }) = compare sym1 sym2
-  compare1 (Var {}) _ = GT
-  compare1 _ (Var {}) = LT
-  compare1 (Typed { typedTerm = term1, typedType = ty1 })
-           (Typed { typedTerm = term2, typedType = ty2 }) =
+  compare1 Call {} _ = GT
+  compare1 _ Call {} = LT
+  compare1 Var { varSym = sym1 } Var { varSym = sym2 } = compare sym1 sym2
+  compare1 Var {} _ = GT
+  compare1 _ Var {} = LT
+  compare1 Typed { typedTerm = term1, typedType = ty1 }
+           Typed { typedTerm = term2, typedType = ty2 } =
     case compare1 term1 term2 of
       EQ -> compare ty1 ty2
       out -> out
-  compare1 (Typed {}) _ = GT
-  compare1 _ (Typed {}) = LT
-  compare1 (Eta { etaTerm = term1, etaType = ty1 })
-           (Eta { etaTerm = term2, etaType = ty2 }) =
+  compare1 Typed {} _ = GT
+  compare1 _ Typed {} = LT
+  compare1 Eta { etaTerm = term1, etaType = ty1 }
+           Eta { etaTerm = term2, etaType = ty2 } =
     case compare1 term1 term2 of
       EQ -> compare ty1 ty2
       out -> out
-  compare1 (Eta {}) _ = GT
-  compare1 _ (Eta {}) = LT
-  compare1 (Lambda { lambdaCases = cases1 }) (Lambda { lambdaCases = cases2 }) =
+  compare1 Eta {} _ = GT
+  compare1 _ Eta {} = LT
+  compare1 Lambda { lambdaCases = cases1 } Lambda { lambdaCases = cases2 } =
     compareCases cases1 cases2
-  compare1 (Lambda {}) _ = GT
-  compare1 _ (Lambda {}) = LT
-  compare1 (Record { recVals = vals1 }) (Record { recVals = vals2 }) =
+  compare1 Lambda {} _ = GT
+  compare1 _ Lambda {} = LT
+  compare1 Record { recVals = vals1 } Record { recVals = vals2 } =
     compare1 vals1 vals2
-  compare1 (Record {}) _ = GT
-  compare1 _ (Record {}) = LT
-  compare1 (Fix { fixComps = comps1 }) (Fix { fixComps = comps2 }) =
+  compare1 Record {} _ = GT
+  compare1 _ Record {} = LT
+  compare1 Fix { fixComps = comps1 } Fix { fixComps = comps2 } =
     compare1 comps1 comps2
-  compare1 (Fix {}) _ = GT
-  compare1 _ (Fix {}) = LT
+  compare1 Fix {} _ = GT
+  compare1 _ Fix {} = LT
   compare1 (BadTerm _) (BadTerm _) = EQ
 
 instance (Default b, Ord b) => Ord1 (Cmd b) where
-  compare1 (Value { valTerm = term1 }) (Value { valTerm = term2 }) =
+  compare1 Value { valTerm = term1 } Value { valTerm = term2 } =
     compare1 term1 term2
-  compare1 (Value {}) _ = GT
-  compare1 _ (Value {}) = LT
-  compare1 (Eval { evalTerm = term1 }) (Eval { evalTerm = term2 }) =
+  compare1 Value {} _ = GT
+  compare1 _ Value {} = LT
+  compare1 Eval { evalTerm = term1 } Eval { evalTerm = term2 } =
     compare1 term1 term2
-  compare1 (Eval {}) _ = GT
-  compare1 _ (Eval {}) = LT
+  compare1 Eval {} _ = GT
+  compare1 _ Eval {} = LT
   compare1 (BadCmd _) (BadCmd _) = EQ
 
 instance (Default b, Ord b) => Ord1 (Comp b) where
-  compare1 (Seq { seqPat = pat1, seqCmd = cmd1, seqNext = next1 })
-          (Seq { seqPat = pat2, seqCmd = cmd2, seqNext = next2 }) =
+  compare1 Seq { seqPat = pat1, seqCmd = cmd1, seqNext = next1 }
+           Seq { seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
     case compare1 pat1 pat2 of
       EQ -> case compare1 cmd1 cmd2 of
         EQ -> compare1 next1 next2
         out -> out
       out -> out
-  compare1 (Seq {}) _ = GT
-  compare1 _ (Seq {}) = LT
-  compare1 (End { endCmd = cmd1 }) (End { endCmd = cmd2 }) = compare1 cmd1 cmd2
-  compare1 (End {}) _ = GT
-  compare1 _ (End {}) = LT
+  compare1 Seq {} _ = GT
+  compare1 _ Seq {} = LT
+  compare1 End { endCmd = cmd1 } End { endCmd = cmd2 } = compare1 cmd1 cmd2
+  compare1 End {} _ = GT
+  compare1 _ End {} = LT
   compare1 (BadComp _) (BadComp _) = EQ
 
 instance Position (t s) => Position (Binding b t s) where
-  pos (Project { projectPos = p }) = p
-  pos (Construct { constructPos = p }) = p
-  pos (As { asPos = p }) = p
-  pos (Name { namePos = p }) = p
+  pos Project { projectPos = p } = p
+  pos Construct { constructPos = p } = p
+  pos As { asPos = p } = p
+  pos Name { namePos = p } = p
   pos (Constant t) = pos t
 
 instance Position (Pattern b t s) where
-  pos (Pattern { patternPos = p }) = p
+  pos Pattern { patternPos = p } = p
 
 instance Position (Term b s) where
-  pos (ProdType { prodTypePos = p }) = p
-  pos (SumType { sumTypePos = p }) = p
-  pos (RefineType { refineTypePos = p }) = p
-  pos (CompType { compTypePos = p }) = p
-  pos (Forall { forallPos = p }) = p
-  pos (Exists { existsPos = p }) = p
-  pos (Call { callPos = p }) = p
-  pos (Var { varPos = p }) = p
-  pos (Typed { typedPos = p }) = p
-  pos (Eta { etaPos = p }) = p
-  pos (Lambda { lambdaPos = p }) = p
-  pos (Record { recPos = p }) = p
-  pos (Fix { fixPos = p }) = p
+  pos ProdType { prodTypePos = p } = p
+  pos SumType { sumTypePos = p } = p
+  pos RefineType { refineTypePos = p } = p
+  pos CompType { compTypePos = p } = p
+  pos Forall { forallPos = p } = p
+  pos Exists { existsPos = p } = p
+  pos Call { callPos = p } = p
+  pos Var { varPos = p } = p
+  pos Typed { typedPos = p } = p
+  pos Eta { etaPos = p } = p
+  pos Lambda { lambdaPos = p } = p
+  pos Record { recPos = p } = p
+  pos Fix { fixPos = p } = p
   pos (BadTerm p) = p
 
 instance Position (Cmd b s) where
-  pos (Eval { evalPos = p }) = p
-  pos (Value { valPos = p }) = p
+  pos Eval { evalPos = p } = p
+  pos Value { valPos = p } = p
   pos (BadCmd p) = p
 
 instance Position (Comp b s) where
-  pos (Seq { seqPos = p }) = p
-  pos (End { endPos = p }) = p
+  pos Seq { seqPos = p } = p
+  pos End { endPos = p } = p
   pos (BadComp p) = p
 
-instance (Default b, Hashable b, Hashable s, Hashable (t s)) =>
-         Hashable (Binding b t s) where
-  hash (Project { projectBinds = binds, projectStrict = strict }) =
-    hashInt 1 `combine` hash strict `combine` hash binds
-  hash (Construct { constructBinds = binds, constructStrict = strict }) =
-    hashInt 2 `combine` hash strict `combine` hash binds
-  hash (As { asName = name, asBind = bind }) =
-    hashInt 3 `combine` hash name `combine` hash bind
-  hash (Name { nameSym = name }) = hashInt 4 `combine` hash name
-  hash (Constant c) = hashInt 5 `combine` hash c
+instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Binding b t) where
+  hashWithSalt1 s Project { projectBinds = binds, projectStrict = strict } =
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` strict) `hashWithSalt1` binds
+  hashWithSalt1 s Construct { constructBinds = binds,
+                             constructStrict = strict } =
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` strict) `hashWithSalt1` binds
+  hashWithSalt1 s As { asName = name, asBind = bind } =
+    (s `hashWithSalt` (3 :: Int) `hashWithSalt` name) `hashWithSalt1` bind
+  hashWithSalt1 s Name { nameSym = name } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` name
+  hashWithSalt1 s (Constant c) = s `hashWithSalt` (5 :: Int) `hashWithSalt1` c
 
-instance (Default b, Hashable b, Hashable s, Hashable (t s)) =>
+instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
+  hashWithSalt1 s Pattern { patternBind = term, patternType = ty } =
+    s `hashWithSalt1` term `hashWithSalt1` ty
+
+instance (Default b, Hashable b) => Hashable1 (Term b) where
+  hashWithSalt1 s ProdType { prodBindOrder = bindord, prodArgTys = argtys,
+                             prodRetTy = retty } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` bindord `hashWithSalt`
+    argtys `hashWithSalt` retty
+  hashWithSalt1 s SumType { sumBindOrder = bindord, sumBody = body } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt1` bindord `hashWithSalt1` body
+  hashWithSalt1 s RefineType { refinePat = pat, refineProp = prop } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt1` pat `hashWithSalt1` prop
+  hashWithSalt1 s CompType { compPat = pat, compSpec = spec } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt1` pat `hashWithSalt1` spec
+  hashWithSalt1 s Forall { forallPats = pats, forallProp = prop } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt1` pats `hashWithSalt1` prop
+  hashWithSalt1 s Exists { existsPats = pats, existsProp = prop } =
+    s `hashWithSalt` (6 :: Int) `hashWithSalt1` pats `hashWithSalt1` prop
+  hashWithSalt1 s Call { callArgs = args, callFunc = func } =
+    s `hashWithSalt` (7 :: Int) `hashWithSalt1` args `hashWithSalt1` func
+  hashWithSalt1 s Var { varSym = sym } =
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` sym
+  hashWithSalt1 s Typed { typedTerm = term, typedType = ty } =
+    s `hashWithSalt` (9 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
+  hashWithSalt1 s Eta { etaTerm = term, etaType = ty } =
+    s `hashWithSalt` (10 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
+  hashWithSalt1 s Lambda { lambdaCases = cases } =
+    s `hashWithSalt` (11 :: Int) `hashWithSalt1` cases
+  hashWithSalt1 s Record { recVals = vals } =
+    s `hashWithSalt` (12 :: Int) `hashWithSalt1` vals
+  hashWithSalt1 s Fix { fixComps = comps } =
+    s `hashWithSalt` (13 :: Int) `hashWithSalt1` comps
+  hashWithSalt1 s (BadTerm _) = s `hashWithSalt` (0 :: Int)
+
+instance (Default b, Hashable b) => Hashable1 (Cmd b) where
+  hashWithSalt1 s Value { valTerm = term } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt1` term
+  hashWithSalt1 s Eval { evalTerm = term } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt1` term
+  hashWithSalt1 s (BadCmd _) = s `hashWithSalt` (0 :: Int)
+
+instance (Default b, Hashable b) => Hashable1 (Comp b) where
+  hashWithSalt1 s Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt1`
+    pat `hashWithSalt1` cmd `hashWithSalt1` next
+  hashWithSalt1 s End { endCmd = cmd } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt1` cmd
+  hashWithSalt1 s (BadComp _) = s `hashWithSalt` (0 :: Int)
+
+instance (Default b, Hashable b, Hashable1 t, Hashable s) =>
+         Hashable (Binding b t s) where
+  hashWithSalt = hashWithSalt1
+
+instance (Default b, Hashable b, Hashable1 t, Hashable s) =>
          Hashable (Pattern b t s) where
-  hash (Pattern { patternBind = term, patternType = ty }) =
-    hash term `combine` hash ty
+  hashWithSalt = hashWithSalt1
 
 instance (Default b, Hashable b, Hashable s) => Hashable (Term b s) where
-  hash (ProdType { prodBindOrder = bindord, prodArgTys = argtys,
-                   prodRetTy = retty }) =
-    hashInt 1 `combine` hash bindord `combine`
-    hash argtys `combine` hash retty
-  hash (SumType { sumBindOrder = bindord, sumBody = body }) =
-    hashInt 2 `combine` hash bindord `combine` hash body
-  hash (RefineType { refinePat = pat, refineProp = prop }) =
-    hashInt 3 `combine` hash pat `combine` hash prop
-  hash (CompType { compPat = pat, compSpec = spec }) =
-    hashInt 4 `combine` hash pat `combine` hash spec
-  hash (Forall { forallPats = pats, forallProp = prop }) =
-    hashInt 5 `combine` hash pats `combine` hash prop
-  hash (Exists { existsPats = pats, existsProp = prop }) =
-    hashInt 6 `combine` hash pats `combine` hash prop
-  hash (Call { callArgs = args, callFunc = func }) =
-    hashInt 7 `combine` hash args `combine` hash func
-  hash (Var { varSym = sym }) = hashInt 8 `combine` hash sym
-  hash (Typed { typedTerm = term, typedType = ty }) =
-    hashInt 9 `combine` hash term `combine` hash ty
-  hash (Eta { etaTerm = term, etaType = ty }) =
-    hashInt 10 `combine` hash term `combine` hash ty
-  hash (Lambda { lambdaCases = cases }) = hashInt 11 `combine` hash cases
-  hash (Record { recVals = vals }) = hashInt 12 `combine` hash vals
-  hash (Fix { fixComps = comps }) =
-    hashInt 13 `combine` hash comps
-  hash (BadTerm _) = hashInt 0
+  hashWithSalt = hashWithSalt1
 
 instance (Default b, Hashable b, Hashable s) => Hashable (Cmd b s) where
-  hash (Value { valTerm = term }) = hashInt 1 `combine` hash term
-  hash (Eval { evalTerm = term }) = hashInt 2 `combine` hash term
-  hash (BadCmd _) = hashInt 0
+  hashWithSalt = hashWithSalt1
 
 instance (Default b, Hashable b, Hashable s) => Hashable (Comp b s) where
-  hash (Seq { seqPat = pat, seqCmd = cmd, seqNext = next }) =
-    hashInt 1 `combine` hash pat `combine` hash cmd `combine` hash next
-  hash (End { endCmd = cmd }) = hashInt 2 `combine` hash cmd
-  hash (BadComp _) = hashInt 0
+  hashWithSalt = hashWithSalt1
 
 instance Functor t => Functor (Binding b t) where
-  fmap f b @ (Project { projectBinds = binds }) =
+  fmap f b @ Project { projectBinds = binds } =
     b { projectBinds = fmap (fmap f) binds }
-  fmap f b @ (Construct { constructBinds = binds }) =
+  fmap f b @ Construct { constructBinds = binds } =
     b { constructBinds = fmap (fmap f) binds }
-  fmap f b @ (As { asBind = bind }) = b { asBind = fmap f bind }
-  fmap _ b @ (Name { nameSym = name }) = b { nameSym = name }
+  fmap f b @ As { asBind = bind } = b { asBind = fmap f bind }
+  fmap _ b @ Name { nameSym = name } = b { nameSym = name }
   fmap f (Constant t) = Constant (fmap f t)
 
 instance Functor t => Functor (Pattern b t) where
-  fmap f p @ (Pattern { patternBind = term, patternType = ty }) =
+  fmap f p @ Pattern { patternBind = term, patternType = ty } =
     p { patternBind = fmap f term, patternType = fmap f ty }
 
 instance Functor (Term b) where
-  fmap f t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+  fmap f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
     t { prodArgTys = fmap (fmap f) argtys, prodRetTy = fmap f retty }
-  fmap f t @ (SumType { sumBody = body }) =
+  fmap f t @ SumType { sumBody = body } =
     t { sumBody = fmap (fmap f) body }
-  fmap f t @ (RefineType { refinePat = pat, refineProp = prop }) =
+  fmap f t @ RefineType { refinePat = pat, refineProp = prop } =
     t { refinePat = fmap f pat, refineProp = fmap f prop }
-  fmap f t @ (CompType { compPat = pat, compSpec = spec }) =
+  fmap f t @ CompType { compPat = pat, compSpec = spec } =
     t { compPat = fmap f pat, compSpec = fmap f spec }
-  fmap f t @ (Forall { forallPats = pats, forallProp = prop }) =
+  fmap f t @ Forall { forallPats = pats, forallProp = prop } =
     t { forallPats = fmap (fmap f) pats, forallProp = fmap f prop }
-  fmap f t @ (Exists { existsPats = pats, existsProp = prop }) =
+  fmap f t @ Exists { existsPats = pats, existsProp = prop } =
     t { existsPats = fmap (fmap f) pats, existsProp = fmap f prop }
-  fmap f t @ (Call { callArgs = args, callFunc = func }) =
+  fmap f t @ Call { callArgs = args, callFunc = func } =
     t { callArgs = fmap (fmap f) args, callFunc = fmap f func }
-  fmap f t @ (Var { varSym = sym }) = t { varSym = f sym }
-  fmap f t @ (Typed { typedTerm = term, typedType = ty }) =
+  fmap f t @ Var { varSym = sym } = t { varSym = f sym }
+  fmap f t @ Typed { typedTerm = term, typedType = ty } =
     t { typedTerm = fmap f term, typedType = fmap f ty }
-  fmap f t @ (Eta { etaTerm = term, etaType = ty }) =
+  fmap f t @ Eta { etaTerm = term, etaType = ty } =
     t { etaTerm = fmap f term, etaType = fmap f ty }
-  fmap f t @ (Lambda { lambdaCases = cases }) =
+  fmap f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (\(pat, body) -> (fmap f pat, fmap f body)) cases }
-  fmap f t @ (Record { recVals = vals }) =
+  fmap f t @ Record { recVals = vals } =
     t { recVals = fmap (fmap f) vals }
-  fmap f t @ (Fix { fixComps = comps }) =
+  fmap f t @ Fix { fixComps = comps } =
     t { fixComps = fmap (fmap f) comps }
   fmap _ (BadTerm p) = (BadTerm p)
 
 instance Functor (Cmd b) where
-  fmap f c @ (Eval { evalTerm = term }) = c { evalTerm = fmap f term }
-  fmap f c @ (Value { valTerm = term }) = c { valTerm = fmap f term }
+  fmap f c @ Eval { evalTerm = term } = c { evalTerm = fmap f term }
+  fmap f c @ Value { valTerm = term } = c { valTerm = fmap f term }
   fmap _ (BadCmd p) = BadCmd p
 
 instance Functor (Comp b) where
-  fmap f c @ (Seq { seqPat = pat, seqCmd = cmd, seqNext = next }) =
+  fmap f c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
     c { seqPat = fmap f pat, seqCmd = fmap f cmd, seqNext = fmap f next }
-  fmap f c @ (End { endCmd = cmd }) = c { endCmd = fmap f cmd }
+  fmap f c @ End { endCmd = cmd } = c { endCmd = fmap f cmd }
   fmap _ (BadComp p) = BadComp p
 
 instance Foldable t => Foldable (Binding b t) where
-  foldMap f (Project { projectBinds = binds }) =
+  foldMap f Project { projectBinds = binds } =
     foldMap (foldMap f) binds
-  foldMap f (Construct { constructBinds = binds }) =
+  foldMap f Construct { constructBinds = binds } =
     foldMap (foldMap f) binds
-  foldMap f (As { asBind = bind }) = foldMap f bind
+  foldMap f As { asBind = bind } = foldMap f bind
   foldMap f (Constant t) = foldMap f t
   foldMap _ _ = mempty
 
 instance Foldable t => Foldable (Pattern b t) where
-  foldMap f (Pattern { patternBind = term, patternType = ty }) =
+  foldMap f Pattern { patternBind = term, patternType = ty } =
     foldMap f term `mappend` foldMap f ty
 
 instance Foldable (Term b) where
-  foldMap f (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+  foldMap f ProdType { prodArgTys = argtys, prodRetTy = retty } =
     foldMap (foldMap f) argtys `mappend` foldMap f retty
-  foldMap f (SumType { sumBody = body }) = foldMap (foldMap f) body
-  foldMap f (RefineType { refinePat = pat, refineProp = prop }) =
+  foldMap f SumType { sumBody = body } = foldMap (foldMap f) body
+  foldMap f RefineType { refinePat = pat, refineProp = prop } =
     foldMap f pat `mappend` foldMap f prop
-  foldMap f (CompType { compPat = pat, compSpec = spec }) =
+  foldMap f CompType { compPat = pat, compSpec = spec } =
     foldMap f pat `mappend` foldMap f spec
-  foldMap f (Forall { forallPats = pats, forallProp = prop }) =
+  foldMap f Forall { forallPats = pats, forallProp = prop } =
     foldMap (foldMap f) pats `mappend` foldMap f prop
-  foldMap f (Exists { existsPats = pats, existsProp = prop }) =
+  foldMap f Exists { existsPats = pats, existsProp = prop } =
     foldMap (foldMap f) pats `mappend` foldMap f prop
-  foldMap f (Call { callArgs = args, callFunc = func }) =
+  foldMap f Call { callArgs = args, callFunc = func } =
     foldMap (foldMap f) args `mappend` foldMap f func
-  foldMap f (Var { varSym = sym }) = f sym
-  foldMap f (Typed { typedTerm = term, typedType = ty }) =
+  foldMap f Var { varSym = sym } = f sym
+  foldMap f Typed { typedTerm = term, typedType = ty } =
     foldMap f term `mappend` foldMap f ty
-  foldMap f (Eta { etaTerm = term, etaType = ty }) =
+  foldMap f Eta { etaTerm = term, etaType = ty } =
     foldMap f term `mappend` foldMap f ty
-  foldMap f (Lambda { lambdaCases = cases }) =
+  foldMap f Lambda { lambdaCases = cases } =
     foldMap (\(pat, body) -> foldMap f pat `mappend` foldMap f body) cases
-  foldMap f (Record { recVals = vals }) = foldMap (foldMap f) vals
-  foldMap f (Fix { fixComps = comps }) = foldMap (foldMap f) comps
+  foldMap f Record { recVals = vals } = foldMap (foldMap f) vals
+  foldMap f Fix { fixComps = comps } = foldMap (foldMap f) comps
   foldMap _ _ = mempty
 
 instance Foldable (Cmd b) where
-  foldMap f (Value { valTerm = term }) = foldMap f term
-  foldMap f (Eval { evalTerm = term }) = foldMap f term
+  foldMap f Value { valTerm = term } = foldMap f term
+  foldMap f Eval { evalTerm = term } = foldMap f term
   foldMap _ _ = mempty
 
 instance Foldable (Comp b) where
-  foldMap f (Seq { seqPat = pat, seqCmd = cmd, seqNext = next }) =
+  foldMap f Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
     foldMap f pat `mappend` foldMap f cmd `mappend` foldMap f next
-  foldMap f (End { endCmd = cmd }) = foldMap f cmd
+  foldMap f End { endCmd = cmd } = foldMap f cmd
   foldMap _ _ = mempty
 
 instance Traversable t => Traversable (Binding b t) where
-  traverse f b @ (Project { projectBinds = binds }) =
+  traverse f b @ Project { projectBinds = binds } =
     (\binds' -> b { projectBinds = binds' }) <$> traverse (traverse f) binds
-  traverse f b @ (Construct { constructBinds = binds }) =
+  traverse f b @ Construct { constructBinds = binds } =
     (\binds' -> b { constructBinds = binds' }) <$> traverse (traverse f) binds
-  traverse f b @ (As { asBind = bind }) =
+  traverse _ b @ Name { nameSym = name } = pure (b { nameSym = name })
+  traverse f b @ As { asBind = bind } =
     (\bind' -> b { asBind = bind' }) <$> traverse f bind
   traverse f (Constant t) = Constant <$> traverse f t
-  traverse _ b @ (Name { nameSym = name }) = pure (b { nameSym = name })
 
 instance Traversable t => Traversable (Pattern b t) where
-  traverse f p @ (Pattern { patternBind = term, patternType = ty }) =
+  traverse f p @ Pattern { patternBind = term, patternType = ty } =
     (\term' ty' -> p { patternBind = term', patternType = ty' }) <$>
       traverse f term <*> traverse f ty
 
 instance Traversable (Term b) where
-  traverse f t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+  traverse f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
     (\argtys' retty' -> t { prodArgTys = argtys', prodRetTy = retty' }) <$>
       traverse (traverse f) argtys <*> traverse f retty
-  traverse f t @ (SumType { sumBody = body }) =
+  traverse f t @ SumType { sumBody = body } =
     (\body' -> t { sumBody = body' }) <$> traverse (traverse f) body
-  traverse f t @ (RefineType { refinePat = pat, refineProp = prop }) =
+  traverse f t @ RefineType { refinePat = pat, refineProp = prop } =
     (\pat' prop' -> t { refinePat = pat', refineProp = prop' }) <$>
       traverse f pat <*> traverse f prop
-  traverse f t @ (CompType { compPat = pat, compSpec = spec }) =
+  traverse f t @ CompType { compPat = pat, compSpec = spec } =
     (\pat' spec' -> t { compPat = pat', compSpec = spec' }) <$>
       traverse f pat <*> traverse f spec
-  traverse f t @ (Forall { forallPats = pats, forallProp = prop }) =
+  traverse f t @ Forall { forallPats = pats, forallProp = prop } =
     (\pats' prop' -> t { forallPats = pats', forallProp = prop' }) <$>
       traverse (traverse f) pats <*> traverse f prop
-  traverse f t @ (Exists { existsPats = pats, existsProp = prop }) =
+  traverse f t @ Exists { existsPats = pats, existsProp = prop } =
     (\pats' prop' -> t { existsPats = pats', existsProp = prop' }) <$>
       traverse (traverse f) pats <*> traverse f prop
-  traverse f t @ (Call { callArgs = args, callFunc = func }) =
+  traverse f t @ Call { callArgs = args, callFunc = func } =
     (\args' func' -> t { callArgs = args', callFunc = func' }) <$>
       traverse (traverse f) args <*> traverse f func
-  traverse f t @ (Var { varSym = sym }) =
+  traverse f t @ Var { varSym = sym } =
     (\sym' -> t { varSym = sym' }) <$> f sym
-  traverse f t @ (Typed { typedTerm = term, typedType = ty }) =
+  traverse f t @ Typed { typedTerm = term, typedType = ty } =
     (\term' ty' -> t { typedTerm = term', typedType = ty' }) <$>
       traverse f term <*> traverse f ty
-  traverse f t @ (Eta { etaTerm = term, etaType = ty }) =
+  traverse f t @ Eta { etaTerm = term, etaType = ty } =
     (\term' ty' -> t { etaTerm = term', etaType = ty' }) <$>
       traverse f term <*> traverse f ty
-  traverse f t @ (Lambda { lambdaCases = cases }) =
+  traverse f t @ Lambda { lambdaCases = cases } =
     (\cases' -> t { lambdaCases = cases' }) <$>
       traverse (\(pat, body) -> (\pat' body' -> (pat', body')) <$>
                  traverse f pat <*> traverse f body) cases
-  traverse f t @ (Record { recVals = vals }) =
+  traverse f t @ Record { recVals = vals } =
     (\vals' -> t { recVals = vals' }) <$> traverse (traverse f) vals
-  traverse f t @ (Fix { fixComps = comps }) =
+  traverse f t @ Fix { fixComps = comps } =
     (\comps' -> t { fixComps = comps' }) <$> traverse (traverse f) comps
   traverse _ (BadTerm p) = pure (BadTerm p)
 
 instance Traversable (Cmd b) where
-  traverse f c @ (Value { valTerm = term }) =
+  traverse f c @ Value { valTerm = term } =
     (\term' -> c { valTerm = term' }) <$> traverse f term
-  traverse f c @ (Eval { evalTerm = term }) =
+  traverse f c @ Eval { evalTerm = term } =
     (\term' -> c { evalTerm = term' }) <$> traverse f term
   traverse _ (BadCmd c) = pure (BadCmd c)
 
 instance Traversable (Comp b) where
-  traverse f c @ (Seq { seqPat = pat, seqCmd = cmd, seqNext = next }) =
+  traverse f c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
     (\pat' cmd' next' -> c { seqPat = pat', seqCmd = cmd',
                              seqNext = next' }) <$>
       traverse f pat <*> traverse f cmd <*> traverse f next
-  traverse f c @ (End { endCmd = cmd }) =
+  traverse f c @ End { endCmd = cmd } =
     (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
   traverse _ (BadComp p) = pure (BadComp p)
 
@@ -891,12 +919,12 @@ instance MonadTrans (Binding b) where
   lift m = Constant m
 
 instance Bound (Binding b) where
-  b @ (Project { projectBinds = binds }) >>>= f =
+  b @ Project { projectBinds = binds } >>>= f =
     b { projectBinds = fmap (>>>= f) binds }
-  b @ (Construct { constructBinds = binds }) >>>= f =
+  b @ Construct { constructBinds = binds } >>>= f =
     b { constructBinds = fmap (>>>= f) binds }
-  b @ (As { asBind = bind }) >>>= f = b { asBind = bind >>>= f }
-  b @ (Name { nameSym = name }) >>>= _ = b { nameSym = name }
+  b @ As { asBind = bind } >>>= f = b { asBind = bind >>>= f }
+  b @ Name { nameSym = name } >>>= _ = b { nameSym = name }
   Constant t >>>= f = Constant (t >>= f)
 
 instance Default b => Applicative (Term b) where
@@ -909,111 +937,111 @@ instance Default b => Applicative (Comp b) where
 
 patSubstTerm :: Default c => (a -> Term c b) -> Pattern c (Term c) a ->
                 Pattern c (Term c) b
-patSubstTerm f p @ (Pattern { patternBind = bind, patternType = ty }) =
+patSubstTerm f p @ Pattern { patternBind = bind, patternType = ty } =
   p { patternBind = bind >>>= f, patternType = ty >>= f }
 
 cmdSubstTerm :: Default c => (a -> Term c b) -> Cmd c a -> Cmd c b
-cmdSubstTerm f c @ (Value { valTerm = term }) = c { valTerm = term >>= f }
-cmdSubstTerm f c @ (Eval { evalTerm = term }) = c { evalTerm = term >>= f }
+cmdSubstTerm f c @ Value { valTerm = term } = c { valTerm = term >>= f }
+cmdSubstTerm f c @ Eval { evalTerm = term } = c { evalTerm = term >>= f }
 cmdSubstTerm _ (BadCmd p) = BadCmd p
 
 compSubstTerm :: Default c => (a -> Term c b) -> Comp c a -> Comp c b
-compSubstTerm f c @ (Seq { seqPat = pat, seqCmd = cmd, seqNext = next }) =
+compSubstTerm f c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
   c { seqPat = patSubstTerm f pat, seqCmd = cmdSubstTerm f cmd,
       seqNext = compSubstTerm f next }
-compSubstTerm f c @ (End { endCmd = cmd }) =
+compSubstTerm f c @ End { endCmd = cmd } =
   c { endCmd = cmdSubstTerm f cmd }
 compSubstTerm _ (BadComp p) = BadComp p
 
 instance Default b => Monad (Term b) where
   return sym = Var { varSym = sym, varPos = injectpos }
 
-  t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) >>= f =
+  t @ ProdType { prodArgTys = argtys, prodRetTy = retty } >>= f =
     t { prodArgTys = fmap (>>>= f) argtys, prodRetTy = retty >>>= f }
-  t @ (SumType { sumBody = body }) >>= f =
+  t @ SumType { sumBody = body } >>= f =
     t { sumBody = fmap (>>>= f) body }
-  t @ (RefineType { refinePat = pat, refineProp = prop }) >>= f =
+  t @ RefineType { refinePat = pat, refineProp = prop } >>= f =
     t { refinePat = patSubstTerm f pat, refineProp = prop >>>= f }
-  t @ (CompType { compPat = pat, compSpec = spec }) >>= f =
+  t @ CompType { compPat = pat, compSpec = spec } >>= f =
     t { compPat = patSubstTerm f pat, compSpec = spec >>>= f }
-  t @ (Forall { forallPats = pats, forallProp = prop }) >>= f =
+  t @ Forall { forallPats = pats, forallProp = prop } >>= f =
     t { forallPats = fmap (patSubstTerm f) pats, forallProp = prop >>>= f }
-  t @ (Exists { existsPats = pats, existsProp = prop }) >>= f =
+  t @ Exists { existsPats = pats, existsProp = prop } >>= f =
     t { existsPats = fmap (patSubstTerm f) pats, existsProp = prop >>>= f }
-  t @ (Call { callArgs = args, callFunc = func }) >>= f =
+  t @ Call { callArgs = args, callFunc = func } >>= f =
     t { callArgs = fmap (>>= f) args, callFunc = func >>= f }
   Var { varSym = sym } >>= f = f sym
-  t @ (Typed { typedTerm = term, typedType = ty }) >>= f =
+  t @ Typed { typedTerm = term, typedType = ty } >>= f =
     t { typedTerm = term >>= f, typedType = ty >>= f }
-  t @ (Lambda { lambdaCases = cases }) >>= f =
+  t @ Lambda { lambdaCases = cases } >>= f =
     t { lambdaCases = fmap (\(pat, body) -> (patSubstTerm f pat,
                                              body >>>= f)) cases }
-  t @ (Record { recVals = vals }) >>= f = t { recVals = fmap (>>= f) vals }
-  t @ (Fix { fixComps = comps }) >>= f =
+  t @ Record { recVals = vals } >>= f = t { recVals = fmap (>>= f) vals }
+  t @ Fix { fixComps = comps } >>= f =
     t { fixComps = fmap (>>>= compSubstTerm f . return) comps }
-  t @ (Eta { etaTerm = term, etaType = ty }) >>= f =
+  t @ Eta { etaTerm = term, etaType = ty } >>= f =
     t { etaTerm = term >>= f, etaType = ty >>= f }
   BadTerm p >>= _ = BadTerm p
 
 bindSubstComp :: Default c => (a -> Comp c b) -> Binding c (Term c) a ->
                 Binding c (Term c) b
-bindSubstComp f b @ (Project { projectBinds = binds }) =
+bindSubstComp f b @ Project { projectBinds = binds } =
   b { projectBinds = fmap (bindSubstComp f) binds }
-bindSubstComp f b @ (Construct { constructBinds = binds }) =
+bindSubstComp f b @ Construct { constructBinds = binds } =
   b { constructBinds = fmap (bindSubstComp f) binds }
-bindSubstComp f b @ (As { asBind = bind }) =
+bindSubstComp f b @ As { asBind = bind } =
   b { asBind = bindSubstComp f bind }
-bindSubstComp _ b @ (Name { nameSym = name }) = b { nameSym = name }
+bindSubstComp _ b @ Name { nameSym = name } = b { nameSym = name }
 bindSubstComp f (Constant t) = Constant (termSubstComp f t)
 
 
 patSubstComp :: Default c => (a -> Comp c b) -> Pattern c (Term c) a ->
                 Pattern c (Term c) b
-patSubstComp f p @ (Pattern { patternBind = bind, patternType = ty }) =
+patSubstComp f p @ Pattern { patternBind = bind, patternType = ty } =
   p { patternBind = bindSubstComp f bind, patternType = termSubstComp f ty }
 
 termSubstComp :: Default c => (a -> Comp c b) -> Term c a -> Term c b
-termSubstComp f t @ (ProdType { prodArgTys = argtys, prodRetTy = retty }) =
+termSubstComp f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
   t { prodArgTys = fmap (>>>= termSubstComp f . return) argtys,
       prodRetTy = retty >>>= termSubstComp f . return }
-termSubstComp f t @ (SumType { sumBody = body }) =
+termSubstComp f t @ SumType { sumBody = body } =
   t { sumBody = fmap (>>>= termSubstComp f . return) body }
-termSubstComp f t @ (RefineType { refinePat = pat, refineProp = prop }) =
+termSubstComp f t @ RefineType { refinePat = pat, refineProp = prop } =
   t { refineProp = prop >>>= termSubstComp f . return,
       refinePat = patSubstComp f pat }
-termSubstComp f t @ (CompType { compPat = pat, compSpec = spec }) =
+termSubstComp f t @ CompType { compPat = pat, compSpec = spec } =
   t { compSpec = spec >>>= termSubstComp f . return,
       compPat = patSubstComp f pat }
-termSubstComp f t @ (Forall { forallPats = pats, forallProp = prop }) =
+termSubstComp f t @ Forall { forallPats = pats, forallProp = prop } =
   t { forallProp = prop >>>= termSubstComp f . return,
       forallPats = fmap (patSubstComp f) pats }
-termSubstComp f t @ (Exists { existsPats = pats, existsProp = prop }) =
+termSubstComp f t @ Exists { existsPats = pats, existsProp = prop } =
   t { existsProp = prop >>>= termSubstComp f . return,
       existsPats = fmap (patSubstComp f) pats }
-termSubstComp f t @ (Call { callArgs = args, callFunc = func }) =
+termSubstComp f t @ Call { callArgs = args, callFunc = func } =
   t { callArgs = fmap (>>= termSubstComp f . return) args,
       callFunc = func >>= termSubstComp f . return }
-termSubstComp f (Var { varSym = sym }) =
+termSubstComp f Var { varSym = sym } =
   Fix { fixComps = Map.singleton defaultVal (abstract (\_ -> Nothing) (f sym)),
         fixPos = substpos }
-termSubstComp f t @ (Typed { typedTerm = term, typedType = ty }) =
+termSubstComp f t @ Typed { typedTerm = term, typedType = ty } =
   t { typedTerm = termSubstComp f term, typedType = termSubstComp f ty }
-termSubstComp f t @ (Lambda { lambdaCases = cases }) =
+termSubstComp f t @ Lambda { lambdaCases = cases } =
   t { lambdaCases = fmap (\(pat, body) -> (patSubstComp f pat,
                                            body >>>= termSubstComp f . return))
                          cases }
-termSubstComp f t @ (Record { recVals = vals }) =
+termSubstComp f t @ Record { recVals = vals } =
   t { recVals = fmap (termSubstComp f) vals }
-termSubstComp f t @ (Fix { fixComps = comps }) =
+termSubstComp f t @ Fix { fixComps = comps } =
   t { fixComps = fmap (>>>= f) comps }
-termSubstComp f t @ (Eta { etaTerm = term, etaType = ty }) =
+termSubstComp f t @ Eta { etaTerm = term, etaType = ty } =
     t { etaTerm = termSubstComp f term, etaType = termSubstComp f ty }
 termSubstComp _ (BadTerm p) = BadTerm p
 
 cmdSubstComp :: Default c => (a -> Comp c b) -> Cmd c a -> Cmd c b
-cmdSubstComp f c @ (Value { valTerm = term }) =
+cmdSubstComp f c @ Value { valTerm = term } =
   c { valTerm = termSubstComp f term }
-cmdSubstComp f c @ (Eval { evalTerm = term }) =
+cmdSubstComp f c @ Eval { evalTerm = term } =
   c { evalTerm = termSubstComp f term }
 cmdSubstComp _ (BadCmd p) = BadCmd p
 
@@ -1022,9 +1050,123 @@ instance Default b => Monad (Comp b) where
     End { endCmd = Value { valTerm = Var { varSym = sym, varPos = injectpos },
                            valPos = injectpos },
           endPos = injectpos}
-
-  c @ (Seq { seqPat = pat, seqCmd = cmd, seqNext = next }) >>= f =
+  c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
     c { seqPat = patSubstComp f pat, seqNext = next >>= f,
         seqCmd = cmdSubstComp f cmd }
-  c @ (End { endCmd = cmd }) >>= f = c { endCmd = cmdSubstComp f cmd }
+  c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
+{-
+arbitraryPos :: Pos
+arbitraryPos = internal "arbitrary"
+
+arbitraryProjectPattern :: Set b -> Int -> Gen (Pattern b t s, Set b)
+arbitraryProjectPattern vars size =
+  let
+    arbitraryBindVar :: Set b -> Gen (b, Set b)
+    arbitraryBindVar bindings =
+      let
+        arbitraryBoundVar :: Gen (b, Set b)
+        arbitraryBoundVar =
+          do
+            var <- elements (Set.toList vars)
+            return (var, bindings)
+
+        arbitraryNewVar :: Gen (b, Set b)
+        arbitraryNewVar =
+          var <- suchThat (\name -> not (Set.member name bindings)) arbitrary
+          return (var, Set.insert var bindings)
+      in
+        oneof [ arbitraryBoundVar, arbitraryNewVar ]
+
+    foldfun :: Int -> ([(b, Pattern b t s)], Set b) ->
+               Gen ([(b, Pattern b t s)], Set b)
+    foldfun size (accum, bindings)
+      | size > 0 =
+        do
+          thissize <- choose (0, size)
+          var <- arbitraryBindVar
+      | otherwise = return (0, accum)
+  in do
+    num <- choose (1, size)
+    strict <- arbitrary
+    return Project { projectBinds = binds, projectStrict = strict,
+                     projectPos = arbitraryPos }
+
+arbitraryPattern :: Arbitrary s => Int -> Gen (Cmd s s)
+arbitraryPattern size
+  | size > 1 =
+    do
+      tysize <- choose (0, size - 1)
+      ty <- arbitraryTerm tysize
+      bind <- arbitraryBinding (size - tysize - 1)
+      return Pattern { patternType = ty, patternBind = bind,
+                       patternPos = arbitraryPos }    
+  | otherwise =
+    do
+      ty <- arbitraryTerm 0
+      bind <- arbitraryBinding 0
+      return Pattern { patternType = ty, patternBind = bind,
+                       patternPos = arbitraryPos }    
+
+arbitraryEvalCmd :: Arbitrary s => Int -> Gen (Cmd s s)
+arbitraryEvalCmd size =
+  do
+    term <- arbitraryTerm size
+    return Eval { evalTerm = term, evalPos = arbitraryPos }
+
+arbitraryValueCmd :: Arbitrary s => Int -> Gen (Cmd s s)
+arbitraryValueCmd size =
+  do
+    term <- arbitraryTerm size
+    return Eval { valTerm = term, valPos = arbitraryPos }
+
+arbitraryCmd :: Arbitrary s => Int -> Gen (Cmd s s)
+arbitraryCmd size = oneof [ arbitraryEvalCmd size, arbitraryValueCmd size ]
+
+arbitrarySeqComp :: Arbitrary s => Int -> Gen (Comp s s)
+arbitrarySeqComp size =
+  do
+    patsize <- choose (0, size - 1)
+    cmdsize <- choose (0, size - patsize - 1)
+    pat <- arbitraryPattern patsize
+    cmd <- arbitraryCmd cmdsize
+    next <- arbitraryNext (size - patsize - cmdsize - 1)
+    return Seq { seqPat = pat, seqCmd = cmd, seqNext = next,
+                 seqPos = arbitraryPos }
+
+arbitraryEndComp :: Arbitrary s => Int -> Gen (Comp s s)
+arbitraryEndComp size =
+  do
+    cmd <- arbitrary size
+    return End { endCmd = cmd, endPos = pos }
+
+arbitraryComp :: Arbitrary s => Int -> Gen (Comp s s)
+arbitraryComp size
+ | size > 0 = oneof [ arbitraryEndComp size, arbitrarySeqComp size ]
+ | otherwise = arbitraryEndComp 0
+
+instance (Arbitrary s, Arbitrary (t s)) => Arbitrary (Pattern s t s) where
+  arbitrary = sized arbitraryPattern
+
+  shrink p @ Pattern { patternType = ty, patternBind = bind } =
+    map (\ty' -> p { patternType = ty' }) (shrink ty) ++
+    map (\bind' -> p { patternBind = bind' }) (shrink bind)
+
+instance Arbitrary s => Arbitrary (Cmd s s) where
+  arbitrary = sized arbitraryCmd
+
+  shrink c @ Eval { evalTerm = term } =
+    map (\term' -> c { evalTerm = term' }) (shrink term)
+  shrink c @ Value { valTerm = term } =
+    map (\term' -> c { valTerm = term' }) (shrink term)
+
+instance Arbitrary s => Arbitrary (Comp s s) where
+  arbitrary = sized arbitraryComp
+
+  shrink c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
+    map (\pat' -> c { seqPat = pat' }) (shrink pat) ++
+    map (\cmd' -> c { seqCmd = cmd' }) (shrink cmd) ++
+    map (\next' -> c { seqNext = next' }) (shrink next)
+  shrink c @ End { endCmd = cmd } =
+    map (\cmd' -> c { endCmd = cmd' }) (shrink cmd)
+-}

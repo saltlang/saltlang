@@ -864,10 +864,10 @@ arbitraryName =
     first <- elements idChars
     rest <- listOf (elements (idChars ++ numChars))
     return (first : rest)
-
+{-
 arbitraryIdentifier :: Gen String
 arbitraryIdentifier = oneof [ arbitraryOperator, arbitraryName ]
-
+-}
 arbitrarySymbol :: Gen String
 arbitrarySymbol = oneof [ arbitraryNumber, arbitraryOperator, arbitraryName ]
 
