@@ -41,41 +41,32 @@ import Data.Hash.ExtraInstances()
 import Data.Map(Map)
 import Data.Monoid
 import Data.Pos
---import Data.Set(Set)
+import Data.Set(Set)
 import Data.Traversable
 import Prelude hiding (foldr1)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
---import Test.QuickCheck
+import Test.QuickCheck
 
 import qualified Data.Map as Map
---import qualified Data.Set as Set
+import qualified Data.Set as Set
 
 -- | A pattern binding.  Represents how to deconstruct a value and
 -- bind it to variables.
 data Binding b t s =
-    -- | A projection.  Binds to the names of a record.  This mirrors
-    -- a Record term.
-    Project {
+    -- | A deconstruction.  Takes a type apart.  Some types have
+    -- constructors; nameless record types don't (they should use the
+    -- "unused" symbol).
+    Deconstruct {
+      -- | The type constructor.  For nameless records, use the
+      -- "unused" symbol.
+      deconstructConstructor :: !b,
       -- | The fields in the record being bound.
-      projectBinds :: Map b (Binding b t s),
+      deconstructBinds :: Map b (Binding b t s),
       -- | Whether or not the binding is strict (ie. it omits some names)
-      projectStrict :: !Bool,
+      deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
-      projectPos :: !Pos
-    }
-    -- | A construction.  Binds to a datatype constructor.
-    -- 
-    -- Since this is a dependent language, then any set of orthonogal
-    -- bijections can be a set of constructors (ie. a basis) for a
-    -- datatype.
-  | Construct {
-      -- | The fields in the construction being bound.
-      constructBinds :: Map b (Binding b t s),
-      -- | Whether or not the constructor is strict (ie. it omits some names)
-      constructStrict :: !Bool,
-      -- | The position in source from which this originates.
-      constructPos :: !Pos
+      deconstructPos :: !Pos
     }
     -- | An "as" binding.  Allows part of a pattern to be bound to a
     -- name, but further deconstructed by another pattern.  For
@@ -268,6 +259,7 @@ data Term b s =
   -- overloading, which adds an inherent multiple dispatch ability.
   -- This is obviousy highly nontrivial to implement.
   | Lambda {
+      -- | The cases describing this function's behavior.
       lambdaCases :: [(Pattern b (Term b) s, Scope b (Term b) s)],
       -- | The position in source from which this originates.
       lambdaPos :: !Pos
@@ -405,14 +397,12 @@ compareCases [] _ = LT
 compareCases _ [] = GT
 
 instance (Default b, Eq b, Eq1 t) => Eq1 (Binding b t) where
-  Project { projectBinds = binds1, projectStrict = strict1 } ==#
-    Project { projectBinds = binds2, projectStrict = strict2 } =
-      eqBinds (Map.toAscList binds1) (Map.toAscList binds2) &&
-      (strict1 == strict2)
-  Construct { constructBinds = binds1, constructStrict = strict1 } ==#
-    Construct { constructBinds = binds2, constructStrict = strict2 } =
-      eqBinds (Map.toAscList binds1) (Map.toAscList binds2) &&
-      (strict1 == strict2)
+  Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
+                deconstructConstructor = constructor1 } ==#
+    Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
+                  deconstructConstructor = constructor2 } =
+      (strict1 == strict2) && (constructor1 == constructor2) &&
+        eqBinds (Map.toAscList binds1) (Map.toAscList binds2)
   As { asName = name1, asBind = bind1 } ==#
     As { asName = name2, asBind = bind2 } =
       (name1 == name2) && (bind1 ==# bind2)
@@ -478,20 +468,17 @@ instance (Default b, Eq b) => Eq1 (Comp b) where
   _ ==# _ = False
 
 instance (Default b, Ord b, Ord1 t) => Ord1 (Binding b t) where
-  compare1 Project { projectBinds = binds1, projectStrict = strict1 }
-           Project { projectBinds = binds2, projectStrict = strict2 } =
+  compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
+                         deconstructConstructor = constructor1 }
+           Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
+                         deconstructConstructor = constructor2 } =
     case compare strict1 strict2 of
-      EQ -> compareBinds (Map.toAscList binds1) (Map.toAscList binds2)
+      EQ -> case compare constructor1 constructor2 of
+        EQ -> compareBinds (Map.toAscList binds1) (Map.toAscList binds2)
+        out -> out
       out -> out
-  compare1 Project {} _ = GT
-  compare1 _ Project {} = LT
-  compare1 Construct { constructBinds = binds1, constructStrict = strict1 }
-           Construct { constructBinds = binds2, constructStrict = strict2 } =
-    case compare strict1 strict2 of
-      EQ -> compareBinds (Map.toAscList binds1) (Map.toAscList binds2)
-      out -> out
-  compare1 Construct {} _ = GT
-  compare1 _ Construct {} = LT
+  compare1 Deconstruct {} _ = GT
+  compare1 _ Deconstruct {} = LT
   compare1 As { asName = name1, asBind = bind1 }
            As { asName = name2, asBind = bind2 } =
     case compare name1 name2 of
@@ -624,8 +611,7 @@ instance (Default b, Ord b) => Ord1 (Comp b) where
   compare1 (BadComp _) (BadComp _) = EQ
 
 instance Position (t s) => Position (Binding b t s) where
-  pos Project { projectPos = p } = p
-  pos Construct { constructPos = p } = p
+  pos Deconstruct { deconstructPos = p } = p
   pos As { asPos = p } = p
   pos Name { namePos = p } = p
   pos (Constant t) = pos t
@@ -660,16 +646,16 @@ instance Position (Comp b s) where
   pos (BadComp p) = p
 
 instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Binding b t) where
-  hashWithSalt1 s Project { projectBinds = binds, projectStrict = strict } =
-    (s `hashWithSalt` (1 :: Int) `hashWithSalt` strict) `hashWithSalt1` binds
-  hashWithSalt1 s Construct { constructBinds = binds,
-                             constructStrict = strict } =
-    (s `hashWithSalt` (2 :: Int) `hashWithSalt` strict) `hashWithSalt1` binds
+  hashWithSalt1 s Deconstruct { deconstructConstructor = constructor,
+                                deconstructBinds = binds,
+                                deconstructStrict = strict } =
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` constructor `hashWithSalt`
+      strict) `hashWithSalt1` binds
   hashWithSalt1 s As { asName = name, asBind = bind } =
-    (s `hashWithSalt` (3 :: Int) `hashWithSalt` name) `hashWithSalt1` bind
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` name) `hashWithSalt1` bind
   hashWithSalt1 s Name { nameSym = name } =
-    s `hashWithSalt` (4 :: Int) `hashWithSalt` name
-  hashWithSalt1 s (Constant c) = s `hashWithSalt` (5 :: Int) `hashWithSalt1` c
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` name
+  hashWithSalt1 s (Constant c) = (s `hashWithSalt` (4 :: Int)) `hashWithSalt1` c
 
 instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
   hashWithSalt1 s Pattern { patternBind = term, patternType = ty } =
@@ -739,10 +725,8 @@ instance (Default b, Hashable b, Hashable s) => Hashable (Comp b s) where
   hashWithSalt = hashWithSalt1
 
 instance Functor t => Functor (Binding b t) where
-  fmap f b @ Project { projectBinds = binds } =
-    b { projectBinds = fmap (fmap f) binds }
-  fmap f b @ Construct { constructBinds = binds } =
-    b { constructBinds = fmap (fmap f) binds }
+  fmap f b @ Deconstruct { deconstructBinds = binds } =
+    b { deconstructBinds = fmap (fmap f) binds }
   fmap f b @ As { asBind = bind } = b { asBind = fmap f bind }
   fmap _ b @ Name { nameSym = name } = b { nameSym = name }
   fmap f (Constant t) = Constant (fmap f t)
@@ -754,8 +738,7 @@ instance Functor t => Functor (Pattern b t) where
 instance Functor (Term b) where
   fmap f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
     t { prodArgTys = fmap (fmap f) argtys, prodRetTy = fmap f retty }
-  fmap f t @ SumType { sumBody = body } =
-    t { sumBody = fmap (fmap f) body }
+  fmap f t @ SumType { sumBody = body } = t { sumBody = fmap (fmap f) body }
   fmap f t @ RefineType { refinePat = pat, refineProp = prop } =
     t { refinePat = fmap f pat, refineProp = fmap f prop }
   fmap f t @ CompType { compPat = pat, compSpec = spec } =
@@ -773,10 +756,8 @@ instance Functor (Term b) where
     t { etaTerm = fmap f term, etaType = fmap f ty }
   fmap f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (\(pat, body) -> (fmap f pat, fmap f body)) cases }
-  fmap f t @ Record { recVals = vals } =
-    t { recVals = fmap (fmap f) vals }
-  fmap f t @ Fix { fixComps = comps } =
-    t { fixComps = fmap (fmap f) comps }
+  fmap f t @ Record { recVals = vals } = t { recVals = fmap (fmap f) vals }
+  fmap f t @ Fix { fixComps = comps } = t { fixComps = fmap (fmap f) comps }
   fmap _ (BadTerm p) = (BadTerm p)
 
 instance Functor (Cmd b) where
@@ -791,10 +772,7 @@ instance Functor (Comp b) where
   fmap _ (BadComp p) = BadComp p
 
 instance Foldable t => Foldable (Binding b t) where
-  foldMap f Project { projectBinds = binds } =
-    foldMap (foldMap f) binds
-  foldMap f Construct { constructBinds = binds } =
-    foldMap (foldMap f) binds
+  foldMap f Deconstruct { deconstructBinds = binds } = foldMap (foldMap f) binds
   foldMap f As { asBind = bind } = foldMap f bind
   foldMap f (Constant t) = foldMap f t
   foldMap _ _ = mempty
@@ -840,10 +818,9 @@ instance Foldable (Comp b) where
   foldMap _ _ = mempty
 
 instance Traversable t => Traversable (Binding b t) where
-  traverse f b @ Project { projectBinds = binds } =
-    (\binds' -> b { projectBinds = binds' }) <$> traverse (traverse f) binds
-  traverse f b @ Construct { constructBinds = binds } =
-    (\binds' -> b { constructBinds = binds' }) <$> traverse (traverse f) binds
+  traverse f b @ Deconstruct { deconstructBinds = binds } =
+    (\binds' -> b { deconstructBinds = binds' }) <$>
+    traverse (traverse f) binds
   traverse _ b @ Name { nameSym = name } = pure (b { nameSym = name })
   traverse f b @ As { asBind = bind } =
     (\bind' -> b { asBind = bind' }) <$> traverse f bind
@@ -919,10 +896,8 @@ instance MonadTrans (Binding b) where
   lift m = Constant m
 
 instance Bound (Binding b) where
-  b @ Project { projectBinds = binds } >>>= f =
-    b { projectBinds = fmap (>>>= f) binds }
-  b @ Construct { constructBinds = binds } >>>= f =
-    b { constructBinds = fmap (>>>= f) binds }
+  b @ Deconstruct { deconstructBinds = binds } >>>= f =
+    b { deconstructBinds = fmap (>>>= f) binds }
   b @ As { asBind = bind } >>>= f = b { asBind = bind >>>= f }
   b @ Name { nameSym = name } >>>= _ = b { nameSym = name }
   Constant t >>>= f = Constant (t >>= f)
@@ -985,10 +960,8 @@ instance Default b => Monad (Term b) where
 
 bindSubstComp :: Default c => (a -> Comp c b) -> Binding c (Term c) a ->
                 Binding c (Term c) b
-bindSubstComp f b @ Project { projectBinds = binds } =
-  b { projectBinds = fmap (bindSubstComp f) binds }
-bindSubstComp f b @ Construct { constructBinds = binds } =
-  b { constructBinds = fmap (bindSubstComp f) binds }
+bindSubstComp f b @ Deconstruct { deconstructBinds = binds } =
+  b { deconstructBinds = fmap (bindSubstComp f) binds }
 bindSubstComp f b @ As { asBind = bind } =
   b { asBind = bindSubstComp f bind }
 bindSubstComp _ b @ Name { nameSym = name } = b { nameSym = name }
@@ -1055,10 +1028,10 @@ instance Default b => Monad (Comp b) where
         seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
-{-
+
 arbitraryPos :: Pos
 arbitraryPos = internal "arbitrary"
-
+{-
 arbitraryProjectPattern :: Set b -> Int -> Gen (Pattern b t s, Set b)
 arbitraryProjectPattern vars size =
   let
@@ -1073,8 +1046,9 @@ arbitraryProjectPattern vars size =
 
         arbitraryNewVar :: Gen (b, Set b)
         arbitraryNewVar =
-          var <- suchThat (\name -> not (Set.member name bindings)) arbitrary
-          return (var, Set.insert var bindings)
+          do
+            var <- suchThat (\name -> not (Set.member name bindings)) arbitrary
+            return (var, Set.insert var bindings)
       in
         oneof [ arbitraryBoundVar, arbitraryNewVar ]
 
@@ -1108,6 +1082,61 @@ arbitraryPattern size
       return Pattern { patternType = ty, patternBind = bind,
                        patternPos = arbitraryPos }    
 
+arbitraryTerm :: Arbitrary s => Set s -> Int -> Gen (Term s s)
+arbitraryTerm bindings size =
+  let
+    genEntries :: Arbitrary s => Int -> Gen ([(s, Term s s)])
+    genEntries size'
+      | size' > 0 =
+        do
+          fieldsize <- choose (0, size' - 1)
+          field <- arbitrary
+          val <- arbitraryTerm bindings size'
+          rest <- genEntries (size' - fieldsize - 1)
+          return (val : rest)
+      | otherwise = return []
+
+    arbitraryCallTerm :: Arbitrary s => Gen (Term s s)
+    arbitraryCallTerm =
+      do
+        funcsize <- choose (0, size)
+        func <- arbitraryTerm(funcsize)
+        entries <- genEntries (size - funcsize - 1)
+        return Call { callFunc = func, callArgs = Map.fromList entries,
+                      callPos = arbitraryPos }
+
+    arbitraryRecordTerm :: Arbitrary s => Gen (Term s s)
+    arbitraryRecordTerm =
+      do
+        entries <- genEntries size
+        return Record { recVals = Map.fromList entries, recPos = arbitraryPos }
+
+    arbitraryFreeVarTerm :: Arbitrary s => Gen (Term s s)
+    arbitraryFreeVarTerm =
+      do
+        sym <- arbitrary
+        return Var { varSym = sym, varPos = arbitraryPos }
+
+    arbitraryBoundVarTerm :: Arbitrary s => Gen (Term s s)
+    arbitraryBoundVarTerm =
+      do
+        sym <- elements (Set.elems bindings)
+        return Var { varSym = sym, varPos = arbitraryPos }
+
+    arbitraryTypedTerm :: Arbitrary s => Gen (Term s s)
+    arbitraryTypedTerm =
+      do
+        tysize <- choose (0, size - 1)
+        ty <- arbitraryTerm bindings tysize
+        val <- arbitraryTerm bindings (size - tysize - 1)
+        return Typed { typedTerm = val, typedType = ty,
+                       typedPos = arbitraryPos }
+  in if 0 > size
+    then oneof [ arbitraryBoundVarTerm, arbitraryFreeVarTerm,
+                 arbitraryTypedTerm, arbitraryRecordTerm,
+                 arbitraryCallTerm ]
+    else oneof [ arbitraryBoundVarTerm, arbitraryFreeVarTerm ]
+
 arbitraryEvalCmd :: Arbitrary s => Int -> Gen (Cmd s s)
 arbitraryEvalCmd size =
   do
@@ -1130,7 +1159,7 @@ arbitrarySeqComp size =
     cmdsize <- choose (0, size - patsize - 1)
     pat <- arbitraryPattern patsize
     cmd <- arbitraryCmd cmdsize
-    next <- arbitraryNext (size - patsize - cmdsize - 1)
+    next <- arbitraryComp (size - patsize - cmdsize - 1)
     return Seq { seqPat = pat, seqCmd = cmd, seqNext = next,
                  seqPos = arbitraryPos }
 
@@ -1144,6 +1173,14 @@ arbitraryComp :: Arbitrary s => Int -> Gen (Comp s s)
 arbitraryComp size
  | size > 0 = oneof [ arbitraryEndComp size, arbitrarySeqComp size ]
  | otherwise = arbitraryEndComp 0
+
+instance Arbitrary s => Arbitrary (Term s s) where
+  arbitrary = sized arbitraryTerm
+
+  shrink t @ Typed { typedType = ty, typedTerm = term } =
+    map (\ty' -> t { typedType = ty' }) (shrink ty) ++
+    map (\term' -> t { typedType = term' }) (shrink term)
+  shrink t Var {} = []
 
 instance (Arbitrary s, Arbitrary (t s)) => Arbitrary (Pattern s t s) where
   arbitrary = sized arbitraryPattern
