@@ -18,9 +18,9 @@
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# Language FlexibleInstances, FlexibleContexts, UndecidableInstances #-}
 
--- | The Argent core language.  Argent's surface syntax is
--- transliterated into Core, which is then type-checked and compiled.
--- Core is generally not meant for human consumption.
+-- | The Salt core language.  Salt's surface syntax is transliterated
+-- into Core, which is then type-checked and compiled.  Core is
+-- generally not meant for human consumption.
 module Language.Argent.Core.Syntax(
        Binding(..),
        Pattern(..),
@@ -81,7 +81,7 @@ data Binding b t s =
     }
     -- | A simple name binding.  This does the same thing as an as
     -- pattern, but does not further deconstruct the binding.
-    --
+    -- 
     -- In the intended use case, we have a special symbol representing
     -- a wildcard (namely, the unused symbol), so we don't bother
     -- defining another constructor for it.
@@ -112,10 +112,10 @@ data Pattern b t s =
 -- | Terms.  Represents pure terms in the language.  Terms are further
 -- subdivided into types, propositions, and elimination and
 -- introduction terms (both of which represent values).
---
+-- 
 -- Types and propositions do not support decidable equality, and thus
 -- cannot be computed upon.
---
+-- 
 -- Values can be computed upon, and can appear in a pattern match.
 -- Elimination terms are those terms whose type can be inferred in
 -- type checking.  Introduction terms are those terms that require a
@@ -1031,61 +1031,91 @@ instance Default b => Monad (Comp b) where
 
 arbitraryPos :: Pos
 arbitraryPos = internal "arbitrary"
-{-
-arbitraryProjectPattern :: Set b -> Int -> Gen (Pattern b t s, Set b)
-arbitraryProjectPattern vars size =
+
+-- The top-level function takes a set of bound vars, and produces a
+-- binding and a new set of bound vars.  This behavior is different
+-- from the inner functions.
+arbitraryBinding :: (Ord s, Arbitrary s) => Set s -> Int ->
+                    Gen (Binding s (Term s) s, Set s)
+arbitraryBinding scope insize
+ | 0 < insize =
   let
-    arbitraryBindVar :: Set b -> Gen (b, Set b)
-    arbitraryBindVar bindings =
+    arbitraryBinding' vars size =
       let
-        arbitraryBoundVar :: Gen (b, Set b)
-        arbitraryBoundVar =
-          do
-            var <- elements (Set.toList vars)
-            return (var, bindings)
+        arbitraryNewName =
+          suchThat arbitrary (\name -> not (Set.member name vars))
 
-        arbitraryNewVar :: Gen (b, Set b)
-        arbitraryNewVar =
+        arbitraryNameBinding =
           do
-            var <- suchThat (\name -> not (Set.member name bindings)) arbitrary
-            return (var, Set.insert var bindings)
+            var <- arbitraryNewName
+            return (Name { nameSym = var, namePos = arbitraryPos },
+                    Set.insert var vars)
+
+        arbitraryAsBinding =
+          do
+            var <- arbitraryNewName
+            (bind, vars') <- arbitraryBinding (Set.insert var vars) (size - 1)
+            return (As { asName = var, asBind = bind, asPos = arbitraryPos },
+                    vars')
+
+        arbitraryConstantBinding =
+          do
+            term <- arbitraryTerm scope size
+            return (Constant term, vars)
+
+        arbitraryDeconstructBinding =
+          let
+            arbitraryBindings vars' size'
+             | size > 0 =
+              do
+                thissize <- choose (0, size' - 1)
+                bindvar <- arbitrary
+                (bind, newvars) <-
+                  arbitraryBinding' (Set.insert bindvar vars') thissize
+                (binds, newvars') <-
+                  arbitraryBindings newvars (size' - thissize - 1)
+                return ((bindvar, bind) : binds, newvars')
+             | otherwise = return ([], vars')
+          in do
+            strict <- arbitrary
+            constructor <- elements (Set.toList scope)
+            (binds, newvars) <- arbitraryBindings vars size
+            return (Deconstruct { deconstructBinds = Map.fromList binds,
+                                  deconstructStrict = strict,
+                                  deconstructConstructor = constructor,
+                                  deconstructPos = arbitraryPos }, newvars)
       in
-        oneof [ arbitraryBoundVar, arbitraryNewVar ]
-
-    foldfun :: Int -> ([(b, Pattern b t s)], Set b) ->
-               Gen ([(b, Pattern b t s)], Set b)
-    foldfun size (accum, bindings)
-      | size > 0 =
-        do
-          thissize <- choose (0, size)
-          var <- arbitraryBindVar
-      | otherwise = return (0, accum)
+        oneof [ arbitraryConstantBinding, arbitraryDeconstructBinding,
+                arbitraryNameBinding, arbitraryAsBinding ]
   in do
-    num <- choose (1, size)
-    strict <- arbitrary
-    return Project { projectBinds = binds, projectStrict = strict,
-                     projectPos = arbitraryPos }
+    (bind, vars) <- arbitraryBinding' Set.empty insize
+    return (bind, Set.union vars scope)
+ | otherwise =
+  do
+    var <- arbitrary
+    return (Name { nameSym = var, namePos = arbitraryPos },
+            Set.insert var scope)
 
-arbitraryPattern :: Arbitrary s => Int -> Gen (Cmd s s)
-arbitraryPattern size
+arbitraryPattern :: (Ord s, Arbitrary s) => Set s -> Int ->
+                    Gen (Pattern s (Term s) s, Set s)
+arbitraryPattern scope size
   | size > 1 =
     do
       tysize <- choose (0, size - 1)
-      ty <- arbitraryTerm tysize
-      bind <- arbitraryBinding (size - tysize - 1)
-      return Pattern { patternType = ty, patternBind = bind,
-                       patternPos = arbitraryPos }    
+      ty <- arbitraryTerm scope tysize
+      (bind, newscope) <- arbitraryBinding scope (size - tysize - 1)
+      return (Pattern { patternType = ty, patternBind = bind,
+                        patternPos = arbitraryPos }, newscope)
   | otherwise =
     do
-      ty <- arbitraryTerm 0
-      bind <- arbitraryBinding 0
-      return Pattern { patternType = ty, patternBind = bind,
-                       patternPos = arbitraryPos }    
+      ty <- arbitraryTerm scope 0
+      (bind, newscope) <- arbitraryBinding scope 0
+      return (Pattern { patternType = ty, patternBind = bind,
+                        patternPos = arbitraryPos }, newscope)
 
-arbitraryTerm :: Arbitrary s => Set s -> Int -> Gen (Term s s)
+arbitraryTerm :: (Ord s, Arbitrary s) => Set s -> Int -> Gen (Term s s)
 arbitraryTerm bindings size =
   let
-    genEntries :: Arbitrary s => Int -> Gen ([(s, Term s s)])
     genEntries size'
       | size' > 0 =
         do
@@ -1093,37 +1123,32 @@ arbitraryTerm bindings size =
           field <- arbitrary
           val <- arbitraryTerm bindings size'
           rest <- genEntries (size' - fieldsize - 1)
-          return (val : rest)
+          return ((field, val) : rest)
       | otherwise = return []
 
-    arbitraryCallTerm :: Arbitrary s => Gen (Term s s)
     arbitraryCallTerm =
       do
         funcsize <- choose (0, size)
-        func <- arbitraryTerm(funcsize)
+        func <- arbitraryTerm bindings funcsize
         entries <- genEntries (size - funcsize - 1)
         return Call { callFunc = func, callArgs = Map.fromList entries,
                       callPos = arbitraryPos }
 
-    arbitraryRecordTerm :: Arbitrary s => Gen (Term s s)
     arbitraryRecordTerm =
       do
         entries <- genEntries size
         return Record { recVals = Map.fromList entries, recPos = arbitraryPos }
 
-    arbitraryFreeVarTerm :: Arbitrary s => Gen (Term s s)
     arbitraryFreeVarTerm =
       do
         sym <- arbitrary
         return Var { varSym = sym, varPos = arbitraryPos }
 
-    arbitraryBoundVarTerm :: Arbitrary s => Gen (Term s s)
     arbitraryBoundVarTerm =
       do
         sym <- elements (Set.elems bindings)
         return Var { varSym = sym, varPos = arbitraryPos }
 
-    arbitraryTypedTerm :: Arbitrary s => Gen (Term s s)
     arbitraryTypedTerm =
       do
         tysize <- choose (0, size - 1)
@@ -1137,68 +1162,85 @@ arbitraryTerm bindings size =
                  arbitraryCallTerm ]
     else oneof [ arbitraryBoundVarTerm, arbitraryFreeVarTerm ]
 
-arbitraryEvalCmd :: Arbitrary s => Int -> Gen (Cmd s s)
-arbitraryEvalCmd size =
+arbitraryCmd :: (Ord s, Arbitrary s) => Set s -> Int -> Gen (Cmd s s)
+arbitraryCmd scope size =
+  let
+    arbitraryEvalCmd size' =
+      do
+        term <- arbitraryTerm scope size'
+        return Eval { evalTerm = term, evalPos = arbitraryPos }
+
+    arbitraryValueCmd size' =
+      do
+        term <- arbitraryTerm scope size'
+        return Value { valTerm = term, valPos = arbitraryPos }
+  in
+    oneof [ arbitraryEvalCmd size, arbitraryValueCmd size ]
+
+arbitraryComp :: (Ord s, Arbitrary s) => Set s -> Int -> Gen (Comp s s)
+arbitraryComp scope size
+ | size > 0 =
+  let
+    arbitrarySeqComp =
+      do
+        patsize <- choose (0, size - 1)
+        cmdsize <- choose (0, size - patsize - 1)
+        cmd <- arbitraryCmd scope cmdsize
+        (pat, newscope) <- arbitraryPattern scope patsize
+        next <- arbitraryComp newscope (size - patsize - cmdsize - 1)
+        return Seq { seqPat = pat, seqCmd = cmd, seqNext = next,
+                     seqPos = arbitraryPos }
+
+    arbitraryEndComp =
+      do
+        cmd <- arbitraryCmd scope size
+        return End { endCmd = cmd, endPos = arbitraryPos }
+  in
+    oneof [ arbitraryEndComp, arbitrarySeqComp ]
+ | otherwise =
   do
-    term <- arbitraryTerm size
-    return Eval { evalTerm = term, evalPos = arbitraryPos }
+    cmd <- arbitraryCmd scope 0
+    return End { endCmd = cmd, endPos = arbitraryPos }
 
-arbitraryValueCmd :: Arbitrary s => Int -> Gen (Cmd s s)
-arbitraryValueCmd size =
-  do
-    term <- arbitraryTerm size
-    return Eval { valTerm = term, valPos = arbitraryPos }
+instance (Ord s, Arbitrary s) => Arbitrary (Binding s (Term s) s) where
+  arbitrary = sized (arbitraryBinding Set.empty) >>= return . fst
 
-arbitraryCmd :: Arbitrary s => Int -> Gen (Cmd s s)
-arbitraryCmd size = oneof [ arbitraryEvalCmd size, arbitraryValueCmd size ]
+  shrink b @ Deconstruct { deconstructBinds = binds } =
+    case Map.assocs binds of
+      [(_, bind)] -> [bind]
+      list -> map (\list' -> b { deconstructBinds = Map.fromList list' })
+                  (shrink list)
+  shrink b @ As { asBind = bind } =
+    bind : (map (\bind' -> b { asBind = bind' }) (shrink bind))
+  shrink Name {} = []
+  shrink (Constant t) = map Constant (shrink t)
 
-arbitrarySeqComp :: Arbitrary s => Int -> Gen (Comp s s)
-arbitrarySeqComp size =
-  do
-    patsize <- choose (0, size - 1)
-    cmdsize <- choose (0, size - patsize - 1)
-    pat <- arbitraryPattern patsize
-    cmd <- arbitraryCmd cmdsize
-    next <- arbitraryComp (size - patsize - cmdsize - 1)
-    return Seq { seqPat = pat, seqCmd = cmd, seqNext = next,
-                 seqPos = arbitraryPos }
-
-arbitraryEndComp :: Arbitrary s => Int -> Gen (Comp s s)
-arbitraryEndComp size =
-  do
-    cmd <- arbitrary size
-    return End { endCmd = cmd, endPos = pos }
-
-arbitraryComp :: Arbitrary s => Int -> Gen (Comp s s)
-arbitraryComp size
- | size > 0 = oneof [ arbitraryEndComp size, arbitrarySeqComp size ]
- | otherwise = arbitraryEndComp 0
-
-instance Arbitrary s => Arbitrary (Term s s) where
-  arbitrary = sized arbitraryTerm
-
-  shrink t @ Typed { typedType = ty, typedTerm = term } =
-    map (\ty' -> t { typedType = ty' }) (shrink ty) ++
-    map (\term' -> t { typedType = term' }) (shrink term)
-  shrink t Var {} = []
-
-instance (Arbitrary s, Arbitrary (t s)) => Arbitrary (Pattern s t s) where
-  arbitrary = sized arbitraryPattern
+instance (Ord s, Arbitrary s) => Arbitrary (Pattern s (Term s) s) where
+  arbitrary = sized (arbitraryPattern Set.empty) >>= return . fst
 
   shrink p @ Pattern { patternType = ty, patternBind = bind } =
     map (\ty' -> p { patternType = ty' }) (shrink ty) ++
     map (\bind' -> p { patternBind = bind' }) (shrink bind)
 
-instance Arbitrary s => Arbitrary (Cmd s s) where
-  arbitrary = sized arbitraryCmd
+instance (Ord s, Arbitrary s) => Arbitrary (Term s s) where
+  arbitrary = sized (arbitraryTerm Set.empty)
+
+  shrink t @ Typed { typedType = ty, typedTerm = term } =
+    map (\ty' -> t { typedType = ty' }) (shrink ty) ++
+    map (\term' -> t { typedType = term' }) (shrink term)
+  shrink Var {} = []
+
+instance (Ord s, Arbitrary s) => Arbitrary (Cmd s s) where
+  arbitrary = sized (arbitraryCmd Set.empty)
 
   shrink c @ Eval { evalTerm = term } =
     map (\term' -> c { evalTerm = term' }) (shrink term)
   shrink c @ Value { valTerm = term } =
     map (\term' -> c { valTerm = term' }) (shrink term)
+  shrink (BadCmd _) = []
 
-instance Arbitrary s => Arbitrary (Comp s s) where
-  arbitrary = sized arbitraryComp
+instance (Ord s, Arbitrary s) => Arbitrary (Comp s s) where
+  arbitrary = sized (arbitraryComp Set.empty)
 
   shrink c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
     map (\pat' -> c { seqPat = pat' }) (shrink pat) ++
@@ -1206,4 +1248,4 @@ instance Arbitrary s => Arbitrary (Comp s s) where
     map (\next' -> c { seqNext = next' }) (shrink next)
   shrink c @ End { endCmd = cmd } =
     map (\cmd' -> c { endCmd = cmd' }) (shrink cmd)
--}
+  shrink (BadComp _) = []
