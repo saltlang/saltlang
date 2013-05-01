@@ -1,8 +1,8 @@
-Name:                   argentlang
+Name:                   saltlang
 Version:                0.0.0.0
-Synopsis:               The Argent programming language.
+Synopsis:               The Salt programming language.
 Description:
-  Argent is split into a surface syntax, which focuses on usability,
+  Salt is split into a surface syntax, which focuses on usability,
   design, and software engineering concerns, and a core language,
   which focuses on semantics, type checking, soundness proofs, and
   compilation.  The surface syntax is translated into core, then type
@@ -16,7 +16,7 @@ Description:
   can be enabled or disabled for different compilation modes, allowing
   different "layers" of a system to be built using the same language.
 
-  Argent core has four kinds of objects: values, types, computations,
+  Salt core has four kinds of objects: values, types, computations,
   and propositions.  They are described more formally in the next
   section.  There are also (pure) functions over objects, as well as
   tuples, and nondetermisitic choice (all of which are themselves
@@ -52,7 +52,7 @@ Description:
   propositions).
 
   Most such descriptions use a higher-order separation logic, which we
-  are able to denote in Argent itself, using the more basic
+  are able to denote in Salt itself, using the more basic
   higher-order intuitionistic logic.
 
   Since equivalence among types and propositions is decidable,
@@ -92,7 +92,7 @@ Library
   build-depends:        base, data-hash, proglang-util, QuickCheck,
                         bound, containers, prelude-extras, mtl, hashable,
                         hashable-extras
-  exposed-modules:      Language.Argent.Core,
-                        Language.Argent.Surface.AST
-  other-modules:        Language.Argent.Core.Syntax,
-                        Language.Argent.Surface.Common
+  exposed-modules:      Language.Salt.Core,
+                        Language.Salt.Surface.AST
+  other-modules:        Language.Salt.Core.Syntax,
+                        Language.Salt.Surface.Common

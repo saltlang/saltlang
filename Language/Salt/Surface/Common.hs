@@ -17,7 +17,7 @@
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 
 -- | A module containing common structures for both AST and Syntax.
-module Language.Argent.Surface.Common(
+module Language.Salt.Surface.Common(
        ScopeClass(..)
        ) where
 

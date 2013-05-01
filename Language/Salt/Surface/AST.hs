@@ -23,7 +23,7 @@
 --
 -- Note that this structure isn't meant to be processed in any truly
 -- meaningful way.
-module Language.Argent.Surface.AST(
+module Language.Salt.Surface.AST(
        ScopeClass(..),
        Decl(..),
        Compound(..),
@@ -40,7 +40,7 @@ import Data.Hash
 import Data.Monoid hiding ((<>))
 import Data.Pos
 import Data.Traversable
-import Language.Argent.Surface.Common
+import Language.Salt.Surface.Common
 import Prelude hiding (sequence)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()

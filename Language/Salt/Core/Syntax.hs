@@ -21,7 +21,7 @@
 -- | The Salt core language.  Salt's surface syntax is transliterated
 -- into Core, which is then type-checked and compiled.  Core is
 -- generally not meant for human consumption.
-module Language.Argent.Core.Syntax(
+module Language.Salt.Core.Syntax(
        Binding(..),
        Pattern(..),
        Term(..),

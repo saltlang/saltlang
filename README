@@ -1,11 +1,11 @@
-argentlang
+saltlang
 ==========
 
-Argent:  A dependently-typed higher-order stateful concurrent language.
+Salt:  A dependently-typed higher-order stateful concurrent language.
 
 
-This repository is for the core syntax and type checking of the Argent
-programming language.  Argent is a language designed for building
+This repository is for the core syntax and type checking of the Salt
+programming language.  Salt is a language designed for building
 highly robust, verified system.  A brief overview of the features of
 the language follows:
 
@@ -31,7 +31,7 @@ the language follows:
 
 Concept-
 
-Argent is split into a surface syntax, which focuses on usability,
+Salt is split into a surface syntax, which focuses on usability,
 design, and software engineering concerns, and a core language, which
 focuses on semantics, type checking, soundness proofs, and
 compilation.  The surface syntax is translated into core, then type
@@ -45,7 +45,7 @@ The type system and language is designed such that certain features
 can be enabled or disabled for different compilation modes, allowing
 different "layers" of a system to be built using the same language.
 
-Argent core has four kinds of objects: values, types, computations,
+Salt core has four kinds of objects: values, types, computations,
 and propositions.  They are described more formally in the next
 section.  There are also (pure) functions over objects, as well as tuples,
 and nondetermisitic choice (all of which are themselves objects).
@@ -79,7 +79,7 @@ expressions).  Individual states are described using higher-order
 intuitionistic predicate logic (ie functions producing propositions).
 
 Most such descriptions use a higher-order separation logic, which we
-are able to denote in Argent itself, using the more basic higher-order
+are able to denote in Salt itself, using the more basic higher-order
 intuitionistic logic.
 
 Since equivalence among types and propositions is decidable,
@@ -111,7 +111,7 @@ assertions, or 7) ignoring them completely.
 
 Formal Semantics-
 
-Argent core consists of objects divided into four primitive semantic
+Salt core consists of objects divided into four primitive semantic
 domains: values, computations, types, and propositions, and a "hidden"
 domain of states, as well as functions, tuples/records (ie countable
 products), and nondeterministic choice (ie countable sets) over the
@@ -139,7 +139,7 @@ meaningful value.
 
 Status-
 
-Argent represents the implementation side of my (Eric McCorkle's) Ph.D
+Salt represents the implementation side of my (Eric McCorkle's) Ph.D
 dissertation.  As such, there are distinct phases of work planned.
 
 At present, I am converting and exporting an older (and much messier)
@@ -154,11 +154,6 @@ done the Right Way (tm), which probably involves calling out to FFI.
 
 Name-
 
-Argent is a somewhat archaic term for silver, which is loosely derived
-from System Implementation Language and VERification.  The word name
-"argent" is chosen over the more common "silver" for reasons similar
-to the choice of "java" over the more common "coffee", most notably a
-higher probability of easily being found in a search engine.
-
-The proper abbreviation is the chemical symbol for silver, ag (itself
-derived from argentum, the latin root).
+The term "salt" generally refers to disciplines imposed on programmers
+to prevent or reduce the probability of errors, often "syntactic
+salt".  Dependent types represent the pinnacle of such a discipline.

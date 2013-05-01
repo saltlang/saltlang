@@ -15,6 +15,6 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-module Language.Argent.Core where
+module Language.Salt.Core where
 
-import Language.Argent.Core.Syntax
+import Language.Salt.Core.Syntax
