@@ -24,12 +24,14 @@
 module Language.Salt.Core.Syntax(
        Binding(..),
        Pattern(..),
+       Case(..),
        Term(..),
        Cmd(..),
        Comp(..)
        ) where
 
 import Bound
+import Bound.ExtraInstances()
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans
@@ -39,14 +41,15 @@ import Data.Hashable
 import Data.Hashable.Extras
 import Data.Hash.ExtraInstances()
 import Data.Map(Map)
-import Data.Monoid
+import Data.Monoid(mappend, mempty)
 import Data.Pos
 import Data.Set(Set)
 import Data.Traversable
-import Prelude hiding (foldr1)
+import Prelude hiding (foldr1, foldr)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
 import Test.QuickCheck
+import Text.Format
 
 import qualified Data.Map as Map
 import qualified Data.Set as Set
@@ -61,7 +64,8 @@ data Binding b t s =
       -- | The type constructor.  For nameless records, use the
       -- "unused" symbol.
       deconstructConstructor :: !b,
-      -- | The fields in the record being bound.
+      -- | The fields in the record being bound.  Note: all fields are
+      -- given names by transliteration.
       deconstructBinds :: Map b (Binding b t s),
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
@@ -93,21 +97,31 @@ data Binding b t s =
     }
     -- | A constant.  Constrains the binding to the given value.
   | Constant (t s)
-    deriving (Ord, Eq)
 
 -- | A pattern.  Consists of a pattern and a type.  The symbol unused
 -- may occur in pattern terms, in which case it acts as a wildcard.
-data Pattern b t s =
-    Pattern {
-      -- | The pattern for binding.  This is an introduction term.
-      patternBind :: Binding b t s,
-      -- | The type being bound.  This is an introduction term, which
-      -- must be a type.
-      patternType :: Term b s,
-      -- | The position in source from which this originates.
-      patternPos :: !Pos
-    }
-    deriving (Ord, Eq)
+data Pattern bound const free =
+  Pattern {
+    -- | The pattern for binding.  This is an introduction term.
+    patternBind :: Binding bound const free,
+    -- | The type being bound.  This is an introduction term, which
+    -- must be a type.
+    patternType :: Term bound free,
+    -- | The position in source from which this originates.
+    patternPos :: !Pos
+  }
+
+-- | A case.  Consists of a pattern and a body wrapped in a scope.
+-- Used to describe functions and computations with parameters.
+data Case bound free =
+  Case {
+    -- | the pattern for this case.
+    casePat :: Pattern bound (Term bound) free,
+    -- | The body of the case.
+    caseBody :: Scope bound (Term bound) free,
+    -- | The position in source from which this originates.
+    casePos :: !Pos
+  }
 
 -- | Terms.  Represents pure terms in the language.  Terms are further
 -- subdivided into types, propositions, and elimination and
@@ -134,6 +148,8 @@ data Term b s =
       -- argument in the binding order is a degenerate scope; the
       -- remaining scopes may reference any previous arguments in the
       -- binding order, but not themselves or any future arguments.
+      -- 
+      -- Note: all fields are given names by transliteration.
       prodArgTys :: Map b (Scope b (Term b) s),
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
@@ -150,6 +166,8 @@ data Term b s =
       -- in the binding order is a degenerate scope; the remaining
       -- scopes may reference any previous elements from the binding
       -- order, but not themselves or any future scopes.
+      -- 
+      -- Note: all fields are given names by transliteration.
       sumBody :: Map b (Scope b (Term b) s),
       -- | The position in source from which this originates.
       sumTypePos :: !Pos
@@ -185,7 +203,7 @@ data Term b s =
   | Forall {
       -- | The bindings for the quantified proposition.  A list of
       -- (pattern, type) pairs.
-      forallPats :: [Pattern b (Term b) s],
+      forallPat :: Pattern b (Term b) s,
       -- | The core proposition.
       forallProp :: Scope b (Term b) s,
       -- | The position in source from which this originates.
@@ -195,7 +213,7 @@ data Term b s =
   | Exists {
       -- | The bindings for the quantified proposition.  A list of
       -- (pattern, type) pairs.
-      existsPats :: [Pattern b (Term b) s],
+      existsPat :: Pattern b (Term b) s,
       -- | The core proposition.
       existsProp :: Scope b (Term b) s,
       -- | The position in source from which this originates.
@@ -254,13 +272,13 @@ data Term b s =
     }
   -- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
-  --
+  -- 
   -- Lambdas will ultimately need to be extended to support
   -- overloading, which adds an inherent multiple dispatch ability.
   -- This is obviousy highly nontrivial to implement.
   | Lambda {
       -- | The cases describing this function's behavior.
-      lambdaCases :: [(Pattern b (Term b) s, Scope b (Term b) s)],
+      lambdaCases :: [Case b s],
       -- | The position in source from which this originates.
       lambdaPos :: !Pos
     }
@@ -279,32 +297,38 @@ data Term b s =
   -- bound to a name.  Each of the members of the group may reference
   -- eachother.
   | Fix {
-      fixComps :: Map b (Scope b (Comp b) s),
+      fixTerms :: Map b (Scope b (Term b) s),
       -- | The position in source from which this originates.
       fixPos :: !Pos
+    }
+  -- | A computation value.  This is essentially a "frozen"
+  -- computation.
+  | Comp {
+      compBody :: Comp b s,
+      -- | The position in source from which this originates.
+      compPos :: !Pos
     }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
   | BadTerm !Pos
-    deriving (Ord, Eq)
 
 -- | Commands.  These represent individual statements, or combinations
 -- thereof, which do not bind variables.
---
+-- 
 -- We don't need alot of control flow structures.  Loops are handled
 -- by the Fix structure, conditionals are handled by the pattern
 -- matching inherent in Lambdas.  Widening and narrowing (ie typecase
 -- and downcast) can be effectively handled by adding a multiple
 -- dispatch capability).
---
+-- 
 -- The Core-to-LLVM compiler should therefore be smart enough to
 -- figure out when it can implement a Fix as a loop, and when it can
 -- inline lambdas, and when it can figure out dispatch decisions
 -- statically.  This is also desirable in its own right.
-data Cmd b s =
+data Cmd bound free =
     Value {
       -- | The term representing the value of this command
-      valTerm :: Term b s,
+      valTerm :: Term bound free,
       -- | The position in source from which this originates.
       valPos :: !Pos
     }
@@ -312,64 +336,55 @@ data Cmd b s =
   -- computations produced by terms.
   | Eval {
       -- | The computation value to evaluate
-      evalTerm :: Term b s,
+      evalTerm :: Term bound free,
       -- | The position in source from which this originates.
       evalPos :: !Pos
     }
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
   | BadCmd !Pos
-    deriving (Ord, Eq)
 
--- | Computations.  Semantically, computations are generators for
+-- | Computations. Semantically, computations are generators for
 -- sequences of atomic actions, which are not guaranteed to terminate,
 -- or even run without error (in the case of unverified computations.
 -- In terms of programming language structures, they represent
 -- higher-order stateful procedures.
---
+-- 
 -- Obviously, computations do not admit decidable equality.
---
+-- 
 -- A raw computation is something akin to a function taking void in C,
--- or a monad in Haskell.  Stateful functions with arguments are
+-- or a monad in Haskell. Stateful functions with arguments are
 -- modeled as regular functions which produce a computation.
-data Comp b s =
+data Comp bound free =
   -- | A sequential composition of terms.
     Seq {
       -- | The pattern to which to bind the result of seqCmd.
-      seqPat :: Pattern b (Term b) s,
+      seqPat :: Pattern bound (Term bound) free,
       -- | The command to execute.
-      seqCmd :: Cmd b s,
+      seqCmd :: Cmd bound free,
       -- | The next computation to execute.
-      seqNext :: Comp b s,
+      seqNext :: Scope bound (Comp bound) free,
       -- | The position in source from which this originates.
       seqPos :: !Pos
     }
-  -- | Result of a computation.  This is always the end of a sequence.
+  -- | Result of a computation. This is always the end of a sequence.
   | End {
       -- | The command to run to produce a result.
-      endCmd :: Cmd b s,
+      endCmd :: Cmd bound free,
       -- | The position in source from which this originates.
       endPos :: !Pos
     }
   -- | Placeholder for a malformed computation, allowing type checking
   -- to continue in spite of errors.
   | BadComp !Pos
-    deriving (Ord, Eq)
 
+-- The equality and comparison functions ignore position
 eqBinds :: (Default b, Eq b, Eq s, Eq1 t) =>
            [(b, Binding b t s)] -> [(b, Binding b t s)] -> Bool
 eqBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
   (name1 == name2) && (bind1 ==# bind2) && eqBinds binds1 binds2
 eqBinds [] [] = True
 eqBinds _ _ = False
-
-eqCases :: (Default b, Eq b, Eq s, Eq1 t, Monad t) =>
-           [(Pattern b t s, Scope b t s)] ->
-           [(Pattern b t s, Scope b t s)] -> Bool
-eqCases ((pat1, body1) : cases1) ((pat2, body2) : cases2) =
-  (pat1 ==# pat2) && (body1 ==# body2) && eqCases cases1 cases2
-eqCases [] [] = True
-eqCases _ _ = False
 
 compareBinds :: (Default b, Ord b, Ord s, Ord1 t) =>
                 [(b, Binding b t s)] -> [(b, Binding b t s)] -> Ordering
@@ -382,19 +397,6 @@ compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
 compareBinds [] [] = EQ
 compareBinds [] _ = LT
 compareBinds _ [] = GT
-
-compareCases :: (Default b, Ord b, Ord s, Ord1 t, Monad t) =>
-                [(Pattern b t s, Scope b t s)] ->
-                [(Pattern b t s, Scope b t s)] -> Ordering
-compareCases ((pat1, body1) : cases1) ((pat2, body2) : cases2) =
-  case compare1 pat1 pat2 of
-    EQ -> case compare1 body1 body2 of
-      EQ -> compareCases cases1 cases2
-      out -> out
-    out -> out
-compareCases [] [] = EQ
-compareCases [] _ = LT
-compareCases _ [] = GT
 
 instance (Default b, Eq b, Eq1 t) => Eq1 (Binding b t) where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
@@ -415,6 +417,11 @@ instance (Default b, Eq b, Eq1 t) => Eq1 (Pattern b t) where
     Pattern { patternBind = bind2, patternType = ty2 } =
       (bind1 ==# bind2) && (ty1 ==# ty2)
 
+instance (Default b, Eq b) => Eq1 (Case b) where
+  Case { casePat = pat1, caseBody = body1 } ==#
+    Case { casePat = pat2, caseBody = body2 } =
+    pat1 ==# pat2 && body1 ==# body2
+
 instance (Default b, Eq b) => Eq1 (Term b) where
   ProdType { prodBindOrder = bindord1, prodArgTys = argtys1,
              prodRetTy = retty1 } ==#
@@ -430,11 +437,11 @@ instance (Default b, Eq b) => Eq1 (Term b) where
   CompType { compPat = pat1, compSpec = spec1 } ==#
     CompType { compPat = pat2, compSpec = spec2 } =
       (pat1 ==# pat2) && (spec1 ==# spec2)
-  Forall { forallPats = pats1, forallProp = prop1 } ==#
-    Forall { forallPats = pats2, forallProp = prop2 } =
+  Forall { forallPat = pats1, forallProp = prop1 } ==#
+    Forall { forallPat = pats2, forallProp = prop2 } =
       (pats1 ==# pats2) && (prop1 ==# prop2)
-  Exists { existsPats = pats1, existsProp = prop1 } ==#
-    Exists { existsPats = pats2, existsProp = prop2 } =
+  Exists { existsPat = pats1, existsProp = prop1 } ==#
+    Exists { existsPat = pats2, existsProp = prop2 } =
       (pats1 ==# pats2) && (prop1 ==# prop2)
   Call { callArgs = args1, callFunc = func1 } ==#
     Call { callArgs = args2, callFunc = func2 } =
@@ -447,9 +454,10 @@ instance (Default b, Eq b) => Eq1 (Term b) where
     Eta { etaTerm = term2, etaType = ty2 } =
       (term1 ==# term2) && (ty1 ==# ty2)
   Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
-    eqCases cases1 cases2
+    cases1 == cases2
   Record { recVals = vals1 } ==# Record { recVals = vals2 } = vals1 ==# vals2
-  Fix { fixComps = comps1 } ==# Fix { fixComps = comps2 } = comps1 ==# comps2
+  Fix { fixTerms = terms1 } ==# Fix { fixTerms = terms2 } = terms1 ==# terms2
+  Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
   BadTerm _ ==# BadTerm _ = True
   _ ==# _ = False
 
@@ -466,6 +474,13 @@ instance (Default b, Eq b) => Eq1 (Comp b) where
   End { endCmd = cmd1 } ==# End { endCmd = cmd2 } = cmd1 ==# cmd2
   BadComp _ ==# BadComp _ = True
   _ ==# _ = False
+
+instance (Default b, Eq b, Eq s, Eq1 t) => Eq (Binding b t s) where (==) = (==#)
+instance (Default b, Eq b, Eq s, Eq1 t) => Eq (Pattern b t s) where (==) = (==#)
+instance (Default b, Eq b, Eq s) => Eq (Case b s) where (==) = (==#)
+instance (Default b, Eq b, Eq s) => Eq (Term b s) where (==) = (==#)
+instance (Default b, Eq b, Eq s) => Eq (Cmd b s) where (==) = (==#)
+instance (Default b, Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
 
 instance (Default b, Ord b, Ord1 t) => Ord1 (Binding b t) where
   compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
@@ -497,6 +512,13 @@ instance (Default b, Ord b, Ord1 t) => Ord1 (Pattern b t) where
            Pattern { patternBind = bind2, patternType = ty2 } =
     case compare1 bind1 bind2 of
       EQ -> compare ty1 ty2
+      out -> out
+
+instance (Default b, Ord b) => Ord1 (Case b) where
+  compare1 Case { casePat = pat1, caseBody = body1 }
+           Case { casePat = pat2, caseBody = body2 } =
+    case compare1 pat1 pat2 of
+      EQ -> compare body1 body2
       out -> out
 
 instance (Default b, Ord b) => Ord1 (Term b) where
@@ -532,15 +554,15 @@ instance (Default b, Ord b) => Ord1 (Term b) where
       out -> out
   compare1 CompType {} _ = GT
   compare1 _ CompType {} = LT
-  compare1 Forall { forallPats = pats1, forallProp = prop1 }
-           Forall { forallPats = pats2, forallProp = prop2 } =
+  compare1 Forall { forallPat = pats1, forallProp = prop1 }
+           Forall { forallPat = pats2, forallProp = prop2 } =
     case compare1 pats1 pats2 of
       EQ -> compare1 prop1 prop2
       out -> out
   compare1 Forall {} _ = GT
   compare1 _ Forall {} = LT
-  compare1 Exists { existsPats = pats1, existsProp = prop1 }
-           Exists { existsPats = pats2, existsProp = prop2 } =
+  compare1 Exists { existsPat = pats1, existsProp = prop1 }
+           Exists { existsPat = pats2, existsProp = prop2 } =
     case compare1 pats1 pats2 of
        EQ -> compare1 prop1 prop2
        out -> out
@@ -571,17 +593,21 @@ instance (Default b, Ord b) => Ord1 (Term b) where
   compare1 Eta {} _ = GT
   compare1 _ Eta {} = LT
   compare1 Lambda { lambdaCases = cases1 } Lambda { lambdaCases = cases2 } =
-    compareCases cases1 cases2
+    compare1 cases1 cases2
   compare1 Lambda {} _ = GT
   compare1 _ Lambda {} = LT
   compare1 Record { recVals = vals1 } Record { recVals = vals2 } =
     compare1 vals1 vals2
   compare1 Record {} _ = GT
   compare1 _ Record {} = LT
-  compare1 Fix { fixComps = comps1 } Fix { fixComps = comps2 } =
-    compare1 comps1 comps2
+  compare1 Fix { fixTerms = terms1 } Fix { fixTerms = terms2 } =
+    compare1 terms1 terms2
   compare1 Fix {} _ = GT
   compare1 _ Fix {} = LT
+  compare1 Comp { compBody = body1 } Comp { compBody = body2 } =
+    compare1 body1 body2
+  compare1 Comp {} _ = GT
+  compare1 _ Comp {} = LT
   compare1 (BadTerm _) (BadTerm _) = EQ
 
 instance (Default b, Ord b) => Ord1 (Cmd b) where
@@ -610,6 +636,15 @@ instance (Default b, Ord b) => Ord1 (Comp b) where
   compare1 _ End {} = LT
   compare1 (BadComp _) (BadComp _) = EQ
 
+instance (Default b, Ord b, Ord s, Ord1 t) => Ord (Binding b t s) where
+  compare = compare1
+instance (Default b, Ord b, Ord s, Ord1 t) => Ord (Pattern b t s) where
+  compare = compare1
+instance (Default b, Ord b, Ord s) => Ord (Case b s) where compare = compare1
+instance (Default b, Ord b, Ord s) => Ord (Term b s) where compare = compare1
+instance (Default b, Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
+instance (Default b, Ord b, Ord s) => Ord (Comp b s) where compare = compare1
+
 instance Position (t s) => Position (Binding b t s) where
   pos Deconstruct { deconstructPos = p } = p
   pos As { asPos = p } = p
@@ -618,6 +653,9 @@ instance Position (t s) => Position (Binding b t s) where
 
 instance Position (Pattern b t s) where
   pos Pattern { patternPos = p } = p
+
+instance Position (Case b s) where
+  pos Case { casePos = p } = p
 
 instance Position (Term b s) where
   pos ProdType { prodTypePos = p } = p
@@ -633,6 +671,7 @@ instance Position (Term b s) where
   pos Lambda { lambdaPos = p } = p
   pos Record { recPos = p } = p
   pos Fix { fixPos = p } = p
+  pos Comp { compPos = p } = p
   pos (BadTerm p) = p
 
 instance Position (Cmd b s) where
@@ -661,6 +700,10 @@ instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
   hashWithSalt1 s Pattern { patternBind = term, patternType = ty } =
     s `hashWithSalt1` term `hashWithSalt1` ty
 
+instance (Default b, Hashable b) => Hashable1 (Case b) where
+  hashWithSalt1 s Case { casePat = pat, caseBody = body } =
+    s `hashWithSalt1` pat `hashWithSalt1` body
+
 instance (Default b, Hashable b) => Hashable1 (Term b) where
   hashWithSalt1 s ProdType { prodBindOrder = bindord, prodArgTys = argtys,
                              prodRetTy = retty } =
@@ -672,9 +715,9 @@ instance (Default b, Hashable b) => Hashable1 (Term b) where
     s `hashWithSalt` (3 :: Int) `hashWithSalt1` pat `hashWithSalt1` prop
   hashWithSalt1 s CompType { compPat = pat, compSpec = spec } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt1` pat `hashWithSalt1` spec
-  hashWithSalt1 s Forall { forallPats = pats, forallProp = prop } =
+  hashWithSalt1 s Forall { forallPat = pats, forallProp = prop } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt1` pats `hashWithSalt1` prop
-  hashWithSalt1 s Exists { existsPats = pats, existsProp = prop } =
+  hashWithSalt1 s Exists { existsPat = pats, existsProp = prop } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt1` pats `hashWithSalt1` prop
   hashWithSalt1 s Call { callArgs = args, callFunc = func } =
     s `hashWithSalt` (7 :: Int) `hashWithSalt1` args `hashWithSalt1` func
@@ -688,8 +731,10 @@ instance (Default b, Hashable b) => Hashable1 (Term b) where
     s `hashWithSalt` (11 :: Int) `hashWithSalt1` cases
   hashWithSalt1 s Record { recVals = vals } =
     s `hashWithSalt` (12 :: Int) `hashWithSalt1` vals
-  hashWithSalt1 s Fix { fixComps = comps } =
-    s `hashWithSalt` (13 :: Int) `hashWithSalt1` comps
+  hashWithSalt1 s Fix { fixTerms = terms } =
+    s `hashWithSalt` (13 :: Int) `hashWithSalt1` terms
+  hashWithSalt1 s Comp { compBody = body } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt1` body
   hashWithSalt1 s (BadTerm _) = s `hashWithSalt` (0 :: Int)
 
 instance (Default b, Hashable b) => Hashable1 (Cmd b) where
@@ -715,6 +760,9 @@ instance (Default b, Hashable b, Hashable1 t, Hashable s) =>
          Hashable (Pattern b t s) where
   hashWithSalt = hashWithSalt1
 
+instance (Default b, Hashable b, Hashable s) => Hashable (Case b s) where
+  hashWithSalt = hashWithSalt1
+
 instance (Default b, Hashable b, Hashable s) => Hashable (Term b s) where
   hashWithSalt = hashWithSalt1
 
@@ -735,6 +783,10 @@ instance Functor t => Functor (Pattern b t) where
   fmap f p @ Pattern { patternBind = term, patternType = ty } =
     p { patternBind = fmap f term, patternType = fmap f ty }
 
+instance Functor (Case b) where
+  fmap f c @ Case { casePat = pat, caseBody = body } =
+    c { casePat = fmap f pat, caseBody = fmap f body }
+
 instance Functor (Term b) where
   fmap f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
     t { prodArgTys = fmap (fmap f) argtys, prodRetTy = fmap f retty }
@@ -743,10 +795,10 @@ instance Functor (Term b) where
     t { refinePat = fmap f pat, refineProp = fmap f prop }
   fmap f t @ CompType { compPat = pat, compSpec = spec } =
     t { compPat = fmap f pat, compSpec = fmap f spec }
-  fmap f t @ Forall { forallPats = pats, forallProp = prop } =
-    t { forallPats = fmap (fmap f) pats, forallProp = fmap f prop }
-  fmap f t @ Exists { existsPats = pats, existsProp = prop } =
-    t { existsPats = fmap (fmap f) pats, existsProp = fmap f prop }
+  fmap f t @ Forall { forallPat = pats, forallProp = prop } =
+    t { forallPat = fmap f pats, forallProp = fmap f prop }
+  fmap f t @ Exists { existsPat = pats, existsProp = prop } =
+    t { existsPat = fmap f pats, existsProp = fmap f prop }
   fmap f t @ Call { callArgs = args, callFunc = func } =
     t { callArgs = fmap (fmap f) args, callFunc = fmap f func }
   fmap f t @ Var { varSym = sym } = t { varSym = f sym }
@@ -755,10 +807,11 @@ instance Functor (Term b) where
   fmap f t @ Eta { etaTerm = term, etaType = ty } =
     t { etaTerm = fmap f term, etaType = fmap f ty }
   fmap f t @ Lambda { lambdaCases = cases } =
-    t { lambdaCases = fmap (\(pat, body) -> (fmap f pat, fmap f body)) cases }
+    t { lambdaCases = fmap (fmap f) cases }
   fmap f t @ Record { recVals = vals } = t { recVals = fmap (fmap f) vals }
-  fmap f t @ Fix { fixComps = comps } = t { fixComps = fmap (fmap f) comps }
-  fmap _ (BadTerm p) = (BadTerm p)
+  fmap f t @ Fix { fixTerms = terms } = t { fixTerms = fmap (fmap f) terms }
+  fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
+  fmap _ (BadTerm p) = BadTerm p
 
 instance Functor (Cmd b) where
   fmap f c @ Eval { evalTerm = term } = c { evalTerm = fmap f term }
@@ -775,11 +828,15 @@ instance Foldable t => Foldable (Binding b t) where
   foldMap f Deconstruct { deconstructBinds = binds } = foldMap (foldMap f) binds
   foldMap f As { asBind = bind } = foldMap f bind
   foldMap f (Constant t) = foldMap f t
-  foldMap _ _ = mempty
+  foldMap _ Name {} = mempty
 
 instance Foldable t => Foldable (Pattern b t) where
   foldMap f Pattern { patternBind = term, patternType = ty } =
     foldMap f term `mappend` foldMap f ty
+
+instance Foldable (Case b) where
+  foldMap f Case { casePat = pat, caseBody = body } =
+    foldMap f pat `mappend` foldMap f body
 
 instance Foldable (Term b) where
   foldMap f ProdType { prodArgTys = argtys, prodRetTy = retty } =
@@ -789,10 +846,10 @@ instance Foldable (Term b) where
     foldMap f pat `mappend` foldMap f prop
   foldMap f CompType { compPat = pat, compSpec = spec } =
     foldMap f pat `mappend` foldMap f spec
-  foldMap f Forall { forallPats = pats, forallProp = prop } =
-    foldMap (foldMap f) pats `mappend` foldMap f prop
-  foldMap f Exists { existsPats = pats, existsProp = prop } =
-    foldMap (foldMap f) pats `mappend` foldMap f prop
+  foldMap f Forall { forallPat = pats, forallProp = prop } =
+    foldMap f pats `mappend` foldMap f prop
+  foldMap f Exists { existsPat = pats, existsProp = prop } =
+    foldMap f pats `mappend` foldMap f prop
   foldMap f Call { callArgs = args, callFunc = func } =
     foldMap (foldMap f) args `mappend` foldMap f func
   foldMap f Var { varSym = sym } = f sym
@@ -800,22 +857,22 @@ instance Foldable (Term b) where
     foldMap f term `mappend` foldMap f ty
   foldMap f Eta { etaTerm = term, etaType = ty } =
     foldMap f term `mappend` foldMap f ty
-  foldMap f Lambda { lambdaCases = cases } =
-    foldMap (\(pat, body) -> foldMap f pat `mappend` foldMap f body) cases
+  foldMap f Lambda { lambdaCases = cases } = foldMap (foldMap f) cases
   foldMap f Record { recVals = vals } = foldMap (foldMap f) vals
-  foldMap f Fix { fixComps = comps } = foldMap (foldMap f) comps
-  foldMap _ _ = mempty
+  foldMap f Fix { fixTerms = terms } = foldMap (foldMap f) terms
+  foldMap f Comp { compBody = body } = foldMap f body
+  foldMap _ (BadTerm _) = mempty
 
 instance Foldable (Cmd b) where
   foldMap f Value { valTerm = term } = foldMap f term
   foldMap f Eval { evalTerm = term } = foldMap f term
-  foldMap _ _ = mempty
+  foldMap _ (BadCmd _) = mempty
 
 instance Foldable (Comp b) where
   foldMap f Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
     foldMap f pat `mappend` foldMap f cmd `mappend` foldMap f next
   foldMap f End { endCmd = cmd } = foldMap f cmd
-  foldMap _ _ = mempty
+  foldMap _ (BadComp _) = mempty
 
 instance Traversable t => Traversable (Binding b t) where
   traverse f b @ Deconstruct { deconstructBinds = binds } =
@@ -831,6 +888,11 @@ instance Traversable t => Traversable (Pattern b t) where
     (\term' ty' -> p { patternBind = term', patternType = ty' }) <$>
       traverse f term <*> traverse f ty
 
+instance Traversable (Case b) where
+  traverse f c @ Case { casePat = pat, caseBody = body } =
+    (\pat' body' -> c { casePat = pat', caseBody = body' }) <$>
+      traverse f pat <*> traverse f body
+
 instance Traversable (Term b) where
   traverse f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
     (\argtys' retty' -> t { prodArgTys = argtys', prodRetTy = retty' }) <$>
@@ -843,12 +905,12 @@ instance Traversable (Term b) where
   traverse f t @ CompType { compPat = pat, compSpec = spec } =
     (\pat' spec' -> t { compPat = pat', compSpec = spec' }) <$>
       traverse f pat <*> traverse f spec
-  traverse f t @ Forall { forallPats = pats, forallProp = prop } =
-    (\pats' prop' -> t { forallPats = pats', forallProp = prop' }) <$>
-      traverse (traverse f) pats <*> traverse f prop
-  traverse f t @ Exists { existsPats = pats, existsProp = prop } =
-    (\pats' prop' -> t { existsPats = pats', existsProp = prop' }) <$>
-      traverse (traverse f) pats <*> traverse f prop
+  traverse f t @ Forall { forallPat = pats, forallProp = prop } =
+    (\pats' prop' -> t { forallPat = pats', forallProp = prop' }) <$>
+      traverse f pats <*> traverse f prop
+  traverse f t @ Exists { existsPat = pats, existsProp = prop } =
+    (\pats' prop' -> t { existsPat = pats', existsProp = prop' }) <$>
+      traverse f pats <*> traverse f prop
   traverse f t @ Call { callArgs = args, callFunc = func } =
     (\args' func' -> t { callArgs = args', callFunc = func' }) <$>
       traverse (traverse f) args <*> traverse f func
@@ -861,13 +923,13 @@ instance Traversable (Term b) where
     (\term' ty' -> t { etaTerm = term', etaType = ty' }) <$>
       traverse f term <*> traverse f ty
   traverse f t @ Lambda { lambdaCases = cases } =
-    (\cases' -> t { lambdaCases = cases' }) <$>
-      traverse (\(pat, body) -> (\pat' body' -> (pat', body')) <$>
-                 traverse f pat <*> traverse f body) cases
+    (\cases' -> t { lambdaCases = cases' }) <$> traverse (traverse f) cases
   traverse f t @ Record { recVals = vals } =
     (\vals' -> t { recVals = vals' }) <$> traverse (traverse f) vals
-  traverse f t @ Fix { fixComps = comps } =
-    (\comps' -> t { fixComps = comps' }) <$> traverse (traverse f) comps
+  traverse f t @ Fix { fixTerms = terms } =
+    (\terms' -> t { fixTerms = terms' }) <$> traverse (traverse f) terms
+  traverse f c @ Comp { compBody = body } =
+    (\body' -> c { compBody = body' }) <$> traverse f body
   traverse _ (BadTerm p) = pure (BadTerm p)
 
 instance Traversable (Cmd b) where
@@ -885,7 +947,10 @@ instance Traversable (Comp b) where
   traverse f c @ End { endCmd = cmd } =
     (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
   traverse _ (BadComp p) = pure (BadComp p)
-
+{-
+liftpos :: Pos
+liftpos = internal "Monad transformer lift"
+-}
 injectpos :: Pos
 injectpos = internal "Monad return"
 
@@ -915,6 +980,10 @@ patSubstTerm :: Default c => (a -> Term c b) -> Pattern c (Term c) a ->
 patSubstTerm f p @ Pattern { patternBind = bind, patternType = ty } =
   p { patternBind = bind >>>= f, patternType = ty >>= f }
 
+caseSubstTerm :: Default c => (a -> Term c b) -> Case c a -> Case c b
+caseSubstTerm f c @ Case { casePat = pat, caseBody = body } =
+  c { casePat = patSubstTerm f pat, caseBody = body >>>= f }
+
 cmdSubstTerm :: Default c => (a -> Term c b) -> Cmd c a -> Cmd c b
 cmdSubstTerm f c @ Value { valTerm = term } = c { valTerm = term >>= f }
 cmdSubstTerm f c @ Eval { evalTerm = term } = c { evalTerm = term >>= f }
@@ -923,7 +992,7 @@ cmdSubstTerm _ (BadCmd p) = BadCmd p
 compSubstTerm :: Default c => (a -> Term c b) -> Comp c a -> Comp c b
 compSubstTerm f c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
   c { seqPat = patSubstTerm f pat, seqCmd = cmdSubstTerm f cmd,
-      seqNext = compSubstTerm f next }
+      seqNext = next >>>= compSubstTerm f . return }
 compSubstTerm f c @ End { endCmd = cmd } =
   c { endCmd = cmdSubstTerm f cmd }
 compSubstTerm _ (BadComp p) = BadComp p
@@ -933,27 +1002,25 @@ instance Default b => Monad (Term b) where
 
   t @ ProdType { prodArgTys = argtys, prodRetTy = retty } >>= f =
     t { prodArgTys = fmap (>>>= f) argtys, prodRetTy = retty >>>= f }
-  t @ SumType { sumBody = body } >>= f =
-    t { sumBody = fmap (>>>= f) body }
+  t @ SumType { sumBody = body } >>= f = t { sumBody = fmap (>>>= f) body }
   t @ RefineType { refinePat = pat, refineProp = prop } >>= f =
     t { refinePat = patSubstTerm f pat, refineProp = prop >>>= f }
   t @ CompType { compPat = pat, compSpec = spec } >>= f =
     t { compPat = patSubstTerm f pat, compSpec = spec >>>= f }
-  t @ Forall { forallPats = pats, forallProp = prop } >>= f =
-    t { forallPats = fmap (patSubstTerm f) pats, forallProp = prop >>>= f }
-  t @ Exists { existsPats = pats, existsProp = prop } >>= f =
-    t { existsPats = fmap (patSubstTerm f) pats, existsProp = prop >>>= f }
+  t @ Forall { forallPat = pats, forallProp = prop } >>= f =
+    t { forallPat = patSubstTerm f pats, forallProp = prop >>>= f }
+  t @ Exists { existsPat = pats, existsProp = prop } >>= f =
+    t { existsPat = patSubstTerm f pats, existsProp = prop >>>= f }
   t @ Call { callArgs = args, callFunc = func } >>= f =
     t { callArgs = fmap (>>= f) args, callFunc = func >>= f }
   Var { varSym = sym } >>= f = f sym
   t @ Typed { typedTerm = term, typedType = ty } >>= f =
     t { typedTerm = term >>= f, typedType = ty >>= f }
   t @ Lambda { lambdaCases = cases } >>= f =
-    t { lambdaCases = fmap (\(pat, body) -> (patSubstTerm f pat,
-                                             body >>>= f)) cases }
+    t { lambdaCases = fmap (caseSubstTerm f) cases }
   t @ Record { recVals = vals } >>= f = t { recVals = fmap (>>= f) vals }
-  t @ Fix { fixComps = comps } >>= f =
-    t { fixComps = fmap (>>>= compSubstTerm f . return) comps }
+  t @ Fix { fixTerms = terms } >>= f = t { fixTerms = fmap (>>>= f) terms }
+  t @ Comp { compBody = body } >>= f = t { compBody = compSubstTerm f body }
   t @ Eta { etaTerm = term, etaType = ty } >>= f =
     t { etaTerm = term >>= f, etaType = ty >>= f }
   BadTerm p >>= _ = BadTerm p
@@ -967,11 +1034,15 @@ bindSubstComp f b @ As { asBind = bind } =
 bindSubstComp _ b @ Name { nameSym = name } = b { nameSym = name }
 bindSubstComp f (Constant t) = Constant (termSubstComp f t)
 
-
 patSubstComp :: Default c => (a -> Comp c b) -> Pattern c (Term c) a ->
                 Pattern c (Term c) b
 patSubstComp f p @ Pattern { patternBind = bind, patternType = ty } =
   p { patternBind = bindSubstComp f bind, patternType = termSubstComp f ty }
+
+caseSubstComp :: Default c => (a -> Comp c b) -> Case c a -> Case c b
+caseSubstComp f c @ Case { casePat = pat, caseBody = body } =
+  c { caseBody = body >>>= termSubstComp f . return,
+      casePat = patSubstComp f pat }
 
 termSubstComp :: Default c => (a -> Comp c b) -> Term c a -> Term c b
 termSubstComp f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
@@ -985,30 +1056,28 @@ termSubstComp f t @ RefineType { refinePat = pat, refineProp = prop } =
 termSubstComp f t @ CompType { compPat = pat, compSpec = spec } =
   t { compSpec = spec >>>= termSubstComp f . return,
       compPat = patSubstComp f pat }
-termSubstComp f t @ Forall { forallPats = pats, forallProp = prop } =
+termSubstComp f t @ Forall { forallPat = pats, forallProp = prop } =
   t { forallProp = prop >>>= termSubstComp f . return,
-      forallPats = fmap (patSubstComp f) pats }
-termSubstComp f t @ Exists { existsPats = pats, existsProp = prop } =
+      forallPat = patSubstComp f pats }
+termSubstComp f t @ Exists { existsPat = pats, existsProp = prop } =
   t { existsProp = prop >>>= termSubstComp f . return,
-      existsPats = fmap (patSubstComp f) pats }
+      existsPat = patSubstComp f pats }
 termSubstComp f t @ Call { callArgs = args, callFunc = func } =
   t { callArgs = fmap (>>= termSubstComp f . return) args,
       callFunc = func >>= termSubstComp f . return }
 termSubstComp f Var { varSym = sym } =
-  Fix { fixComps = Map.singleton defaultVal (abstract (\_ -> Nothing) (f sym)),
-        fixPos = substpos }
+  Comp { compBody = f sym, compPos = substpos }
 termSubstComp f t @ Typed { typedTerm = term, typedType = ty } =
   t { typedTerm = termSubstComp f term, typedType = termSubstComp f ty }
 termSubstComp f t @ Lambda { lambdaCases = cases } =
-  t { lambdaCases = fmap (\(pat, body) -> (patSubstComp f pat,
-                                           body >>>= termSubstComp f . return))
-                         cases }
+  t { lambdaCases = fmap (caseSubstComp f) cases }
 termSubstComp f t @ Record { recVals = vals } =
   t { recVals = fmap (termSubstComp f) vals }
-termSubstComp f t @ Fix { fixComps = comps } =
-  t { fixComps = fmap (>>>= f) comps }
+termSubstComp f t @ Fix { fixTerms = terms } =
+  t { fixTerms = fmap (>>>= termSubstComp f . return) terms }
 termSubstComp f t @ Eta { etaTerm = term, etaType = ty } =
-    t { etaTerm = termSubstComp f term, etaType = termSubstComp f ty }
+  t { etaTerm = termSubstComp f term, etaType = termSubstComp f ty }
+termSubstComp f t @ Comp { compBody = body } = t { compBody = body >>= f }
 termSubstComp _ (BadTerm p) = BadTerm p
 
 cmdSubstComp :: Default c => (a -> Comp c b) -> Cmd c a -> Cmd c b
@@ -1024,11 +1093,12 @@ instance Default b => Monad (Comp b) where
                            valPos = injectpos },
           endPos = injectpos}
   c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
-    c { seqPat = patSubstComp f pat, seqNext = next >>= f,
+    c { seqPat = patSubstComp f pat, seqNext = next >>>= f,
         seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
+{-
 arbitraryPos :: Pos
 arbitraryPos = internal "arbitrary"
 
@@ -1249,3 +1319,114 @@ instance (Ord s, Arbitrary s) => Arbitrary (Comp s s) where
   shrink c @ End { endCmd = cmd } =
     map (\cmd' -> c { endCmd = cmd' }) (shrink cmd)
   shrink (BadComp _) = []
+-}
+getBind :: Ord a => Map a b -> a -> (a, b)
+getBind m k =
+  case Map.lookup k m of
+    Just v -> (k, v)
+    Nothing -> error "Binding not found in map"
+
+formatBind :: (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
+              (b, t s) -> Doc
+formatBind (name, bind) = hang bind 2 ("as" <+> name)
+
+instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
+         Format (Binding b t s) where
+  format Deconstruct { deconstructConstructor = constructor,
+                       deconstructBinds = binds,
+                       deconstructStrict = strict } =
+    let
+      bindDocs = map formatBind (Map.assocs binds)
+      withStrict = if strict then bindDocs else bindDocs ++ [format "..."]
+    in if defaultVal /= constructor
+      then parenList constructor withStrict
+      else lparen <> (nest 2 (sep (punctuate comma withStrict))) <> rparen
+  format As { asBind = bind, asName = name } =
+    hang bind 2 ("as" <+> format name)
+  format Name { nameSym = sym } = format sym
+  format (Constant t) =   block 2 ("val" <+> lparen) (format t) rparen
+
+instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
+         Format (Pattern b t s) where
+  format Pattern { patternBind = binds, patternType = ty } =
+    hang (lparen <> binds <> rparen <+> colon) 2 (lparen <> ty <> rparen)
+
+instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
+  format ProdType { prodBindOrder = order, prodArgTys = args,
+                    prodRetTy = ret } =
+    let
+      args' = map (formatBind . getBind args) order
+      argsDoc = lparen <> (nest 1 (sep (punctuate comma args'))) <> rparen
+    in
+      hang (argsDoc <+> "->") 2 (lparen <> format ret <> rparen)
+  format SumType { sumBindOrder = order, sumBody = body } =
+    let
+      args' = map (formatBind . getBind body) order
+    in
+      lparen <> (nest 1 (sep (punctuate comma args'))) <> rparen
+  format RefineType { refinePat = pat, refineProp = prop } =
+    let
+      patDoc = lparen <> format pat <> rparen
+      propDoc = lparen <> format prop <> rparen
+    in
+      hang patDoc 2 ("where" <+> propDoc)
+  format CompType { compPat = pat, compSpec = spec } =
+    let
+      patDoc = lparen <> format pat <> rparen
+      propDoc = lparen <> format spec <> rparen
+    in
+      hang patDoc 2 ("with spec" <+> propDoc)
+  format Forall { forallPat = pat, forallProp = prop } =
+    let
+      headDoc = block 2 ("forall" <+> lparen) pat rparen
+      propDoc = lparen <> format prop <> rparen
+    in
+      hang headDoc 2 propDoc
+  format Exists { existsPat = pat, existsProp = prop } =
+    let
+      headDoc = block 2 ("exists" <+> lparen) pat rparen
+      propDoc = lparen <> format prop <> rparen
+    in
+      hang headDoc 2 propDoc
+  format Call { callFunc = func, callArgs = args } =
+    parenList func (map formatBind (Map.assocs args))
+  format Var { varSym = sym } = format sym
+  format Typed { typedTerm = term, typedType = ty } =
+    hang (lparen <> term <> rparen <+> colon) 2 (lparen <> ty <> rparen)
+  format Lambda { lambdaCases = cases } =
+    let
+      formatCase Case { casePat = pat, caseBody = body } =
+        hang (pat <+> equals) 2 body
+    in
+      "fun" <+> (nest 2 (sep (punctuate "|" (map formatCase cases))))
+  format Record { recVals = vals } =
+    let
+      valDocs = map formatBind (Map.assocs vals)
+    in
+      lparen <> (nest 1 (sep (punctuate comma valDocs))) <> rparen
+  format Fix { fixTerms = terms } =
+    let
+      mapfun False (name, term) = hang (name <+> equals) 2 term
+      mapfun True (name, term) = hang ("and" <+> name <+> equals) 2 term
+
+    in case Map.assocs terms of
+      first : rest -> sep (mapfun False first : map (mapfun True) rest)
+      [] -> error "Empty mutually recursive binding list"
+  format Comp { compBody = body } =
+    block 2 lbrace (sep (punctuate semi (formatList body))) rbrace
+  format Eta { etaType = ty, etaTerm = term } =
+    hang ("eta" <+> lparen <> term <> rparen <+> colon) 2
+      (lparen <> ty <> rparen)
+  format (BadTerm _) = format "<bad term>"
+
+instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Cmd b s) where
+  format Value { valTerm = term } = format term
+  format Eval { evalTerm = term } = "eval" <+> term
+  format (BadCmd _) = format "<bad command>"
+
+instance (Default b, Ord b, Eq b, Format b, Format s) =>
+         FormatList (Comp b s) where
+  formatList Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
+    (pat <+> equals <+> cmd) : formatList next
+  formatList End { endCmd = cmd } = [ format cmd ]
+  formatList (BadComp _) = [ format "<bad comp>" ]
