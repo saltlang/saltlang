@@ -20,7 +20,7 @@
 -- | The Abstract Syntax Tree, as yielded by a parser.  This is
 -- rendered into surface syntax by Collect, which gathers all entries
 -- into a table.
---
+-- 
 -- Note that this structure isn't meant to be processed in any truly
 -- meaningful way.
 module Language.Salt.Surface.AST(
@@ -49,9 +49,7 @@ import Text.Format
 
 -- | Declarations.  These represent static declarations inside a
 -- scope.  Note: some of these can be built from others.
-data Decl
-       -- | The type of a symbol.
-       sym =
+data Decl sym =
     -- | Scope entities.  This is a common structure for a number of
     -- entity declarations that all have the same structure: modules,
     -- signatures, and classes.
@@ -99,18 +97,14 @@ data Decl
 
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
-data Compound
-       -- | The type of a symbol.
-       sym =
+data Compound sym =
     -- | An ordinary expression.
     Exp !(Exp sym)
     -- | A declaration.
   | Decl !(Decl sym)
 
 -- | A pattern, for pattern match expressions.
-data Pattern
-       -- | The type of a symbol
-       sym =
+data Pattern sym =
     -- | A constructor.  Mirrors a call expression.
     Construct {
       -- | The name of the constructor.
@@ -159,9 +153,7 @@ data Pattern
     }
 
 -- | Expressions.  These represent computed values of any type.
-data Exp
-       -- | The type of a symbol.
-       sym =
+data Exp sym =
     -- | An expression that may contain declarations as well as
     -- expressions.
     Compound {
@@ -228,11 +220,7 @@ data Exp
     }
 
 -- | An entry in a record field or call argument list.
-data Entry
-       -- | The type constructor to build the content.
-       con
-       -- | The type of a symbol.
-       sym =
+data Entry con sym =
     -- | A named field.  This sets a specific field or argument to a
     -- certain value.
     Named {
@@ -247,9 +235,7 @@ data Entry
   | Unnamed (con sym)
 
 -- | A simple name binding.
-data Binding
-       -- | The type of a symbol.
-       sym =
+data Binding sym =
   Binding {
     -- | The name being bound.
     bindingName :: !sym,
@@ -260,9 +246,7 @@ data Binding
   }
 
 -- | A case in a match statement or a function definition.
-data Case
-      -- | The type of a symbol.
-      sym =
+data Case sym =
   Case {
     -- | The pattern to match for this case.
     casePat :: Pattern sym,
