@@ -51,6 +51,7 @@ import Prelude.Extras.ExtraInstances()
 import Test.QuickCheck
 import Text.Format
 
+import qualified Bound.Scope
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 
@@ -293,7 +294,7 @@ data Term b s =
       -- | The position in source from which this originates.
       recPos :: !Pos
     }
-  -- | A collection of one or more computations, each of which is
+  -- | A collection of one or more terms, each of which is
   -- bound to a name.  Each of the members of the group may reference
   -- eachother.
   | Fix {
@@ -1098,14 +1099,16 @@ instance Default b => Monad (Comp b) where
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
-{-
+abstractfun :: Ord s => Set s -> s -> Maybe s
+abstractfun set sym = if Set.member sym set then Just sym else Nothing
+
 arbitraryPos :: Pos
 arbitraryPos = internal "arbitrary"
 
 -- The top-level function takes a set of bound vars, and produces a
 -- binding and a new set of bound vars.  This behavior is different
 -- from the inner functions.
-arbitraryBinding :: (Ord s, Arbitrary s) => Set s -> Int ->
+arbitraryBinding :: (Default s, Ord s, Arbitrary s) => Set s -> Int ->
                     Gen (Binding s (Term s) s, Set s)
 arbitraryBinding scope insize
  | 0 < insize =
@@ -1166,7 +1169,7 @@ arbitraryBinding scope insize
     return (Name { nameSym = var, namePos = arbitraryPos },
             Set.insert var scope)
 
-arbitraryPattern :: (Ord s, Arbitrary s) => Set s -> Int ->
+arbitraryPattern :: (Default s, Ord s, Arbitrary s) => Set s -> Int ->
                     Gen (Pattern s (Term s) s, Set s)
 arbitraryPattern scope size
   | size > 1 =
@@ -1183,7 +1186,8 @@ arbitraryPattern scope size
       return (Pattern { patternType = ty, patternBind = bind,
                         patternPos = arbitraryPos }, newscope)
 
-arbitraryTerm :: (Ord s, Arbitrary s) => Set s -> Int -> Gen (Term s s)
+arbitraryTerm :: (Default s, Ord s, Arbitrary s) =>
+                 Set s -> Int -> Gen (Term s s)
 arbitraryTerm bindings size =
   let
     genEntries size'
@@ -1232,7 +1236,7 @@ arbitraryTerm bindings size =
                  arbitraryCallTerm ]
     else oneof [ arbitraryBoundVarTerm, arbitraryFreeVarTerm ]
 
-arbitraryCmd :: (Ord s, Arbitrary s) => Set s -> Int -> Gen (Cmd s s)
+arbitraryCmd :: (Default s, Ord s, Arbitrary s) => Set s -> Int -> Gen (Cmd s s)
 arbitraryCmd scope size =
   let
     arbitraryEvalCmd size' =
@@ -1247,7 +1251,8 @@ arbitraryCmd scope size =
   in
     oneof [ arbitraryEvalCmd size, arbitraryValueCmd size ]
 
-arbitraryComp :: (Ord s, Arbitrary s) => Set s -> Int -> Gen (Comp s s)
+arbitraryComp :: (Default s, Ord s, Arbitrary s) =>
+                 Set s -> Int -> Gen (Comp s s)
 arbitraryComp scope size
  | size > 0 =
   let
@@ -1258,7 +1263,8 @@ arbitraryComp scope size
         cmd <- arbitraryCmd scope cmdsize
         (pat, newscope) <- arbitraryPattern scope patsize
         next <- arbitraryComp newscope (size - patsize - cmdsize - 1)
-        return Seq { seqPat = pat, seqCmd = cmd, seqNext = next,
+        return Seq { seqPat = pat, seqCmd = cmd,
+                     seqNext = abstract (abstractfun newscope) next,
                      seqPos = arbitraryPos }
 
     arbitraryEndComp =
@@ -1272,7 +1278,17 @@ arbitraryComp scope size
     cmd <- arbitraryCmd scope 0
     return End { endCmd = cmd, endPos = arbitraryPos }
 
-instance (Ord s, Arbitrary s) => Arbitrary (Binding s (Term s) s) where
+shrinkScope :: (Ord s, Foldable t, Monad t, Arbitrary (t s)) =>
+               Scope s t s -> [Scope s t s]
+shrinkScope scope =
+  let
+    binds = Set.fromList (Bound.Scope.bindings scope)
+    instantiated = instantiate return scope
+  in
+    map (abstract (abstractfun binds)) (shrink instantiated)
+
+instance (Default s, Ord s, Arbitrary s) =>
+         Arbitrary (Binding s (Term s) s) where
   arbitrary = sized (arbitraryBinding Set.empty) >>= return . fst
 
   shrink b @ Deconstruct { deconstructBinds = binds } =
@@ -1285,14 +1301,16 @@ instance (Ord s, Arbitrary s) => Arbitrary (Binding s (Term s) s) where
   shrink Name {} = []
   shrink (Constant t) = map Constant (shrink t)
 
-instance (Ord s, Arbitrary s) => Arbitrary (Pattern s (Term s) s) where
+instance (Default s, Ord s, Arbitrary s) =>
+         Arbitrary (Pattern s (Term s) s) where
   arbitrary = sized (arbitraryPattern Set.empty) >>= return . fst
 
   shrink p @ Pattern { patternType = ty, patternBind = bind } =
     map (\ty' -> p { patternType = ty' }) (shrink ty) ++
     map (\bind' -> p { patternBind = bind' }) (shrink bind)
 
-instance (Ord s, Arbitrary s) => Arbitrary (Term s s) where
+instance (Default s, Ord s, Arbitrary s) =>
+         Arbitrary (Term s s) where
   arbitrary = sized (arbitraryTerm Set.empty)
 
   shrink t @ Typed { typedType = ty, typedTerm = term } =
@@ -1300,7 +1318,8 @@ instance (Ord s, Arbitrary s) => Arbitrary (Term s s) where
     map (\term' -> t { typedType = term' }) (shrink term)
   shrink Var {} = []
 
-instance (Ord s, Arbitrary s) => Arbitrary (Cmd s s) where
+instance (Default s, Ord s, Arbitrary s) =>
+         Arbitrary (Cmd s s) where
   arbitrary = sized (arbitraryCmd Set.empty)
 
   shrink c @ Eval { evalTerm = term } =
@@ -1309,17 +1328,19 @@ instance (Ord s, Arbitrary s) => Arbitrary (Cmd s s) where
     map (\term' -> c { valTerm = term' }) (shrink term)
   shrink (BadCmd _) = []
 
-instance (Ord s, Arbitrary s) => Arbitrary (Comp s s) where
+instance (Default s, Ord s, Arbitrary s) =>
+         Arbitrary (Comp s s) where
   arbitrary = sized (arbitraryComp Set.empty)
 
-  shrink c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
+  shrink c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next, seqPos = p } =
+    End { endCmd = cmd, endPos = p } :
     map (\pat' -> c { seqPat = pat' }) (shrink pat) ++
     map (\cmd' -> c { seqCmd = cmd' }) (shrink cmd) ++
-    map (\next' -> c { seqNext = next' }) (shrink next)
+    map (\next' -> c { seqNext = next' }) (shrinkScope next)
   shrink c @ End { endCmd = cmd } =
     map (\cmd' -> c { endCmd = cmd' }) (shrink cmd)
   shrink (BadComp _) = []
--}
+
 getBind :: Ord a => Map a b -> a -> (a, b)
 getBind m k =
   case Map.lookup k m of
