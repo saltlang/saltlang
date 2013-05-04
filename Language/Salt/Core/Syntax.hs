@@ -361,6 +361,8 @@ data Comp bound free =
     Seq {
       -- | The pattern to which to bind the result of seqCmd.
       seqPat :: Pattern bound (Term bound) free,
+      -- | The type being bound.
+      seqType :: Term bound free,
       -- | The command to execute.
       seqCmd :: Cmd bound free,
       -- | The next computation to execute.
@@ -469,9 +471,9 @@ instance (Default b, Eq b) => Eq1 (Cmd b) where
   _ ==# _ = False
 
 instance (Default b, Eq b) => Eq1 (Comp b) where
-  Seq { seqPat = pat1, seqCmd = cmd1, seqNext = next1 } ==#
-    Seq { seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
-      (pat1 ==# pat2) && (cmd1 ==# cmd2) && (next1 ==# next2)
+  Seq { seqType = ty1, seqPat = pat1, seqCmd = cmd1, seqNext = next1 } ==#
+    Seq { seqType = ty2, seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
+      (pat1 ==# pat2) && (cmd1 ==# cmd2) && (next1 ==# next2) && (ty1 ==# ty2)
   End { endCmd = cmd1 } ==# End { endCmd = cmd2 } = cmd1 ==# cmd2
   BadComp _ ==# BadComp _ = True
   _ ==# _ = False
@@ -623,11 +625,13 @@ instance (Default b, Ord b) => Ord1 (Cmd b) where
   compare1 (BadCmd _) (BadCmd _) = EQ
 
 instance (Default b, Ord b) => Ord1 (Comp b) where
-  compare1 Seq { seqPat = pat1, seqCmd = cmd1, seqNext = next1 }
-           Seq { seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
-    case compare1 pat1 pat2 of
-      EQ -> case compare1 cmd1 cmd2 of
-        EQ -> compare1 next1 next2
+  compare1 Seq { seqType = ty1, seqPat = pat1, seqCmd = cmd1, seqNext = next1 }
+           Seq { seqType = ty2, seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
+    case compare1 ty1 ty2 of
+      EQ -> case compare1 pat1 pat2 of
+        EQ -> case compare1 cmd1 cmd2 of
+          EQ -> compare1 next1 next2
+          out -> out
         out -> out
       out -> out
   compare1 Seq {} _ = GT
@@ -746,8 +750,9 @@ instance (Default b, Hashable b) => Hashable1 (Cmd b) where
   hashWithSalt1 s (BadCmd _) = s `hashWithSalt` (0 :: Int)
 
 instance (Default b, Hashable b) => Hashable1 (Comp b) where
-  hashWithSalt1 s Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt1`
+  hashWithSalt1 s Seq { seqCmd = cmd, seqNext = next,
+                        seqType = ty, seqPat = pat } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt1` ty `hashWithSalt1`
     pat `hashWithSalt1` cmd `hashWithSalt1` next
   hashWithSalt1 s End { endCmd = cmd } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` cmd
@@ -820,8 +825,9 @@ instance Functor (Cmd b) where
   fmap _ (BadCmd p) = BadCmd p
 
 instance Functor (Comp b) where
-  fmap f c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
-    c { seqPat = fmap f pat, seqCmd = fmap f cmd, seqNext = fmap f next }
+  fmap f c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
+    c { seqCmd = fmap f cmd, seqNext = fmap f next,
+        seqType = fmap f ty, seqPat = fmap f pat }
   fmap f c @ End { endCmd = cmd } = c { endCmd = fmap f cmd }
   fmap _ (BadComp p) = BadComp p
 
@@ -870,8 +876,9 @@ instance Foldable (Cmd b) where
   foldMap _ (BadCmd _) = mempty
 
 instance Foldable (Comp b) where
-  foldMap f Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
-    foldMap f pat `mappend` foldMap f cmd `mappend` foldMap f next
+  foldMap f Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
+    foldMap f ty `mappend` foldMap f pat `mappend`
+    foldMap f cmd `mappend` foldMap f next
   foldMap f End { endCmd = cmd } = foldMap f cmd
   foldMap _ (BadComp _) = mempty
 
@@ -941,10 +948,11 @@ instance Traversable (Cmd b) where
   traverse _ (BadCmd c) = pure (BadCmd c)
 
 instance Traversable (Comp b) where
-  traverse f c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
-    (\pat' cmd' next' -> c { seqPat = pat', seqCmd = cmd',
-                             seqNext = next' }) <$>
-      traverse f pat <*> traverse f cmd <*> traverse f next
+  traverse f c @ Seq { seqCmd = cmd, seqNext = next,
+                       seqType = ty, seqPat = pat } =
+    (\ty' pat' cmd' next' -> c { seqCmd = cmd', seqNext = next',
+                                 seqType = ty', seqPat = pat' }) <$>
+      traverse f ty <*> traverse f pat <*> traverse f cmd <*> traverse f next
   traverse f c @ End { endCmd = cmd } =
     (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
   traverse _ (BadComp p) = pure (BadComp p)
@@ -991,9 +999,11 @@ cmdSubstTerm f c @ Eval { evalTerm = term } = c { evalTerm = term >>= f }
 cmdSubstTerm _ (BadCmd p) = BadCmd p
 
 compSubstTerm :: Default c => (a -> Term c b) -> Comp c a -> Comp c b
-compSubstTerm f c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
-  c { seqPat = patSubstTerm f pat, seqCmd = cmdSubstTerm f cmd,
-      seqNext = next >>>= compSubstTerm f . return }
+compSubstTerm f c @ Seq { seqCmd = cmd, seqNext = next,
+                          seqType = ty, seqPat = pat } =
+  c { seqType = ty >>= f, seqPat = patSubstTerm f pat,
+      seqNext = next >>>= compSubstTerm f . return,
+      seqCmd = cmdSubstTerm f cmd }
 compSubstTerm f c @ End { endCmd = cmd } =
   c { endCmd = cmdSubstTerm f cmd }
 compSubstTerm _ (BadComp p) = BadComp p
@@ -1093,9 +1103,9 @@ instance Default b => Monad (Comp b) where
     End { endCmd = Value { valTerm = Var { varSym = sym, varPos = injectpos },
                            valPos = injectpos },
           endPos = injectpos}
-  c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
-    c { seqPat = patSubstComp f pat, seqNext = next >>>= f,
-        seqCmd = cmdSubstComp f cmd }
+  c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
+    c { seqType = termSubstComp f ty, seqNext = next >>>= f,
+        seqPat = patSubstComp f pat, seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
@@ -1260,10 +1270,12 @@ arbitraryComp scope size
       do
         patsize <- choose (0, size - 1)
         cmdsize <- choose (0, size - patsize - 1)
+        tysize <- choose (0, size - cmdsize - patsize - 1)
         cmd <- arbitraryCmd scope cmdsize
+        ty <- arbitraryTerm scope tysize
         (pat, newscope) <- arbitraryPattern scope patsize
         next <- arbitraryComp newscope (size - patsize - cmdsize - 1)
-        return Seq { seqPat = pat, seqCmd = cmd,
+        return Seq { seqType = ty, seqPat = pat, seqCmd = cmd,
                      seqNext = abstract (abstractfun newscope) next,
                      seqPos = arbitraryPos }
 
@@ -1353,36 +1365,34 @@ instance (Default s, Ord s, Arbitrary s) =>
   -- to go through and convert those into free variables.
   shrink t @ ProdType { prodArgTys = argtys, prodRetTy = retty,
                         prodBindOrder = order } =
-    map (\argtys' -> t { prodArgTys = argtys', prodRetTy = retty,
-                         prodBindOrder = shrinkBindOrder argtys' order })
-        (shrinkScopeMap argtys) ++
-    map (\retty' -> t { prodArgTys = argtys, prodRetTy = retty',
-                        prodBindOrder = order }) (shrinkScope retty)
+    map (\argtys' -> t { prodBindOrder = shrinkBindOrder argtys' order,
+                         prodArgTys = argtys' }) (shrinkScopeMap argtys) ++
+    map (\retty' -> t { prodRetTy = retty' }) (shrinkScope retty)
   shrink t @ SumType { sumBody = body, sumBindOrder = order } =
     map (\body' -> t { sumBindOrder = shrinkBindOrder body' order,
                        sumBody = body' }) (shrinkScopeMap body)
   shrink t @ RefineType { refineType = ty, refineCases = cases } =
-    map (\ty' -> t { refineType = ty', refineCases = cases }) (shrink ty) ++
-    map (\cases' -> t { refineType = ty, refineCases = cases' }) (shrink cases)
+    map (\ty' -> t { refineType = ty' }) (shrink ty) ++
+    map (\cases' -> t { refineCases = cases' }) (shrink cases)
   shrink t @ CompType { compPat = pat, compSpec = spec } =
-    map (\pat' -> t { compPat = pat', compSpec = spec }) (shrink pat) ++
-    map (\spec' -> t { compPat = pat, compSpec = spec' }) (shrinkScope spec)
+    map (\pat' -> t { compPat = pat' }) (shrink pat) ++
+    map (\spec' -> t { compSpec = spec' }) (shrinkScope spec)
   shrink t @ Forall { forallType = ty, forallCases = cases } =
-    map (\ty' -> t { forallType = ty', forallCases = cases }) (shrink ty) ++
-    map (\cases' -> t { forallType = ty, forallCases = cases' }) (shrink cases)
+    map (\ty' -> t { forallType = ty' }) (shrink ty) ++
+    map (\cases' -> t { forallCases = cases' }) (shrink cases)
   shrink t @ Exists { existsType = ty, existsCases = cases } =
-    map (\ty' -> t { existsType = ty', existsCases = cases }) (shrink ty) ++
-    map (\cases' -> t { existsType = ty, existsCases = cases' }) (shrink cases)
+    map (\ty' -> t { existsType = ty' }) (shrink ty) ++
+    map (\cases' -> t { existsCases = cases' }) (shrink cases)
   shrink t @ Call { callArgs = args, callFunc = func } =
-    map (\func' -> t { callArgs = args, callFunc = func' }) (shrink func) ++
-    map (\args' -> t { callArgs = args', callFunc = func }) (shrinkMap args)
+    map (\func' -> t { callFunc = func' }) (shrink func) ++
+    map (\args' -> t { callArgs = args' }) (shrinkMap args)
   shrink t @ Typed { typedType = ty, typedTerm = term } =
     map (\ty' -> t { typedType = ty' }) (shrink ty) ++
     map (\term' -> t { typedType = term' }) (shrink term)
   shrink Var {} = []
   shrink t @ Eta { etaType = ty, etaTerm = term } =
-    map (\ty' -> t { etaType = ty', etaTerm = term }) (shrink ty) ++
-    map (\term' -> t { etaType = ty, etaTerm = term' }) (shrink term)
+    map (\ty' -> t { etaType = ty' }) (shrink ty) ++
+    map (\term' -> t { etaTerm = term' }) (shrink term)
   shrink t @ Lambda { lambdaCases = cases } =
     map (\cases' -> t { lambdaCases = cases' }) (shrink cases)
   shrink t @ Record { recVals = vals } =
@@ -1407,8 +1417,10 @@ instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Comp s s) where
   arbitrary = sized (arbitraryComp Set.empty)
 
-  shrink c @ Seq { seqPat = pat, seqCmd = cmd, seqNext = next, seqPos = p } =
+  shrink c @ Seq { seqCmd = cmd, seqNext = next, seqPos = p,
+                   seqType = ty, seqPat = pat } =
     End { endCmd = cmd, endPos = p } :
+    map (\ty' -> c { seqType = ty' }) (shrink ty) ++
     map (\pat' -> c { seqPat = pat' }) (shrink pat) ++
     map (\cmd' -> c { seqCmd = cmd' }) (shrink cmd) ++
     map (\next' -> c { seqNext = next' }) (shrinkScope next)
@@ -1517,7 +1529,12 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Cmd b s) where
 
 instance (Default b, Ord b, Eq b, Format b, Format s) =>
          FormatList (Comp b s) where
-  formatList Seq { seqPat = pat, seqCmd = cmd, seqNext = next } =
-    (pat <+> equals <+> cmd) : formatList next
+  formatList Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
+    let
+      binderDoc = hang
+        (lparen <> pat <> rparen <+> colon) 2
+        (lparen <> ty <> rparen <+> equals <+> cmd)
+    in
+      binderDoc : formatList next
   formatList End { endCmd = cmd } = [ format cmd ]
   formatList (BadComp _) = [ format "<bad comp>" ]
