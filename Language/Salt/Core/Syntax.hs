@@ -135,7 +135,7 @@ data Case bound free =
 -- Elimination terms are those terms whose type can be inferred in
 -- type checking.  Introduction terms are those terms that require a
 -- type to be checked against.
-data Term b s =
+data Term bound free =
   -- Types.  These do not support decidable equality.  As such, they
   -- cannot be the result of a computation, and cannot appear in
   -- patterns.
@@ -144,17 +144,17 @@ data Term b s =
     ProdType {
       -- | The binding order for arguments.  This is used to determine
       -- the order in which to evaluate scopes.
-      prodBindOrder :: [b],
+      prodBindOrder :: [bound],
       -- | The binding names and types of all arguments.  The first
       -- argument in the binding order is a degenerate scope; the
       -- remaining scopes may reference any previous arguments in the
       -- binding order, but not themselves or any future arguments.
       -- 
       -- Note: all fields are given names by transliteration.
-      prodArgTys :: Map b (Scope b (Term b) s),
+      prodArgTys :: Map bound (Scope bound (Term bound) free),
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
-      prodRetTy :: Scope b (Term b) s,
+      prodRetTy :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
       prodTypePos :: !Pos
     }
@@ -162,36 +162,36 @@ data Term b s =
   | SumType {
       -- | The binding order for elements.  This is used to determine
       -- the order in which to evaluate the scopes.
-      sumBindOrder :: [b],
+      sumBindOrder :: [bound],
       -- | The remaining elements of the sum type.  The first element
       -- in the binding order is a degenerate scope; the remaining
       -- scopes may reference any previous elements from the binding
       -- order, but not themselves or any future scopes.
       -- 
       -- Note: all fields are given names by transliteration.
-      sumBody :: Map b (Scope b (Term b) s),
+      sumBody :: Map bound (Scope bound (Term bound) free),
       -- | The position in source from which this originates.
       sumTypePos :: !Pos
     }
   -- | Refinement type.  This type represents all members of a type
   -- satisfying a given proposition.
   | RefineType {
-      -- | The binder for values of the base type.
-      refinePat :: Pattern b (Term b) s,
-      -- | The proposition that members of this type must satisfy,
-      -- which may reference bound variables from refinePat.
-      refineProp :: Scope b (Term b) s,
+      -- | The base type.
+      refineType :: Term bound free,
+      -- | Binding patterns and propositions for values of the base
+      -- type.  These express the constraints on the base type.
+      refineCases :: [Case bound free],
       -- | The position in source from which this originates.
-      refineTypePos :: !Pos
+      refinePos :: !Pos
     }
   -- | Computation type.  This type represents a computation, and
   -- includes both its result type and a specification of its
   -- behavior.
   | CompType {
       -- | The binder for the result of this computation.
-      compPat :: Pattern b (Term b) s,
+      compPat :: Pattern bound (Term bound) free,
       -- | The specification describing the computation's behavior.
-      compSpec :: Scope b (Term b) s,
+      compSpec :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
       compTypePos :: !Pos
     }
@@ -204,9 +204,9 @@ data Term b s =
   | Forall {
       -- | The bindings for the quantified proposition.  A list of
       -- (pattern, type) pairs.
-      forallPat :: Pattern b (Term b) s,
+      forallPat :: Pattern bound (Term bound) free,
       -- | The core proposition.
-      forallProp :: Scope b (Term b) s,
+      forallProp :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
       forallPos :: !Pos
     }
@@ -214,9 +214,9 @@ data Term b s =
   | Exists {
       -- | The bindings for the quantified proposition.  A list of
       -- (pattern, type) pairs.
-      existsPat :: Pattern b (Term b) s,
+      existsPat :: Pattern bound (Term bound) free,
       -- | The core proposition.
-      existsProp :: Scope b (Term b) s,
+      existsProp :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
       existsPos :: !Pos
     }
@@ -235,10 +235,10 @@ data Term b s =
       -- This list must be sorted by the bound variable, and bound
       -- variables must be unique (in essence, this must be what you'd
       -- expect from Map.toList)
-      callArgs :: Map b (Term b s),
+      callArgs :: Map bound (Term bound free),
       -- | The function being called.  This must be an elimination
       -- term.
-      callFunc :: Term b s,
+      callFunc :: Term bound free,
       -- | The position in source from which this originates.
       callPos :: !Pos
     }
@@ -246,7 +246,7 @@ data Term b s =
   -- this is an elimination term.
   | Var {
       -- | The underlying symbol.
-      varSym :: !s,
+      varSym :: !free,
       -- | The position in source from which this originates.
       varPos :: !Pos
     }
@@ -254,9 +254,9 @@ data Term b s =
   -- type tag, which makes it an elimination term.
   | Typed {
       -- | The introduction term being typed.
-      typedTerm :: Term b s,
+      typedTerm :: Term bound free,
       -- | The type of the introduction term.
-      typedType :: Term b s,
+      typedType :: Term bound free,
       -- | The position in source from which this originates.
       typedPos :: !Pos
     }
@@ -266,8 +266,8 @@ data Term b s =
   -- | An eta expansion.  This is present for type checking only.
   -- This represents a "frozen" substitution.
   | Eta {
-      etaTerm :: Term b s,
-      etaType :: Term b s,
+      etaTerm :: Term bound free,
+      etaType :: Term bound free,
       -- | The position in source from which this originates.
       etaPos :: !Pos
     }
@@ -279,7 +279,7 @@ data Term b s =
   -- This is obviousy highly nontrivial to implement.
   | Lambda {
       -- | The cases describing this function's behavior.
-      lambdaCases :: [Case b s],
+      lambdaCases :: [Case bound free],
       -- | The position in source from which this originates.
       lambdaPos :: !Pos
     }
@@ -290,7 +290,7 @@ data Term b s =
       -- | The bindings for this record.  This list must be sorted by
       -- the bound variable, and bound variables must be unique (in
       -- essence, this must be what you'd expect from Map.toList).
-      recVals :: Map b (Term b s),
+      recVals :: Map bound (Term bound free),
       -- | The position in source from which this originates.
       recPos :: !Pos
     }
@@ -298,14 +298,14 @@ data Term b s =
   -- bound to a name.  Each of the members of the group may reference
   -- eachother.
   | Fix {
-      fixTerms :: Map b (Scope b (Term b) s),
+      fixTerms :: Map bound (Scope bound (Term bound) free),
       -- | The position in source from which this originates.
       fixPos :: !Pos
     }
   -- | A computation value.  This is essentially a "frozen"
   -- computation.
   | Comp {
-      compBody :: Comp b s,
+      compBody :: Comp bound free,
       -- | The position in source from which this originates.
       compPos :: !Pos
     }
@@ -432,9 +432,9 @@ instance (Default b, Eq b) => Eq1 (Term b) where
   SumType { sumBindOrder = bindord1, sumBody = body1 } ==#
     SumType { sumBindOrder = bindord2, sumBody = body2 } =
       (bindord1 == bindord2) && (body1 ==# body2)
-  RefineType { refinePat = pat1, refineProp = prop1 } ==#
-    RefineType { refinePat = pat2, refineProp = prop2 } =
-      (pat1 ==# pat2) && (prop1 ==# prop2)
+  RefineType { refineType = ty1, refineCases = cases1 } ==#
+    RefineType { refineType = ty2, refineCases = cases2 } =
+      (ty1 ==# ty2) && (cases1 ==# cases2)
   CompType { compPat = pat1, compSpec = spec1 } ==#
     CompType { compPat = pat2, compSpec = spec2 } =
       (pat1 ==# pat2) && (spec1 ==# spec2)
@@ -541,10 +541,10 @@ instance (Default b, Ord b) => Ord1 (Term b) where
       out -> out
   compare1 SumType {} _ = GT
   compare1 _ SumType {} = LT
-  compare1 RefineType { refinePat = pat1, refineProp = prop1 }
-           RefineType { refinePat = pat2, refineProp = prop2 } =
-    case compare1 pat1 pat2 of
-      EQ -> compare1 prop1 prop2
+  compare1 RefineType { refineType = ty1, refineCases = cases1 }
+           RefineType { refineType = ty2, refineCases = cases2 } =
+    case compare1 ty1 ty2 of
+      EQ -> compare1 cases1 cases2
       out -> out
   compare1 RefineType {} _ = GT
   compare1 _ RefineType {} = LT
@@ -661,7 +661,7 @@ instance Position (Case b s) where
 instance Position (Term b s) where
   pos ProdType { prodTypePos = p } = p
   pos SumType { sumTypePos = p } = p
-  pos RefineType { refineTypePos = p } = p
+  pos RefineType { refinePos = p } = p
   pos CompType { compTypePos = p } = p
   pos Forall { forallPos = p } = p
   pos Exists { existsPos = p } = p
@@ -712,8 +712,8 @@ instance (Default b, Hashable b) => Hashable1 (Term b) where
     argtys `hashWithSalt` retty
   hashWithSalt1 s SumType { sumBindOrder = bindord, sumBody = body } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` bindord `hashWithSalt1` body
-  hashWithSalt1 s RefineType { refinePat = pat, refineProp = prop } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt1` pat `hashWithSalt1` prop
+  hashWithSalt1 s RefineType { refineType = ty, refineCases = cases } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s CompType { compPat = pat, compSpec = spec } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt1` pat `hashWithSalt1` spec
   hashWithSalt1 s Forall { forallPat = pats, forallProp = prop } =
@@ -792,8 +792,8 @@ instance Functor (Term b) where
   fmap f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
     t { prodArgTys = fmap (fmap f) argtys, prodRetTy = fmap f retty }
   fmap f t @ SumType { sumBody = body } = t { sumBody = fmap (fmap f) body }
-  fmap f t @ RefineType { refinePat = pat, refineProp = prop } =
-    t { refinePat = fmap f pat, refineProp = fmap f prop }
+  fmap f t @ RefineType { refineType = ty, refineCases = cases } =
+    t { refineType = fmap f ty, refineCases = fmap (fmap f) cases }
   fmap f t @ CompType { compPat = pat, compSpec = spec } =
     t { compPat = fmap f pat, compSpec = fmap f spec }
   fmap f t @ Forall { forallPat = pats, forallProp = prop } =
@@ -843,8 +843,8 @@ instance Foldable (Term b) where
   foldMap f ProdType { prodArgTys = argtys, prodRetTy = retty } =
     foldMap (foldMap f) argtys `mappend` foldMap f retty
   foldMap f SumType { sumBody = body } = foldMap (foldMap f) body
-  foldMap f RefineType { refinePat = pat, refineProp = prop } =
-    foldMap f pat `mappend` foldMap f prop
+  foldMap f RefineType { refineType = ty, refineCases = cases } =
+    foldMap f ty `mappend` foldMap (foldMap f) cases
   foldMap f CompType { compPat = pat, compSpec = spec } =
     foldMap f pat `mappend` foldMap f spec
   foldMap f Forall { forallPat = pats, forallProp = prop } =
@@ -900,9 +900,9 @@ instance Traversable (Term b) where
       traverse (traverse f) argtys <*> traverse f retty
   traverse f t @ SumType { sumBody = body } =
     (\body' -> t { sumBody = body' }) <$> traverse (traverse f) body
-  traverse f t @ RefineType { refinePat = pat, refineProp = prop } =
-    (\pat' prop' -> t { refinePat = pat', refineProp = prop' }) <$>
-      traverse f pat <*> traverse f prop
+  traverse f t @ RefineType { refineType = ty, refineCases = cases } =
+    (\ty' cases' -> t { refineType = ty', refineCases = cases' }) <$>
+      traverse f ty <*> traverse (traverse f) cases
   traverse f t @ CompType { compPat = pat, compSpec = spec } =
     (\pat' spec' -> t { compPat = pat', compSpec = spec' }) <$>
       traverse f pat <*> traverse f spec
@@ -1004,8 +1004,8 @@ instance Default b => Monad (Term b) where
   t @ ProdType { prodArgTys = argtys, prodRetTy = retty } >>= f =
     t { prodArgTys = fmap (>>>= f) argtys, prodRetTy = retty >>>= f }
   t @ SumType { sumBody = body } >>= f = t { sumBody = fmap (>>>= f) body }
-  t @ RefineType { refinePat = pat, refineProp = prop } >>= f =
-    t { refinePat = patSubstTerm f pat, refineProp = prop >>>= f }
+  t @ RefineType { refineType = ty, refineCases = cases } >>= f =
+    t { refineType = ty >>= f, refineCases = fmap (caseSubstTerm f) cases }
   t @ CompType { compPat = pat, compSpec = spec } >>= f =
     t { compPat = patSubstTerm f pat, compSpec = spec >>>= f }
   t @ Forall { forallPat = pats, forallProp = prop } >>= f =
@@ -1051,9 +1051,9 @@ termSubstComp f t @ ProdType { prodArgTys = argtys, prodRetTy = retty } =
       prodRetTy = retty >>>= termSubstComp f . return }
 termSubstComp f t @ SumType { sumBody = body } =
   t { sumBody = fmap (>>>= termSubstComp f . return) body }
-termSubstComp f t @ RefineType { refinePat = pat, refineProp = prop } =
-  t { refineProp = prop >>>= termSubstComp f . return,
-      refinePat = patSubstComp f pat }
+termSubstComp f t @ RefineType { refineType = ty, refineCases = cases } =
+  t { refineCases = fmap (caseSubstComp f) cases,
+      refineType = termSubstComp f ty }
 termSubstComp f t @ CompType { compPat = pat, compSpec = spec } =
   t { compSpec = spec >>>= termSubstComp f . return,
       compPat = patSubstComp f pat }
@@ -1361,9 +1361,9 @@ instance (Default s, Ord s, Arbitrary s) =>
   shrink t @ SumType { sumBody = body, sumBindOrder = order } =
     map (\body' -> t { sumBindOrder = shrinkBindOrder body' order,
                        sumBody = body' }) (shrinkScopeMap body)
-  shrink t @ RefineType { refinePat = pat, refineProp = prop } =
-    map (\pat' -> t { refinePat = pat', refineProp = prop }) (shrink pat) ++
-    map (\prop' -> t { refinePat = pat, refineProp = prop' }) (shrinkScope prop)
+  shrink t @ RefineType { refineType = ty, refineCases = cases } =
+    map (\ty' -> t { refineType = ty', refineCases = cases }) (shrink ty) ++
+    map (\cases' -> t { refineType = ty, refineCases = cases' }) (shrink cases)
   shrink t @ CompType { compPat = pat, compSpec = spec } =
     map (\pat' -> t { compPat = pat', compSpec = spec }) (shrink pat) ++
     map (\spec' -> t { compPat = pat, compSpec = spec' }) (shrinkScope spec)
@@ -1460,12 +1460,12 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
       args' = map (formatBind . getBind body) order
     in
       lparen <> (nest 1 (sep (punctuate comma args'))) <> rparen
-  format RefineType { refinePat = pat, refineProp = prop } =
+  format RefineType { refineType = ty, refineCases = cases } =
     let
-      patDoc = lparen <> format pat <> rparen
-      propDoc = lparen <> format prop <> rparen
+      formatCase Case { casePat = pat, caseBody = body } =
+        hang (pat <+> equals) 2 body
     in
-      hang patDoc 2 ("where" <+> propDoc)
+      (ty <+> "where") <+> (nest 2 (sep (punctuate "|" (map formatCase cases))))
   format CompType { compPat = pat, compSpec = spec } =
     let
       patDoc = lparen <> format pat <> rparen
