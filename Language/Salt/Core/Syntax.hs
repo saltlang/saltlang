@@ -22,7 +22,6 @@
 -- into Core, which is then type-checked and compiled.  Core is
 -- generally not meant for human consumption.
 module Language.Salt.Core.Syntax(
-       Binding(..),
        Pattern(..),
        Case(..),
        Term(..),
@@ -57,7 +56,7 @@ import qualified Data.Set as Set
 
 -- | A pattern binding.  Represents how to deconstruct a value and
 -- bind it to variables.
-data Binding bound const free =
+data Pattern bound const free =
     -- | A deconstruction.  Takes a type apart.  Some types have
     -- constructors; nameless record types don't (they should use the
     -- "unused" symbol).
@@ -67,7 +66,7 @@ data Binding bound const free =
       deconstructConstructor :: !bound,
       -- | The fields in the record being bound.  Note: all fields are
       -- given names by transliteration.
-      deconstructBinds :: Map bound (Binding bound const free),
+      deconstructBinds :: Map bound (Pattern bound const free),
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
@@ -80,7 +79,7 @@ data Binding bound const free =
       -- | The outer name, to which the entire datatype is bound.
       asName :: !bound,
       -- | The inner binding, which further deconstructs the binding.
-      asBind :: Binding bound const free,
+      asBind :: Pattern bound const free,
       -- | The position in source from which this originates.
       asPos :: !Pos
     }
@@ -98,19 +97,6 @@ data Binding bound const free =
     }
     -- | A constant.  Constrains the binding to the given value.
   | Constant (const free)
-
--- | A pattern.  Consists of a pattern and a type.  The symbol unused
--- may occur in pattern terms, in which case it acts as a wildcard.
-data Pattern bound const free =
-  Pattern {
-    -- | The pattern for binding.  This is an introduction term.
-    patternBind :: Binding bound const free,
-    -- | The type being bound. This is an introduction term, which
-    -- must be a type.
-    patternType :: Term bound free,
-    -- | The position in source from which this originates.
-    patternPos :: !Pos
-  }
 
 -- | A case.  Consists of a pattern and a body wrapped in a scope.
 -- Used to describe functions and computations with parameters.
@@ -385,14 +371,14 @@ data Comp bound free =
 
 -- The equality and comparison functions ignore position
 eqBinds :: (Default b, Eq b, Eq s, Eq1 t) =>
-           [(b, Binding b t s)] -> [(b, Binding b t s)] -> Bool
+           [(b, Pattern b t s)] -> [(b, Pattern b t s)] -> Bool
 eqBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
   (name1 == name2) && (bind1 ==# bind2) && eqBinds binds1 binds2
 eqBinds [] [] = True
 eqBinds _ _ = False
 
 compareBinds :: (Default b, Ord b, Ord s, Ord1 t) =>
-                [(b, Binding b t s)] -> [(b, Binding b t s)] -> Ordering
+                [(b, Pattern b t s)] -> [(b, Pattern b t s)] -> Ordering
 compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
   case compare name1 name2 of
     EQ -> case compare1 bind1 bind2 of
@@ -403,7 +389,7 @@ compareBinds [] [] = EQ
 compareBinds [] _ = LT
 compareBinds _ [] = GT
 
-instance (Default b, Eq b, Eq1 t) => Eq1 (Binding b t) where
+instance (Default b, Eq b, Eq1 t) => Eq1 (Pattern b t) where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                 deconstructConstructor = constructor1 } ==#
     Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -416,11 +402,6 @@ instance (Default b, Eq b, Eq1 t) => Eq1 (Binding b t) where
   Name { nameSym = name1 } ==# Name { nameSym = name2 } = name1 == name2
   Constant term1 ==# Constant term2 = term1 ==# term2
   _ ==# _ = False
-
-instance (Default b, Eq b, Eq1 t) => Eq1 (Pattern b t) where
-  Pattern { patternBind = bind1, patternType = ty1 } ==#
-    Pattern { patternBind = bind2, patternType = ty2 } =
-      (bind1 ==# bind2) && (ty1 ==# ty2)
 
 instance (Default b, Eq b) => Eq1 (Case b) where
   Case { casePat = pat1, caseBody = body1 } ==#
@@ -480,14 +461,13 @@ instance (Default b, Eq b) => Eq1 (Comp b) where
   BadComp _ ==# BadComp _ = True
   _ ==# _ = False
 
-instance (Default b, Eq b, Eq s, Eq1 t) => Eq (Binding b t s) where (==) = (==#)
 instance (Default b, Eq b, Eq s, Eq1 t) => Eq (Pattern b t s) where (==) = (==#)
 instance (Default b, Eq b, Eq s) => Eq (Case b s) where (==) = (==#)
 instance (Default b, Eq b, Eq s) => Eq (Term b s) where (==) = (==#)
 instance (Default b, Eq b, Eq s) => Eq (Cmd b s) where (==) = (==#)
 instance (Default b, Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
 
-instance (Default b, Ord b, Ord1 t) => Ord1 (Binding b t) where
+instance (Default b, Ord b, Ord1 t) => Ord1 (Pattern b t) where
   compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                          deconstructConstructor = constructor1 }
            Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -511,13 +491,6 @@ instance (Default b, Ord b, Ord1 t) => Ord1 (Binding b t) where
   compare1 Name {} _ = GT
   compare1 _ Name {} = LT
   compare1 (Constant term1) (Constant term2) = compare1 term1 term2
-
-instance (Default b, Ord b, Ord1 t) => Ord1 (Pattern b t) where
-  compare1 Pattern { patternBind = bind1, patternType = ty1 }
-           Pattern { patternBind = bind2, patternType = ty2 } =
-    case compare1 bind1 bind2 of
-      EQ -> compare ty1 ty2
-      out -> out
 
 instance (Default b, Ord b) => Ord1 (Case b) where
   compare1 Case { casePat = pat1, caseBody = body1 }
@@ -645,8 +618,6 @@ instance (Default b, Ord b) => Ord1 (Comp b) where
   compare1 _ End {} = LT
   compare1 (BadComp _) (BadComp _) = EQ
 
-instance (Default b, Ord b, Ord s, Ord1 t) => Ord (Binding b t s) where
-  compare = compare1
 instance (Default b, Ord b, Ord s, Ord1 t) => Ord (Pattern b t s) where
   compare = compare1
 instance (Default b, Ord b, Ord s) => Ord (Case b s) where compare = compare1
@@ -654,14 +625,11 @@ instance (Default b, Ord b, Ord s) => Ord (Term b s) where compare = compare1
 instance (Default b, Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
 instance (Default b, Ord b, Ord s) => Ord (Comp b s) where compare = compare1
 
-instance Position (t s) => Position (Binding b t s) where
+instance Position (t s) => Position (Pattern b t s) where
   pos Deconstruct { deconstructPos = p } = p
   pos As { asPos = p } = p
   pos Name { namePos = p } = p
   pos (Constant t) = pos t
-
-instance Position (Pattern b t s) where
-  pos Pattern { patternPos = p } = p
 
 instance Position (Case b s) where
   pos Case { casePos = p } = p
@@ -693,7 +661,7 @@ instance Position (Comp b s) where
   pos End { endPos = p } = p
   pos (BadComp p) = p
 
-instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Binding b t) where
+instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
   hashWithSalt1 s Deconstruct { deconstructConstructor = constructor,
                                 deconstructBinds = binds,
                                 deconstructStrict = strict } =
@@ -704,10 +672,6 @@ instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Binding b t) where
   hashWithSalt1 s Name { nameSym = name } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt` name
   hashWithSalt1 s (Constant c) = (s `hashWithSalt` (4 :: Int)) `hashWithSalt1` c
-
-instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
-  hashWithSalt1 s Pattern { patternBind = term, patternType = ty } =
-    s `hashWithSalt1` term `hashWithSalt1` ty
 
 instance (Default b, Hashable b) => Hashable1 (Case b) where
   hashWithSalt1 s Case { casePat = pat, caseBody = body } =
@@ -764,10 +728,6 @@ instance (Default b, Hashable b) => Hashable1 (Comp b) where
   hashWithSalt1 s (BadComp _) = s `hashWithSalt` (0 :: Int)
 
 instance (Default b, Hashable b, Hashable1 t, Hashable s) =>
-         Hashable (Binding b t s) where
-  hashWithSalt = hashWithSalt1
-
-instance (Default b, Hashable b, Hashable1 t, Hashable s) =>
          Hashable (Pattern b t s) where
   hashWithSalt = hashWithSalt1
 
@@ -783,16 +743,12 @@ instance (Default b, Hashable b, Hashable s) => Hashable (Cmd b s) where
 instance (Default b, Hashable b, Hashable s) => Hashable (Comp b s) where
   hashWithSalt = hashWithSalt1
 
-instance Functor t => Functor (Binding b t) where
+instance Functor t => Functor (Pattern b t) where
   fmap f b @ Deconstruct { deconstructBinds = binds } =
     b { deconstructBinds = fmap (fmap f) binds }
   fmap f b @ As { asBind = bind } = b { asBind = fmap f bind }
   fmap _ b @ Name { nameSym = name } = b { nameSym = name }
   fmap f (Constant t) = Constant (fmap f t)
-
-instance Functor t => Functor (Pattern b t) where
-  fmap f p @ Pattern { patternBind = term, patternType = ty } =
-    p { patternBind = fmap f term, patternType = fmap f ty }
 
 instance Functor (Case b) where
   fmap f c @ Case { casePat = pat, caseBody = body } =
@@ -836,15 +792,11 @@ instance Functor (Comp b) where
   fmap f c @ End { endCmd = cmd } = c { endCmd = fmap f cmd }
   fmap _ (BadComp p) = BadComp p
 
-instance Foldable t => Foldable (Binding b t) where
+instance Foldable t => Foldable (Pattern b t) where
   foldMap f Deconstruct { deconstructBinds = binds } = foldMap (foldMap f) binds
   foldMap f As { asBind = bind } = foldMap f bind
   foldMap f (Constant t) = foldMap f t
   foldMap _ Name {} = mempty
-
-instance Foldable t => Foldable (Pattern b t) where
-  foldMap f Pattern { patternBind = term, patternType = ty } =
-    foldMap f term `mappend` foldMap f ty
 
 instance Foldable (Case b) where
   foldMap f Case { casePat = pat, caseBody = body } =
@@ -887,7 +839,7 @@ instance Foldable (Comp b) where
   foldMap f End { endCmd = cmd } = foldMap f cmd
   foldMap _ (BadComp _) = mempty
 
-instance Traversable t => Traversable (Binding b t) where
+instance Traversable t => Traversable (Pattern b t) where
   traverse f b @ Deconstruct { deconstructBinds = binds } =
     (\binds' -> b { deconstructBinds = binds' }) <$>
     traverse (traverse f) binds
@@ -895,11 +847,6 @@ instance Traversable t => Traversable (Binding b t) where
   traverse f b @ As { asBind = bind } =
     (\bind' -> b { asBind = bind' }) <$> traverse f bind
   traverse f (Constant t) = Constant <$> traverse f t
-
-instance Traversable t => Traversable (Pattern b t) where
-  traverse f p @ Pattern { patternBind = term, patternType = ty } =
-    (\term' ty' -> p { patternBind = term', patternType = ty' }) <$>
-      traverse f term <*> traverse f ty
 
 instance Traversable (Case b) where
   traverse f c @ Case { casePat = pat, caseBody = body } =
@@ -972,10 +919,10 @@ injectpos = internal "Monad return"
 substpos :: Pos
 substpos = internal "Monad substitution"
 
-instance MonadTrans (Binding b) where
+instance MonadTrans (Pattern b) where
   lift m = Constant m
 
-instance Bound (Binding b) where
+instance Bound (Pattern b) where
   b @ Deconstruct { deconstructBinds = binds } >>>= f =
     b { deconstructBinds = fmap (>>>= f) binds }
   b @ As { asBind = bind } >>>= f = b { asBind = bind >>>= f }
@@ -990,14 +937,9 @@ instance Default b => Applicative (Comp b) where
   pure = return
   (<*>) = ap
 
-patSubstTerm :: Default c => (a -> Term c b) -> Pattern c (Term c) a ->
-                Pattern c (Term c) b
-patSubstTerm f p @ Pattern { patternBind = bind, patternType = ty } =
-  p { patternBind = bind >>>= f, patternType = ty >>= f }
-
 caseSubstTerm :: Default c => (a -> Term c b) -> Case c a -> Case c b
 caseSubstTerm f c @ Case { casePat = pat, caseBody = body } =
-  c { casePat = patSubstTerm f pat, caseBody = body >>>= f }
+  c { casePat = pat >>>= f, caseBody = body >>>= f }
 
 cmdSubstTerm :: Default c => (a -> Term c b) -> Cmd c a -> Cmd c b
 cmdSubstTerm f c @ Value { valTerm = term } = c { valTerm = term >>= f }
@@ -1007,9 +949,8 @@ cmdSubstTerm _ (BadCmd p) = BadCmd p
 compSubstTerm :: Default c => (a -> Term c b) -> Comp c a -> Comp c b
 compSubstTerm f c @ Seq { seqCmd = cmd, seqNext = next,
                           seqType = ty, seqPat = pat } =
-  c { seqType = ty >>= f, seqPat = patSubstTerm f pat,
-      seqNext = next >>>= compSubstTerm f . return,
-      seqCmd = cmdSubstTerm f cmd }
+  c { seqType = ty >>= f, seqPat = pat >>>= f, seqCmd = cmdSubstTerm f cmd,
+      seqNext = next >>>= compSubstTerm f . return }
 compSubstTerm f c @ End { endCmd = cmd } =
   c { endCmd = cmdSubstTerm f cmd }
 compSubstTerm _ (BadComp p) = BadComp p
@@ -1023,8 +964,7 @@ instance Default b => Monad (Term b) where
   t @ RefineType { refineType = ty, refineCases = cases } >>= f =
     t { refineType = ty >>= f, refineCases = fmap (caseSubstTerm f) cases }
   t @ CompType { compType = ty, compPat = pat, compSpec = spec } >>= f =
-    t { compType = ty >>= f, compPat = patSubstTerm f pat,
-        compSpec = spec >>>= f }
+    t { compType = ty >>= f, compPat = pat >>>= f, compSpec = spec >>>= f }
   t @ Forall { forallType = ty, forallCases = cases } >>= f =
     t { forallCases = fmap (caseSubstTerm f) cases, forallType = ty >>= f }
   t @ Exists { existsType = ty, existsCases = cases } >>= f =
@@ -1043,19 +983,14 @@ instance Default b => Monad (Term b) where
     t { etaTerm = term >>= f, etaType = ty >>= f }
   BadTerm p >>= _ = BadTerm p
 
-bindSubstComp :: Default c => (a -> Comp c b) -> Binding c (Term c) a ->
-                Binding c (Term c) b
-bindSubstComp f b @ Deconstruct { deconstructBinds = binds } =
-  b { deconstructBinds = fmap (bindSubstComp f) binds }
-bindSubstComp f b @ As { asBind = bind } =
-  b { asBind = bindSubstComp f bind }
-bindSubstComp _ b @ Name { nameSym = name } = b { nameSym = name }
-bindSubstComp f (Constant t) = Constant (termSubstComp f t)
-
 patSubstComp :: Default c => (a -> Comp c b) -> Pattern c (Term c) a ->
                 Pattern c (Term c) b
-patSubstComp f p @ Pattern { patternBind = bind, patternType = ty } =
-  p { patternBind = bindSubstComp f bind, patternType = termSubstComp f ty }
+patSubstComp f b @ Deconstruct { deconstructBinds = binds } =
+  b { deconstructBinds = fmap (patSubstComp f) binds }
+patSubstComp f b @ As { asBind = bind } =
+  b { asBind = patSubstComp f bind }
+patSubstComp _ b @ Name { nameSym = name } = b { nameSym = name }
+patSubstComp f (Constant t) = Constant (termSubstComp f t)
 
 caseSubstComp :: Default c => (a -> Comp c b) -> Case c a -> Case c b
 caseSubstComp f c @ Case { casePat = pat, caseBody = body } =
@@ -1125,83 +1060,66 @@ arbitraryPos = internal "arbitrary"
 -- The top-level function takes a set of bound vars, and produces a
 -- binding and a new set of bound vars.  This behavior is different
 -- from the inner functions.
-arbitraryBinding :: (Default s, Ord s, Arbitrary s) => Set s -> Int ->
-                    Gen (Binding s (Term s) s, Set s)
-arbitraryBinding scope insize
+arbitraryPattern :: (Default s, Ord s, Arbitrary s) => Set s -> Int ->
+                    Gen (Pattern s (Term s) s, Set s)
+arbitraryPattern scope insize
  | 0 < insize =
   let
-    arbitraryBinding' vars size =
+    arbitraryPattern' vars size =
       let
         arbitraryNewName =
           suchThat arbitrary (\name -> not (Set.member name vars))
 
-        arbitraryNameBinding =
+        arbitraryNamePattern =
           do
             var <- arbitraryNewName
             return (Name { nameSym = var, namePos = arbitraryPos },
                     Set.insert var vars)
 
-        arbitraryAsBinding =
+        arbitraryAsPattern =
           do
             var <- arbitraryNewName
-            (bind, vars') <- arbitraryBinding (Set.insert var vars) (size - 1)
+            (bind, vars') <- arbitraryPattern (Set.insert var vars) (size - 1)
             return (As { asName = var, asBind = bind, asPos = arbitraryPos },
                     vars')
 
-        arbitraryConstantBinding =
+        arbitraryConstantPattern =
           do
             term <- arbitraryTerm scope size
             return (Constant term, vars)
 
-        arbitraryDeconstructBinding =
+        arbitraryDeconstructPattern =
           let
-            arbitraryBindings vars' size'
+            arbitraryPatterns vars' size'
              | size > 0 =
               do
                 thissize <- choose (0, size' - 1)
                 bindvar <- arbitrary
                 (bind, newvars) <-
-                  arbitraryBinding' (Set.insert bindvar vars') thissize
+                  arbitraryPattern' (Set.insert bindvar vars') thissize
                 (binds, newvars') <-
-                  arbitraryBindings newvars (size' - thissize - 1)
+                  arbitraryPatterns newvars (size' - thissize - 1)
                 return ((bindvar, bind) : binds, newvars')
              | otherwise = return ([], vars')
           in do
             strict <- arbitrary
             constructor <- elements (Set.toList scope)
-            (binds, newvars) <- arbitraryBindings vars size
+            (binds, newvars) <- arbitraryPatterns vars size
             return (Deconstruct { deconstructBinds = Map.fromList binds,
                                   deconstructStrict = strict,
                                   deconstructConstructor = constructor,
                                   deconstructPos = arbitraryPos }, newvars)
       in
-        oneof [ arbitraryConstantBinding, arbitraryDeconstructBinding,
-                arbitraryNameBinding, arbitraryAsBinding ]
+        oneof [ arbitraryConstantPattern, arbitraryDeconstructPattern,
+                arbitraryNamePattern, arbitraryAsPattern ]
   in do
-    (bind, vars) <- arbitraryBinding' Set.empty insize
+    (bind, vars) <- arbitraryPattern' Set.empty insize
     return (bind, Set.union vars scope)
  | otherwise =
   do
     var <- arbitrary
     return (Name { nameSym = var, namePos = arbitraryPos },
             Set.insert var scope)
-
-arbitraryPattern :: (Default s, Ord s, Arbitrary s) => Set s -> Int ->
-                    Gen (Pattern s (Term s) s, Set s)
-arbitraryPattern scope size
-  | size > 1 =
-    do
-      tysize <- choose (0, size - 1)
-      ty <- arbitraryTerm scope tysize
-      (bind, newscope) <- arbitraryBinding scope (size - tysize - 1)
-      return (Pattern { patternType = ty, patternBind = bind,
-                        patternPos = arbitraryPos }, newscope)
-  | otherwise =
-    do
-      ty <- arbitraryTerm scope 0
-      (bind, newscope) <- arbitraryBinding scope 0
-      return (Pattern { patternType = ty, patternBind = bind,
-                        patternPos = arbitraryPos }, newscope)
 
 arbitraryTerm :: (Default s, Ord s, Arbitrary s) =>
                  Set s -> Int -> Gen (Term s s)
@@ -1335,8 +1253,8 @@ shrinkBindOrder :: Ord a => Map a b -> [a] -> [a]
 shrinkBindOrder m = filter ((flip Map.member) m)
 
 instance (Default s, Ord s, Arbitrary s) =>
-         Arbitrary (Binding s (Term s) s) where
-  arbitrary = sized (arbitraryBinding Set.empty) >>= return . fst
+         Arbitrary (Pattern s (Term s) s) where
+  arbitrary = sized (arbitraryPattern Set.empty) >>= return . fst
 
   shrink b @ Deconstruct { deconstructBinds = binds } =
     case Map.assocs binds of
@@ -1347,14 +1265,6 @@ instance (Default s, Ord s, Arbitrary s) =>
     bind : (map (\bind' -> b { asBind = bind' }) (shrink bind))
   shrink Name {} = []
   shrink (Constant t) = map Constant (shrink t)
-
-instance (Default s, Ord s, Arbitrary s) =>
-         Arbitrary (Pattern s (Term s) s) where
-  arbitrary = sized (arbitraryPattern Set.empty) >>= return . fst
-
-  shrink p @ Pattern { patternType = ty, patternBind = bind } =
-    map (\ty' -> p { patternType = ty' }) (shrink ty) ++
-    map (\bind' -> p { patternBind = bind' }) (shrink bind)
 
 instance (Default s, Ord s, Arbitrary s) => Arbitrary (Case s s) where
   arbitrary = error "Not implemented yet"
@@ -1447,7 +1357,7 @@ formatBind :: (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
 formatBind (name, bind) = hang bind 2 ("as" <+> name)
 
 instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
-         Format (Binding b t s) where
+         Format (Pattern b t s) where
   format Deconstruct { deconstructConstructor = constructor,
                        deconstructBinds = binds,
                        deconstructStrict = strict } =
@@ -1461,11 +1371,6 @@ instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
     hang bind 2 ("as" <+> format name)
   format Name { nameSym = sym } = format sym
   format (Constant t) =   block 2 ("val" <+> lparen) (format t) rparen
-
-instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
-         Format (Pattern b t s) where
-  format Pattern { patternBind = binds, patternType = ty } =
-    hang (lparen <> binds <> rparen <+> colon) 2 (lparen <> ty <> rparen)
 
 instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Case b s) where
   format Case { casePat = pat, caseBody = body } = hang (pat <+> equals) 2 body
