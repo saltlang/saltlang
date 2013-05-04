@@ -1278,6 +1278,7 @@ arbitraryComp scope size
     cmd <- arbitraryCmd scope 0
     return End { endCmd = cmd, endPos = arbitraryPos }
 
+-- A wrapper for shrinking scopes
 shrinkScope :: (Ord s, Foldable t, Monad t, Arbitrary (t s)) =>
                Scope s t s -> [Scope s t s]
 shrinkScope scope =
@@ -1286,6 +1287,33 @@ shrinkScope scope =
     instantiated = instantiate return scope
   in
     map (abstract (abstractfun binds)) (shrink instantiated)
+
+-- Wrap up the associations in a map into a newtype so that we can
+-- redefine the way shrink works, so we can just shrink the list
+newtype Assoc a b = Assoc { unAssoc :: (a, b) }
+newtype AssocScope s t = AssocScope { unAssocScope :: (s, Scope s t s) }
+
+instance (Arbitrary a, Arbitrary b) => Arbitrary (Assoc a b) where
+  arbitrary = error "Don't use Assoc in this way"
+  shrink Assoc { unAssoc = (a, b) } = map (\b' -> Assoc (a, b')) (shrink b)
+
+instance (Arbitrary s, Ord s, Foldable t, Monad t, Arbitrary (t s)) =>
+         Arbitrary (AssocScope s t) where
+  arbitrary = error "Don't use Assoc in this way"
+  shrink AssocScope { unAssocScope = (a, b) } =
+    map (\b' -> AssocScope (a, b')) (shrinkScope b)
+
+shrinkMap :: (Arbitrary a, Ord a, Arbitrary b) => Map a b -> [Map a b]
+shrinkMap =
+  map Map.fromList . map (map unAssoc) . shrink . map Assoc . Map.assocs
+
+shrinkScopeMap :: (Arbitrary s, Ord s, Foldable t, Monad t, Arbitrary (t s)) =>
+                  Map s (Scope s t s) -> [Map s (Scope s t s)]
+shrinkScopeMap = map Map.fromList . map (map unAssocScope) .
+                 shrink . map AssocScope . Map.assocs
+
+shrinkBindOrder :: Ord a => Map a b -> [a] -> [a]
+shrinkBindOrder m = filter ((flip Map.member) m)
 
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Binding s (Term s) s) where
@@ -1309,14 +1337,61 @@ instance (Default s, Ord s, Arbitrary s) =>
     map (\ty' -> p { patternType = ty' }) (shrink ty) ++
     map (\bind' -> p { patternBind = bind' }) (shrink bind)
 
+instance (Default s, Ord s, Arbitrary s) => Arbitrary (Case s s) where
+  arbitrary = error "Not implemented yet"
+
+  shrink c @ Case { casePat = pat, caseBody = body } =
+    map (\pat' -> c { casePat = pat', caseBody = body }) (shrink pat) ++
+    map (\body' -> c { casePat = pat, caseBody = body' }) (shrinkScope body)
+
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Term s s) where
   arbitrary = sized (arbitraryTerm Set.empty)
 
+  -- XXX The types, the Forall/Exists, and Fix may end up creating
+  -- orhpaned bound variables in scopes.  We probably need a function
+  -- to go through and convert those into free variables.
+  shrink t @ ProdType { prodArgTys = argtys, prodRetTy = retty,
+                        prodBindOrder = order } =
+    map (\argtys' -> t { prodArgTys = argtys', prodRetTy = retty,
+                         prodBindOrder = shrinkBindOrder argtys' order })
+        (shrinkScopeMap argtys) ++
+    map (\retty' -> t { prodArgTys = argtys, prodRetTy = retty',
+                        prodBindOrder = order }) (shrinkScope retty)
+  shrink t @ SumType { sumBody = body, sumBindOrder = order } =
+    map (\body' -> t { sumBindOrder = shrinkBindOrder body' order,
+                       sumBody = body' }) (shrinkScopeMap body)
+  shrink t @ RefineType { refinePat = pat, refineProp = prop } =
+    map (\pat' -> t { refinePat = pat', refineProp = prop }) (shrink pat) ++
+    map (\prop' -> t { refinePat = pat, refineProp = prop' }) (shrinkScope prop)
+  shrink t @ CompType { compPat = pat, compSpec = spec } =
+    map (\pat' -> t { compPat = pat', compSpec = spec }) (shrink pat) ++
+    map (\spec' -> t { compPat = pat, compSpec = spec' }) (shrinkScope spec)
+  shrink t @ Forall { forallPat = pat, forallProp = prop } =
+    map (\pat' -> t { forallPat = pat', forallProp = prop }) (shrink pat) ++
+    map (\prop' -> t { forallPat = pat, forallProp = prop' }) (shrinkScope prop)
+  shrink t @ Exists { existsPat = pat, existsProp = prop } =
+    map (\pat' -> t { existsPat = pat', existsProp = prop }) (shrink pat) ++
+    map (\prop' -> t { existsPat = pat, existsProp = prop' }) (shrinkScope prop)
+  shrink t @ Call { callArgs = args, callFunc = func } =
+    map (\func' -> t { callArgs = args, callFunc = func' }) (shrink func) ++
+    map (\args' -> t { callArgs = args', callFunc = func }) (shrinkMap args)
   shrink t @ Typed { typedType = ty, typedTerm = term } =
     map (\ty' -> t { typedType = ty' }) (shrink ty) ++
     map (\term' -> t { typedType = term' }) (shrink term)
   shrink Var {} = []
+  shrink t @ Eta { etaType = ty, etaTerm = term } =
+    map (\ty' -> t { etaType = ty', etaTerm = term }) (shrink ty) ++
+    map (\term' -> t { etaType = ty, etaTerm = term' }) (shrink term)
+  shrink t @ Lambda { lambdaCases = cases } =
+    map (\cases' -> t { lambdaCases = cases' }) (shrink cases)
+  shrink t @ Record { recVals = vals } =
+    map (\vals' -> t { recVals = vals' }) (shrinkMap vals)
+  shrink t @ Fix { fixTerms = terms } =
+    map (\terms' -> t { fixTerms = terms' }) (shrinkScopeMap terms)
+  shrink t @ Comp { compBody = body } =
+    map (\body' -> t { compBody = body' }) (shrink body)
+  shrink (BadTerm _) = []
 
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Cmd s s) where
