@@ -188,6 +188,8 @@ data Term bound free =
   -- includes both its result type and a specification of its
   -- behavior.
   | CompType {
+      -- | The result type of the computation.
+      compType :: Term bound free,
       -- | The binder for the result of this computation.
       compPat :: Pattern bound (Term bound) free,
       -- | The specification describing the computation's behavior.
@@ -437,9 +439,9 @@ instance (Default b, Eq b) => Eq1 (Term b) where
   RefineType { refineType = ty1, refineCases = cases1 } ==#
     RefineType { refineType = ty2, refineCases = cases2 } =
       (ty1 ==# ty2) && (cases1 ==# cases2)
-  CompType { compPat = pat1, compSpec = spec1 } ==#
-    CompType { compPat = pat2, compSpec = spec2 } =
-      (pat1 ==# pat2) && (spec1 ==# spec2)
+  CompType { compType = ty1, compPat = pat1, compSpec = spec1 } ==#
+    CompType { compType = ty2, compPat = pat2, compSpec = spec2 } =
+      (ty1 ==# ty2) && (pat1 ==# pat2) && (spec1 ==# spec2)
   Forall { forallType = ty1, forallCases = cases1 } ==#
     Forall { forallType = ty2, forallCases = cases2 } =
       (ty1 ==# ty2) && (cases1 ==# cases2)
@@ -550,10 +552,12 @@ instance (Default b, Ord b) => Ord1 (Term b) where
       out -> out
   compare1 RefineType {} _ = GT
   compare1 _ RefineType {} = LT
-  compare1 CompType { compPat = pat1, compSpec = spec1 }
-           CompType { compPat = pat2, compSpec = spec2 } =
-    case compare1 pat1 pat2 of
-      EQ -> compare1 spec1 spec2
+  compare1 CompType { compType = ty1, compPat = pat1, compSpec = spec1 }
+           CompType { compType = ty2, compPat = pat2, compSpec = spec2 } =
+    case compare ty1 ty2 of
+      EQ -> case compare1 pat1 pat2 of
+        EQ -> compare1 spec1 spec2
+        out -> out
       out -> out
   compare1 CompType {} _ = GT
   compare1 _ CompType {} = LT
@@ -718,8 +722,9 @@ instance (Default b, Hashable b) => Hashable1 (Term b) where
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` bindord `hashWithSalt1` body
   hashWithSalt1 s RefineType { refineType = ty, refineCases = cases } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
-  hashWithSalt1 s CompType { compPat = pat, compSpec = spec } =
-    s `hashWithSalt` (4 :: Int) `hashWithSalt1` pat `hashWithSalt1` spec
+  hashWithSalt1 s CompType { compType = ty, compPat = pat, compSpec = spec } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt1`
+    pat `hashWithSalt1` ty `hashWithSalt1` spec
   hashWithSalt1 s Forall { forallType = ty, forallCases = cases } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s Exists { existsType = ty, existsCases = cases } =
@@ -799,8 +804,8 @@ instance Functor (Term b) where
   fmap f t @ SumType { sumBody = body } = t { sumBody = fmap (fmap f) body }
   fmap f t @ RefineType { refineType = ty, refineCases = cases } =
     t { refineType = fmap f ty, refineCases = fmap (fmap f) cases }
-  fmap f t @ CompType { compPat = pat, compSpec = spec } =
-    t { compPat = fmap f pat, compSpec = fmap f spec }
+  fmap f t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
+    t { compType = fmap f ty, compPat = fmap f pat, compSpec = fmap f spec }
   fmap f t @ Forall { forallType = ty, forallCases = cases } =
     t { forallType = fmap f ty, forallCases = fmap (fmap f) cases }
   fmap f t @ Exists { existsType = ty, existsCases = cases } =
@@ -851,8 +856,8 @@ instance Foldable (Term b) where
   foldMap f SumType { sumBody = body } = foldMap (foldMap f) body
   foldMap f RefineType { refineType = ty, refineCases = cases } =
     foldMap f ty `mappend` foldMap (foldMap f) cases
-  foldMap f CompType { compPat = pat, compSpec = spec } =
-    foldMap f pat `mappend` foldMap f spec
+  foldMap f CompType { compType = ty, compPat = pat, compSpec = spec } =
+    foldMap f pat `mappend` foldMap f ty `mappend` foldMap f spec
   foldMap f Forall { forallType = ty, forallCases = cases } =
     foldMap f ty `mappend` foldMap (foldMap f) cases
   foldMap f Exists { existsType = ty, existsCases = cases } =
@@ -910,9 +915,10 @@ instance Traversable (Term b) where
   traverse f t @ RefineType { refineType = ty, refineCases = cases } =
     (\ty' cases' -> t { refineType = ty', refineCases = cases' }) <$>
       traverse f ty <*> traverse (traverse f) cases
-  traverse f t @ CompType { compPat = pat, compSpec = spec } =
-    (\pat' spec' -> t { compPat = pat', compSpec = spec' }) <$>
-      traverse f pat <*> traverse f spec
+  traverse f t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
+    (\ty' pat' spec' -> t { compType = ty', compPat = pat',
+                            compSpec = spec' }) <$>
+      traverse f ty <*> traverse f pat <*> traverse f spec
   traverse f t @ Forall { forallType = ty, forallCases = cases } =
     (\ty' cases' -> t { forallType = ty', forallCases = cases' }) <$>
       traverse f ty <*> traverse (traverse f) cases
@@ -1016,8 +1022,9 @@ instance Default b => Monad (Term b) where
   t @ SumType { sumBody = body } >>= f = t { sumBody = fmap (>>>= f) body }
   t @ RefineType { refineType = ty, refineCases = cases } >>= f =
     t { refineType = ty >>= f, refineCases = fmap (caseSubstTerm f) cases }
-  t @ CompType { compPat = pat, compSpec = spec } >>= f =
-    t { compPat = patSubstTerm f pat, compSpec = spec >>>= f }
+  t @ CompType { compType = ty, compPat = pat, compSpec = spec } >>= f =
+    t { compType = ty >>= f, compPat = patSubstTerm f pat,
+        compSpec = spec >>>= f }
   t @ Forall { forallType = ty, forallCases = cases } >>= f =
     t { forallCases = fmap (caseSubstTerm f) cases, forallType = ty >>= f }
   t @ Exists { existsType = ty, existsCases = cases } >>= f =
@@ -1064,9 +1071,9 @@ termSubstComp f t @ SumType { sumBody = body } =
 termSubstComp f t @ RefineType { refineType = ty, refineCases = cases } =
   t { refineCases = fmap (caseSubstComp f) cases,
       refineType = termSubstComp f ty }
-termSubstComp f t @ CompType { compPat = pat, compSpec = spec } =
+termSubstComp f t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
   t { compSpec = spec >>>= termSubstComp f . return,
-      compPat = patSubstComp f pat }
+      compType = termSubstComp f ty, compPat = patSubstComp f pat }
 termSubstComp f t @ Forall { forallType = ty, forallCases = cases } =
   t { forallCases = fmap (caseSubstComp f) cases,
       forallType = termSubstComp f ty }
@@ -1374,7 +1381,8 @@ instance (Default s, Ord s, Arbitrary s) =>
   shrink t @ RefineType { refineType = ty, refineCases = cases } =
     map (\ty' -> t { refineType = ty' }) (shrink ty) ++
     map (\cases' -> t { refineCases = cases' }) (shrink cases)
-  shrink t @ CompType { compPat = pat, compSpec = spec } =
+  shrink t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
+    map (\ty' -> t { compType = ty' }) (shrink ty) ++
     map (\pat' -> t { compPat = pat' }) (shrink pat) ++
     map (\spec' -> t { compSpec = spec' }) (shrinkScope spec)
   shrink t @ Forall { forallType = ty, forallCases = cases } =
@@ -1477,9 +1485,10 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
       lparen <> (nest 1 (sep (punctuate comma args'))) <> rparen
   format RefineType { refineType = ty, refineCases = cases } =
     (ty <+> "where") <+> (nest 2 (sep (punctuate "|" cases)))
-  format CompType { compPat = pat, compSpec = spec } =
+  format CompType { compType = ty, compPat = pat, compSpec = spec } =
     let
-      patDoc = lparen <> format pat <> rparen
+      patDoc =
+        hang (lparen <> pat <> rparen <+> colon) 2 (lparen <> ty <> rparen)
       propDoc = lparen <> format spec <> rparen
     in
       hang patDoc 2 ("with spec" <+> propDoc)
