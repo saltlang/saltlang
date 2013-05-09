@@ -608,8 +608,10 @@ instance (Default b, Ord b) => Ord1 (Cmd b) where
   compare1 (BadCmd _) (BadCmd _) = EQ
 
 instance (Default b, Ord b) => Ord1 (Comp b) where
-  compare1 Seq { seqType = ty1, seqPat = pat1, seqCmd = cmd1, seqNext = next1 }
-           Seq { seqType = ty2, seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
+  compare1 Seq { seqType = ty1, seqPat = pat1,
+                 seqCmd = cmd1, seqNext = next1 }
+           Seq { seqType = ty2, seqPat = pat2,
+                 seqCmd = cmd2, seqNext = next2 } =
     case compare1 ty1 ty2 of
       EQ -> case compare1 pat1 pat2 of
         EQ -> case compare1 cmd1 cmd2 of
