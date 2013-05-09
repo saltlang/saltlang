@@ -34,7 +34,7 @@ module Language.Salt.Core.Syntax(
 import Bound
 import Bound.ExtraInstances()
 import Control.Applicative
-import Control.Monad
+import Control.Monad hiding (mapM)
 import Control.Monad.Trans
 import Data.Default
 import Data.Foldable
@@ -46,7 +46,7 @@ import Data.Monoid(mappend, mempty)
 import Data.Pos
 import Data.Set(Set)
 import Data.Traversable
-import Prelude hiding (foldr1, foldr)
+import Prelude hiding (foldr1, foldr, mapM)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
 import Test.QuickCheck
@@ -424,27 +424,27 @@ instance (Default b, Eq b) => Eq1 (Element b) where
 instance (Default b, Eq b) => Eq1 (Term b) where
   ProdType { prodArgs = argtys1, prodRetTy = retty1 } ==#
     ProdType { prodArgs = argtys2, prodRetTy = retty2 } =
-      (argtys1 ==# argtys2) && (retty1 ==# retty2)
+      argtys1 ==# argtys2 && retty1 ==# retty2
   SumType { sumBody = body1 } ==# SumType { sumBody = body2 } = body1 ==# body2
   RefineType { refineType = ty1, refineCases = cases1 } ==#
     RefineType { refineType = ty2, refineCases = cases2 } =
-      (ty1 ==# ty2) && (cases1 ==# cases2)
+      ty1 ==# ty2 && cases1 ==# cases2
   CompType { compType = ty1, compPat = pat1, compSpec = spec1 } ==#
     CompType { compType = ty2, compPat = pat2, compSpec = spec2 } =
-      (ty1 ==# ty2) && (pat1 ==# pat2) && (spec1 ==# spec2)
+      ty1 ==# ty2 && pat1 ==# pat2 && spec1 ==# spec2
   Quantified { quantKind = kind1, quantType = ty1, quantCases = cases1 } ==#
     Quantified { quantKind = kind2, quantType = ty2, quantCases = cases2 } =
       kind1 == kind2 && ty1 ==# ty2 && cases1 ==# cases2
   Call { callArgs = args1, callFunc = func1 } ==#
     Call { callArgs = args2, callFunc = func2 } =
-      (args1 ==# args2) && (func1 ==# func2)
+      args1 ==# args2 && func1 ==# func2
   Var { varSym = sym1 } ==# Var { varSym = sym2 } = sym1 == sym2
   Typed { typedTerm = term1, typedType = ty1 } ==#
     Typed { typedTerm = term2, typedType = ty2 } =
-      (term1 ==# term2) && (ty1 ==# ty2)
+      term1 ==# term2 && ty1 ==# ty2
   Eta { etaTerm = term1, etaType = ty1 } ==#
     Eta { etaTerm = term2, etaType = ty2 } =
-      (term1 ==# term2) && (ty1 ==# ty2)
+      term1 ==# term2 && ty1 ==# ty2
   Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
     cases1 == cases2
   Record { recVals = vals1 } ==# Record { recVals = vals2 } = vals1 ==# vals2
@@ -462,7 +462,7 @@ instance (Default b, Eq b) => Eq1 (Cmd b) where
 instance (Default b, Eq b) => Eq1 (Comp b) where
   Seq { seqType = ty1, seqPat = pat1, seqCmd = cmd1, seqNext = next1 } ==#
     Seq { seqType = ty2, seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
-      (pat1 ==# pat2) && (cmd1 ==# cmd2) && (next1 ==# next2) && (ty1 ==# ty2)
+      pat1 ==# pat2 && cmd1 ==# cmd2 && next1 ==# next2 && ty1 ==# ty2
   End { endCmd = cmd1 } ==# End { endCmd = cmd2 } = cmd1 ==# cmd2
   BadComp _ ==# BadComp _ = True
   _ ==# _ = False
@@ -1087,7 +1087,7 @@ arbitraryPos :: Pos
 arbitraryPos = internal "arbitrary"
 
 -- The top-level function takes a set of bound vars, and produces a
--- binding and a new set of bound vars.  This behavior is different
+-- pattern and a new set of bound vars.  This behavior is different
 -- from the inner functions.
 arbitraryPattern :: (Default s, Ord s, Arbitrary s) => Set s -> Int ->
                     Gen (Pattern s (Term s) s, Set s)
@@ -1150,6 +1150,38 @@ arbitraryPattern scope insize
     return (Name { nameSym = var, namePos = arbitraryPos },
             Set.insert var scope)
 
+arbitraryCases :: (Default s, Ord s, Arbitrary s) =>
+                  Set s -> Int -> Gen [Case s s]
+arbitraryCases scope size
+  | 0 < size =
+    do
+      patsize <- choose (0, size - 1)
+      bodysize <- choose (0, size - patsize - 1)
+      (pat, newscope) <- arbitraryPattern scope patsize
+      body <- arbitraryTerm newscope bodysize
+      rest <- arbitraryCases scope (size - patsize - bodysize - 1)
+      return (Case { caseBody = abstract (abstractfun newscope) body,
+                     casePat = pat, casePos = arbitraryPos } : rest)
+  | otherwise = return []
+
+arbitraryElements :: (Default s, Ord s, Arbitrary s) =>
+                     Set s -> Int -> Gen ([Element s s], Set s)
+arbitraryElements scope size
+  | 0 < size =
+    do
+      name <- arbitrary
+      patsize <- choose (0, size - 1)
+      typesize <- choose (0, size - patsize - 1)
+      ty <- arbitraryTerm scope typesize
+      (pat, newscope) <- arbitraryPattern scope patsize
+      (rest, outscope) <-
+        arbitraryElements newscope (size - patsize - typesize - 1)
+      return (Element { elemType = abstract (abstractfun newscope) ty,
+                        elemName = name, elemPat = pat,
+                        elemPos = arbitraryPos } : rest,
+              outscope)
+  | otherwise = return ([], scope)
+
 arbitraryTerm :: (Default s, Ord s, Arbitrary s) =>
                  Set s -> Int -> Gen (Term s s)
 arbitraryTerm bindings size =
@@ -1163,6 +1195,53 @@ arbitraryTerm bindings size =
           rest <- genEntries (size' - fieldsize - 1)
           return ((field, val) : rest)
       | otherwise = return []
+
+    arbitraryProdType =
+      do
+        argssize <- choose (1, size)
+        (args, newscope) <- arbitraryElements bindings argssize
+        retty <- arbitraryTerm newscope (size - argssize - 1)
+        return ProdType { prodRetTy = abstract (abstractfun newscope) retty,
+                          prodArgs = args, prodTypePos = arbitraryPos }
+
+    arbitrarySumType =
+      do
+        (body, _) <- arbitraryElements bindings size
+        return SumType { sumBody = body, sumTypePos = arbitraryPos }
+
+    arbitraryRefineType =
+      do
+        casessize <- choose (1, size)
+        ty <- arbitraryTerm bindings (size - casessize)
+        cases <- arbitraryCases bindings casessize
+        return RefineType { refineType = ty, refineCases = cases,
+                            refinePos = arbitraryPos }
+
+    arbitraryCompType =
+      do
+        patsize <- choose (0, size - 1)
+        specsize <- choose (0, size - patsize - 1)
+        ty <- arbitraryTerm bindings (size - patsize - specsize - 1)
+        (pat, newscope) <- arbitraryPattern bindings patsize
+        spec <- arbitraryTerm bindings specsize
+        return CompType { compType = ty, compPat = pat,
+                          compTypePos = arbitraryPos,
+                          compSpec = abstract (abstractfun newscope) spec }
+
+    arbitraryQuantifiedTerm =
+      do
+        kind <- arbitrary
+        casessize <- choose (1, size)
+        ty <- arbitraryTerm bindings (size - casessize)
+        cases <- arbitraryCases bindings casessize
+        return Quantified { quantKind = kind, quantType = ty,
+                            quantCases = cases, quantPos = arbitraryPos }
+
+    arbitraryLambdaTerm =
+      do
+        casessize <- choose (1, size)
+        cases <- arbitraryCases bindings casessize
+        return Lambda { lambdaCases = cases, lambdaPos = arbitraryPos }
 
     arbitraryCallTerm =
       do
@@ -1194,10 +1273,39 @@ arbitraryTerm bindings size =
         val <- arbitraryTerm bindings (size - tysize - 1)
         return Typed { typedTerm = val, typedType = ty,
                        typedPos = arbitraryPos }
+
+    arbitraryNameSizes size'
+      | 0 < size' =
+        do
+          name <- arbitrary
+          thissize <- choose (0, size' - 1)
+          rest <- arbitraryNameSizes (size' - thissize - 1)
+          return ((name, thissize) : rest)
+      | otherwise = return []
+
+    arbitraryFixTerm =
+      let
+        mapfun newsyms (name, size') =
+          let
+            newscope = Set.union bindings (Set.fromList newsyms)
+          in do
+            body <- arbitraryTerm newscope size'
+            return (name, abstract (abstractfun newscope) body)
+      in do
+        namesizes <- arbitraryNameSizes size
+        terms <- mapM (mapfun (map fst namesizes)) namesizes
+        return Fix { fixTerms = Map.fromList terms, fixPos = arbitraryPos }
+
+    arbitraryCompTerm =
+      do
+        comp <- arbitraryComp bindings size
+        return Comp { compBody = comp, compPos = arbitraryPos }
   in if 0 > size
-    then oneof [ arbitraryBoundVarTerm, arbitraryFreeVarTerm,
-                 arbitraryTypedTerm, arbitraryRecordTerm,
-                 arbitraryCallTerm ]
+    then oneof [ arbitraryProdType, arbitrarySumType, arbitraryRefineType,
+                 arbitraryCompType, arbitraryQuantifiedTerm,
+                 arbitraryLambdaTerm, arbitraryBoundVarTerm,
+                 arbitraryFreeVarTerm, arbitraryTypedTerm, arbitraryRecordTerm,
+                 arbitraryCallTerm, arbitraryFixTerm, arbitraryCompTerm ]
     else oneof [ arbitraryBoundVarTerm, arbitraryFreeVarTerm ]
 
 arbitraryCmd :: (Default s, Ord s, Arbitrary s) => Set s -> Int -> Gen (Cmd s s)
@@ -1277,6 +1385,9 @@ shrinkScopeMap :: (Arbitrary s, Ord s, Foldable t, Monad t, Arbitrary (t s)) =>
                   Map s (Scope s t s) -> [Map s (Scope s t s)]
 shrinkScopeMap = map Map.fromList . map (map unAssocScope) .
                  shrink . map AssocScope . Map.assocs
+
+instance Arbitrary Quantifier where
+  arbitrary = elements [ Forall, Exists ]
 
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Pattern s (Term s) s) where
