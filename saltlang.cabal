@@ -93,6 +93,6 @@ Library
                         bound, containers, prelude-extras, mtl, hashable,
                         hashable-extras
   exposed-modules:      Language.Salt.Core,
+                        Language.Salt.Core.Syntax,
                         Language.Salt.Surface.AST
-  other-modules:        Language.Salt.Core.Syntax,
-                        Language.Salt.Surface.Common
+  other-modules:        Language.Salt.Surface.Common

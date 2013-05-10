@@ -1091,64 +1091,64 @@ arbitraryPos = internal "arbitrary"
 -- from the inner functions.
 arbitraryPattern :: (Default s, Ord s, Arbitrary s) => Set s -> Int ->
                     Gen (Pattern s (Term s) s, Set s)
-arbitraryPattern scope insize
- | 0 < insize =
+arbitraryPattern scope insize =
   let
-    arbitraryPattern' vars size =
-      let
-        arbitraryNewName =
-          suchThat arbitrary (\name -> not (Set.member name vars))
+    arbitraryPattern' vars size
+      | 0 < size =
+        let
+          arbitraryNewName =
+            suchThat arbitrary (\name -> not (Set.member name vars))
 
-        arbitraryNamePattern =
-          do
-            var <- arbitraryNewName
-            return (Name { nameSym = var, namePos = arbitraryPos },
-                    Set.insert var vars)
+          arbitraryNamePattern =
+            do
+              var <- arbitraryNewName
+              return (Name { nameSym = var, namePos = arbitraryPos },
+                      Set.insert var vars)
 
-        arbitraryAsPattern =
-          do
-            var <- arbitraryNewName
-            (bind, vars') <- arbitraryPattern (Set.insert var vars) (size - 1)
-            return (As { asName = var, asBind = bind, asPos = arbitraryPos },
-                    vars')
+          arbitraryAsPattern =
+            do
+              var <- arbitraryNewName
+              (bind, vars') <- arbitraryPattern (Set.insert var vars) (size - 1)
+              return (As { asName = var, asBind = bind, asPos = arbitraryPos },
+                      vars')
 
-        arbitraryConstantPattern =
-          do
-            term <- arbitraryTerm scope size
-            return (Constant term, vars)
+          arbitraryConstantPattern =
+            do
+              term <- arbitraryTerm scope size
+              return (Constant term, vars)
 
-        arbitraryDeconstructPattern =
-          let
-            arbitraryPatterns vars' size'
-             | size > 0 =
-              do
-                thissize <- choose (0, size' - 1)
-                bindvar <- arbitrary
-                (bind, newvars) <-
-                  arbitraryPattern' (Set.insert bindvar vars') thissize
-                (binds, newvars') <-
-                  arbitraryPatterns newvars (size' - thissize - 1)
-                return ((bindvar, bind) : binds, newvars')
-             | otherwise = return ([], vars')
-          in do
-            strict <- arbitrary
-            constructor <- elements (Set.toList scope)
-            (binds, newvars) <- arbitraryPatterns vars size
-            return (Deconstruct { deconstructBinds = Map.fromList binds,
-                                  deconstructStrict = strict,
-                                  deconstructConstructor = constructor,
-                                  deconstructPos = arbitraryPos }, newvars)
-      in
-        oneof [ arbitraryConstantPattern, arbitraryDeconstructPattern,
-                arbitraryNamePattern, arbitraryAsPattern ]
+          arbitraryDeconstructPattern =
+            let
+              arbitraryPatterns vars' size'
+               | 0 < size' =
+                do
+                  thissize <- choose (0, size' - 1)
+                  bindvar <- arbitrary
+                  (bind, newvars) <-
+                    arbitraryPattern' (Set.insert bindvar vars') thissize
+                  (binds, newvars') <-
+                    arbitraryPatterns newvars (size' - thissize - 1)
+                  return ((bindvar, bind) : binds, newvars')
+               | otherwise = return ([], vars')
+            in do
+              strict <- arbitrary
+              constructor <- elements (Set.toList scope)
+              (binds, newvars) <- arbitraryPatterns vars size
+              return (Deconstruct { deconstructBinds = Map.fromList binds,
+                                    deconstructStrict = strict,
+                                    deconstructConstructor = constructor,
+                                    deconstructPos = arbitraryPos }, newvars)
+        in
+          oneof [ arbitraryConstantPattern, arbitraryDeconstructPattern,
+                  arbitraryNamePattern, arbitraryAsPattern ]
+      | otherwise =
+        do
+          var <- arbitrary
+          return (Name { nameSym = var, namePos = arbitraryPos },
+                  Set.insert var scope)
   in do
     (bind, vars) <- arbitraryPattern' Set.empty insize
     return (bind, Set.union vars scope)
- | otherwise =
-  do
-    var <- arbitrary
-    return (Name { nameSym = var, namePos = arbitraryPos },
-            Set.insert var scope)
 
 arbitraryCases :: (Default s, Ord s, Arbitrary s) =>
                   Set s -> Int -> Gen [Case s s]
@@ -1300,7 +1300,7 @@ arbitraryTerm bindings size =
       do
         comp <- arbitraryComp bindings size
         return Comp { compBody = comp, compPos = arbitraryPos }
-  in if 0 > size
+  in if 0 < size
     then oneof [ arbitraryProdType, arbitrarySumType, arbitraryRefineType,
                  arbitraryCompType, arbitraryQuantifiedTerm,
                  arbitraryLambdaTerm, arbitraryBoundVarTerm,
@@ -1326,31 +1326,31 @@ arbitraryCmd scope size =
 arbitraryComp :: (Default s, Ord s, Arbitrary s) =>
                  Set s -> Int -> Gen (Comp s s)
 arbitraryComp scope size
- | size > 0 =
-  let
-    arbitrarySeqComp =
-      do
-        patsize <- choose (0, size - 1)
-        cmdsize <- choose (0, size - patsize - 1)
-        tysize <- choose (0, size - cmdsize - patsize - 1)
-        cmd <- arbitraryCmd scope cmdsize
-        ty <- arbitraryTerm scope tysize
-        (pat, newscope) <- arbitraryPattern scope patsize
-        next <- arbitraryComp newscope (size - patsize - cmdsize - 1)
-        return Seq { seqType = ty, seqPat = pat, seqCmd = cmd,
-                     seqNext = abstract (abstractfun newscope) next,
-                     seqPos = arbitraryPos }
+  | 0 < size =
+    let
+      arbitrarySeqComp =
+        do
+          patsize <- choose (0, size - 1)
+          cmdsize <- choose (0, size - patsize - 1)
+          tysize <- choose (0, size - cmdsize - patsize - 1)
+          cmd <- arbitraryCmd scope cmdsize
+          ty <- arbitraryTerm scope tysize
+          (pat, newscope) <- arbitraryPattern scope patsize
+          next <- arbitraryComp newscope (size - patsize - cmdsize - 1)
+          return Seq { seqType = ty, seqPat = pat, seqCmd = cmd,
+                       seqNext = abstract (abstractfun newscope) next,
+                       seqPos = arbitraryPos }
 
-    arbitraryEndComp =
-      do
-        cmd <- arbitraryCmd scope size
-        return End { endCmd = cmd, endPos = arbitraryPos }
-  in
-    oneof [ arbitraryEndComp, arbitrarySeqComp ]
- | otherwise =
-  do
-    cmd <- arbitraryCmd scope 0
-    return End { endCmd = cmd, endPos = arbitraryPos }
+      arbitraryEndComp =
+        do
+          cmd <- arbitraryCmd scope size
+          return End { endCmd = cmd, endPos = arbitraryPos }
+    in
+      oneof [ arbitraryEndComp, arbitrarySeqComp ]
+  | otherwise =
+    do
+      cmd <- arbitraryCmd scope 0
+      return End { endCmd = cmd, endPos = arbitraryPos }
 
 -- A wrapper for shrinking scopes
 shrinkScope :: (Ord s, Foldable t, Monad t, Arbitrary (t s)) =>
@@ -1391,7 +1391,11 @@ instance Arbitrary Quantifier where
 
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Pattern s (Term s) s) where
-  arbitrary = sized (arbitraryPattern Set.empty) >>= return . fst
+  arbitrary =
+    do
+      syms <- listOf1 arbitrary
+      (out, _) <- sized (arbitraryPattern (Set.fromList syms))
+      return out
 
   shrink b @ Deconstruct { deconstructBinds = binds } =
     case Map.assocs binds of
@@ -1419,7 +1423,10 @@ instance (Default s, Ord s, Arbitrary s) => Arbitrary (Element s s) where
 
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Term s s) where
-  arbitrary = sized (arbitraryTerm Set.empty)
+  arbitrary =
+    do
+      syms <- listOf1 arbitrary
+      sized (arbitraryTerm (Set.fromList syms))
 
   -- XXX The types, the Forall/Exists, and Fix may end up creating
   -- orhpaned bound variables in scopes.  We probably need a function
@@ -1461,7 +1468,10 @@ instance (Default s, Ord s, Arbitrary s) =>
 
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Cmd s s) where
-  arbitrary = sized (arbitraryCmd Set.empty)
+  arbitrary =
+    do
+      syms <- listOf1 arbitrary
+      sized (arbitraryCmd (Set.fromList syms))
 
   shrink c @ Eval { evalTerm = term } =
     map (\term' -> c { evalTerm = term' }) (shrink term)
@@ -1471,7 +1481,10 @@ instance (Default s, Ord s, Arbitrary s) =>
 
 instance (Default s, Ord s, Arbitrary s) =>
          Arbitrary (Comp s s) where
-  arbitrary = sized (arbitraryComp Set.empty)
+  arbitrary =
+    do
+      syms <- listOf1 arbitrary
+      sized (arbitraryComp (Set.fromList syms))
 
   shrink c @ Seq { seqCmd = cmd, seqNext = next, seqPos = p,
                    seqType = ty, seqPat = pat } =
