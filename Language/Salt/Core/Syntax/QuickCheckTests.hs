@@ -31,6 +31,9 @@ instance Show (Int -> Int) where
 instance Show (Int -> Term Int Int) where
   show f = "Function"
 
+instance Show (Int -> Comp Int Int) where
+  show f = "Function"
+
 patternEqOrNeq :: (Pattern Int (Term Int) Int,
                    Pattern Int (Term Int) Int) -> Bool
 patternEqOrNeq (a, b) = a == b || a /= b
@@ -239,22 +242,22 @@ testlist = [
              ["Functor","instances","Core.Syntax"] cmdFunctorID,
     testTags "Cmd fmap (f . g) t == ((fmap f) . (fmap g)) t"
              ["Functor","instances","Core.Syntax"] cmdFunctorCompose,
-    testTags "Term (return x >>= f) == (f x)"
-             ["Eq","instances","Core.Syntax"] termEqOrNeq,
-    testTags "Term t1 == t2 <-> compare t1 t2 == EQ"
-             ["Eq","Ord","instances","Core.Syntax"] termEqOrd,
-    testTags "Term t1 < t2 iff t2 > t1"
-             ["Ord","instances","Core.Syntax"] termOrdRev,
-    testTags "Term t == fmap id t"
-             ["Functor","instances","Core.Syntax"] termFunctorID,
-    testTags "Term fmap (f . g) t == ((fmap f) . (fmap g)) t"
-             ["Functor","instances","Core.Syntax"] termFunctorCompose,
-    testTags "Term (return x >>= f) == (f x)"
-             ["Monad","instances","Core.Syntax"] termMonadLeftID,
-    testTags "Term (x >>= return) == x"
-             ["Monad","instances","Core.Syntax"] termMonadRightID,
-    testTags "Term (x >>= f) >>= g == m >>= (\\x -> f x >>= g)"
-             ["Monad","instances","Core.Syntax"] termMonadAssoc
+    testTags "Comp (return x >>= f) == (f x)"
+             ["Eq","instances","Core.Syntax"] compEqOrNeq,
+    testTags "Comp t1 == t2 <-> compare t1 t2 == EQ"
+             ["Eq","Ord","instances","Core.Syntax"] compEqOrd,
+    testTags "Comp t1 < t2 iff t2 > t1"
+             ["Ord","instances","Core.Syntax"] compOrdRev,
+    testTags "Comp t == fmap id t"
+             ["Functor","instances","Core.Syntax"] compFunctorID,
+    testTags "Comp fmap (f . g) t == ((fmap f) . (fmap g)) t"
+             ["Functor","instances","Core.Syntax"] compFunctorCompose,
+    testTags "Comp (return x >>= f) == (f x)"
+             ["Monad","instances","Core.Syntax"] compMonadLeftID,
+    testTags "Comp (x >>= return) == x"
+             ["Monad","instances","Core.Syntax"] compMonadRightID,
+    testTags "Comp (x >>= f) >>= g == m >>= (\\x -> f x >>= g)"
+             ["Monad","instances","Core.Syntax"] compMonadAssoc
   ]
 
 tests :: [Test]

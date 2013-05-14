@@ -1010,73 +1010,24 @@ instance Default b => Monad (Term b) where
     t { etaTerm = term >>= f, etaType = ty >>= f }
   BadTerm p >>= _ = BadTerm p
 
-patSubstComp :: Default c => (a -> Comp c b) -> Pattern c (Term c) a ->
-                Pattern c (Term c) b
-patSubstComp f b @ Deconstruct { deconstructBinds = binds } =
-  b { deconstructBinds = fmap (patSubstComp f) binds }
-patSubstComp f b @ As { asBind = bind } =
-  b { asBind = patSubstComp f bind }
-patSubstComp _ b @ Name { nameSym = name } = b { nameSym = name }
-patSubstComp f (Constant t) = Constant (termSubstComp f t)
-
-caseSubstComp :: Default c => (a -> Comp c b) -> Case c a -> Case c b
-caseSubstComp f c @ Case { casePat = pat, caseBody = body } =
-  c { caseBody = body >>>= termSubstComp f . return,
-      casePat = patSubstComp f pat }
-
-elementSubstComp :: Default c => (a -> Comp c b) -> Element c a -> Element c b
-elementSubstComp f e @ Element { elemPat = pat, elemType = ty } =
-  e { elemType = ty >>>= termSubstComp f . return,
-      elemPat = patSubstComp f pat }
-
-termSubstComp :: Default c => (a -> Comp c b) -> Term c a -> Term c b
-termSubstComp f t @ ProdType { prodArgs = argtys, prodRetTy = retty } =
-  t { prodArgs = fmap (elementSubstComp f) argtys,
-      prodRetTy = retty >>>= termSubstComp f . return }
-termSubstComp f t @ SumType { sumBody = body } =
-  t { sumBody = fmap (elementSubstComp f) body }
-termSubstComp f t @ RefineType { refineType = ty, refineCases = cases } =
-  t { refineCases = fmap (caseSubstComp f) cases,
-      refineType = termSubstComp f ty }
-termSubstComp f t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
-  t { compSpec = spec >>>= termSubstComp f . return,
-      compType = termSubstComp f ty, compPat = patSubstComp f pat }
-termSubstComp f t @ Quantified { quantType = ty, quantCases = cases } =
-  t { quantCases = fmap (caseSubstComp f) cases,
-      quantType = termSubstComp f ty }
-termSubstComp f t @ Call { callArgs = args, callFunc = func } =
-  t { callArgs = fmap (>>= termSubstComp f . return) args,
-      callFunc = func >>= termSubstComp f . return }
-termSubstComp f Var { varSym = sym } =
-  Comp { compBody = f sym, compPos = substpos }
-termSubstComp f t @ Typed { typedTerm = term, typedType = ty } =
-  t { typedTerm = termSubstComp f term, typedType = termSubstComp f ty }
-termSubstComp f t @ Lambda { lambdaCases = cases } =
-  t { lambdaCases = fmap (caseSubstComp f) cases }
-termSubstComp f t @ Record { recVals = vals } =
-  t { recVals = fmap (termSubstComp f) vals }
-termSubstComp f t @ Fix { fixTerms = terms } =
-  t { fixTerms = fmap (>>>= termSubstComp f . return) terms }
-termSubstComp f t @ Eta { etaTerm = term, etaType = ty } =
-  t { etaTerm = termSubstComp f term, etaType = termSubstComp f ty }
-termSubstComp f t @ Comp { compBody = body } = t { compBody = body >>= f }
-termSubstComp _ (BadTerm p) = BadTerm p
+termSubstComp :: (a -> Comp c b) -> a -> Term c b
+termSubstComp f sym = Comp { compBody = f sym, compPos = substpos }
 
 cmdSubstComp :: Default c => (a -> Comp c b) -> Cmd c a -> Cmd c b
 cmdSubstComp f c @ Value { valTerm = term } =
-  c { valTerm = termSubstComp f term }
+  c { valTerm = term >>= termSubstComp f }
 cmdSubstComp f c @ Eval { evalTerm = term } =
-  c { evalTerm = termSubstComp f term }
+  c { evalTerm = term >>= termSubstComp f }
 cmdSubstComp _ (BadCmd p) = BadCmd p
 
 instance Default b => Monad (Comp b) where
   return sym =
-    End { endCmd = Value { valTerm = Var { varSym = sym, varPos = injectpos },
-                           valPos = injectpos },
+    End { endCmd = Eval { evalTerm = Var { varSym = sym, varPos = injectpos },
+                          evalPos = injectpos },
           endPos = injectpos}
   c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
-    c { seqType = termSubstComp f ty, seqNext = next >>>= f,
-        seqPat = patSubstComp f pat, seqCmd = cmdSubstComp f cmd }
+    c { seqType = ty >>= termSubstComp f, seqNext = next >>>= f,
+        seqPat = pat >>>= termSubstComp f, seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
