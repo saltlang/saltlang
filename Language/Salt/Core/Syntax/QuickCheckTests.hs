@@ -216,7 +216,7 @@ testlist = [
     testTags "Element fmap (f . g) t == ((fmap f) . (fmap g)) t"
              ["Functor","instances","Core.Syntax"] elementFunctorCompose,
 -}
-    testTags "Term (return x >>= f) == (f x)"
+    testTags "Term t1 == t2 or t1 /= t2"
              ["Eq","instances","Core.Syntax"] termEqOrNeq,
     testTags "Term t1 == t2 <-> compare t1 t2 == EQ"
              ["Eq","Ord","instances","Core.Syntax"] termEqOrd,
@@ -232,7 +232,7 @@ testlist = [
              ["Monad","instances","Core.Syntax"] termMonadRightID,
     testTags "Term (x >>= f) >>= g == m >>= (\\x -> f x >>= g)"
              ["Monad","instances","Core.Syntax"] termMonadAssoc,
-    testTags "Cmd (return x >>= f) == (f x)"
+    testTags "Cmd t1 == t2 or t1 /= t2"
              ["Eq","instances","Core.Syntax"] cmdEqOrNeq,
     testTags "Cmd t1 == t2 <-> compare t1 t2 == EQ"
              ["Eq","Ord","instances","Core.Syntax"] cmdEqOrd,
@@ -242,7 +242,7 @@ testlist = [
              ["Functor","instances","Core.Syntax"] cmdFunctorID,
     testTags "Cmd fmap (f . g) t == ((fmap f) . (fmap g)) t"
              ["Functor","instances","Core.Syntax"] cmdFunctorCompose,
-    testTags "Comp (return x >>= f) == (f x)"
+    testTags "Comp t1 == t2 or t1 /= t2"
              ["Eq","instances","Core.Syntax"] compEqOrNeq,
     testTags "Comp t1 == t2 <-> compare t1 t2 == EQ"
              ["Eq","Ord","instances","Core.Syntax"] compEqOrd,
