@@ -1028,7 +1028,10 @@ instance Default b => Monad (Comp b) where
   c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
     c { seqType = ty >>= termSubstComp f, seqNext = next >>>= f,
         seqPat = pat >>>= termSubstComp f, seqCmd = cmdSubstComp f cmd }
-  c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
+  c @ End { endCmd = cmd } >>= f =
+    case cmdSubstComp f cmd of
+      Eval { evalTerm = Comp { compBody = body } } -> body
+      cmd' -> c { endCmd = cmd' }
   BadComp p >>= _ = BadComp p
 
 abstractfun :: Ord s => Set s -> s -> Maybe s
