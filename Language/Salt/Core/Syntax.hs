@@ -1024,7 +1024,7 @@ instance Default b => Monad (Comp b) where
   return sym =
     End { endCmd = Eval { evalTerm = Var { varSym = sym, varPos = injectpos },
                           evalPos = injectpos },
-          endPos = injectpos}
+          endPos = injectpos }
   c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
     c { seqType = ty >>= termSubstComp f, seqNext = next >>>= f,
         seqPat = pat >>>= termSubstComp f, seqCmd = cmdSubstComp f cmd }
@@ -1375,8 +1375,7 @@ instance (Default s, Ord s, Arbitrary s) => Arbitrary (Element s s) where
     map (\pat' -> e { elemPat = pat', elemType = ty }) (shrink pat) ++
     map (\ty' -> e { elemPat = pat, elemType = ty' }) (shrinkScope ty)
 
-instance (Default s, Ord s, Arbitrary s) =>
-         Arbitrary (Term s s) where
+instance (Default s, Ord s, Arbitrary s) => Arbitrary (Term s s) where
   arbitrary =
     do
       syms <- listOf1 arbitrary
@@ -1404,7 +1403,7 @@ instance (Default s, Ord s, Arbitrary s) =>
     map (\func' -> t { callFunc = func' }) (shrink func) ++
     map (\args' -> t { callArgs = args' }) (shrinkMap args)
   shrink t @ Typed { typedType = ty, typedTerm = term } =
-    map (\ty' -> t { typedType = ty' }) (shrink ty) ++
+    term : map (\ty' -> t { typedType = ty' }) (shrink ty) ++
     map (\term' -> t { typedType = term' }) (shrink term)
   shrink Var {} = []
   shrink t @ Eta { etaType = ty, etaTerm = term } =
@@ -1420,8 +1419,7 @@ instance (Default s, Ord s, Arbitrary s) =>
     map (\body' -> t { compBody = body' }) (shrink body)
   shrink (BadTerm _) = []
 
-instance (Default s, Ord s, Arbitrary s) =>
-         Arbitrary (Cmd s s) where
+instance (Default s, Ord s, Arbitrary s) => Arbitrary (Cmd s s) where
   arbitrary =
     do
       syms <- listOf1 arbitrary
@@ -1433,13 +1431,12 @@ instance (Default s, Ord s, Arbitrary s) =>
     map (\term' -> c { valTerm = term' }) (shrink term)
   shrink (BadCmd _) = []
 
-instance (Default s, Ord s, Arbitrary s) =>
-         Arbitrary (Comp s s) where
+instance (Default s, Ord s, Arbitrary s) => Arbitrary (Comp s s) where
   arbitrary =
     do
       syms <- listOf1 arbitrary
       sized (arbitraryComp (Set.fromList syms))
-
+{-
   shrink c @ Seq { seqCmd = cmd, seqNext = next, seqPos = p,
                    seqType = ty, seqPat = pat } =
     End { endCmd = cmd, endPos = p } :
@@ -1447,10 +1444,11 @@ instance (Default s, Ord s, Arbitrary s) =>
     map (\pat' -> c { seqPat = pat' }) (shrink pat) ++
     map (\cmd' -> c { seqCmd = cmd' }) (shrink cmd) ++
     map (\next' -> c { seqNext = next' }) (shrinkScope next)
+  shrink End { endCmd = Eval { evalTerm = Comp { compBody = body } } } = [body]
   shrink c @ End { endCmd = cmd } =
     map (\cmd' -> c { endCmd = cmd' }) (shrink cmd)
   shrink (BadComp _) = []
-
+-}
 formatBind :: (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
               (b, t s) -> Doc
 formatBind (name, bind) = hang bind 2 ("as" <+> name)
