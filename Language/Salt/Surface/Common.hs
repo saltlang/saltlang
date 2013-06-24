@@ -21,7 +21,7 @@ module Language.Salt.Surface.Common(
        ScopeClass(..)
        ) where
 
-import Data.Hash
+import Data.Hashable
 
 -- | Scope classes.  These define the exact semantics of a scoped
 -- entity declaration, which defines the common structure for all of
@@ -52,10 +52,11 @@ data ScopeClass =
   | Class
     deriving (Ord, Eq)
 
+
 instance Hashable ScopeClass where
-  hash Module = hashInt 1
-  hash Signature = hashInt 2
-  hash Class = hashInt 3
+  hashWithSalt s Module = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s Signature = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s Class = s `hashWithSalt` (3 :: Int)
 
 instance Show ScopeClass where
   show Module = "module"

@@ -36,7 +36,7 @@ module Language.Salt.Surface.AST(
 
 import Control.Applicative
 import Data.Foldable
-import Data.Hash
+import Data.Hashable
 import Data.Monoid hiding ((<>))
 import Data.Pos
 import Data.Traversable
@@ -515,57 +515,67 @@ instance Position (con sym) => Position (Entry con sym) where
   pos (Named { namedPos = p }) = p
   pos (Unnamed e) = pos e
 
+
 instance Hashable sym => Hashable (Decl sym) where
-  hash (Scope { scopeName = name, scopeClass = cls, scopeParams = params,
-                scopeSuperTypes = supers, scopeBody = body }) =
-    hashInt 1 `combine` hash name `combine` hash cls `combine`
-    hash params `combine` hash supers `combine` hash body `combine` hash body
-  hash (Value { valueName = name, valueMutable = mutable,
-                valueType = ty, valueInit = val }) =
-    hashInt 2 `combine` hash name `combine`
-    hash mutable `combine` hash ty `combine` hash val
-  hash (Invariant { invName = name, invProp = prop }) =
-    hashInt 3 `combine` hash name `combine` hash prop
+  hashWithSalt s Scope { scopeName = name, scopeClass = cls,
+                         scopeParams = params, scopeSuperTypes = supers,
+                         scopeBody = body } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt`
+    cls `hashWithSalt` params `hashWithSalt` supers `hashWithSalt`
+    body `hashWithSalt` body
+  hashWithSalt s Value { valueName = name, valueMutable = mutable,
+                         valueType = ty, valueInit = val } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` name `hashWithSalt`
+    mutable `hashWithSalt` ty `hashWithSalt` val
+  hashWithSalt s Invariant { invName = name, invProp = prop } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` name `hashWithSalt` prop
 
 instance Hashable sym => Hashable (Compound sym) where
-  hash (Decl d) = hashInt 1 `combine` hash d
-  hash (Exp e) = hashInt 2 `combine` hash e
+  hashWithSalt s (Decl d) = s `hashWithSalt` (1 :: Int) `hashWithSalt` d
+  hashWithSalt s (Exp e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
 
 instance Hashable sym => Hashable (Exp sym) where
-  hash (Compound { compoundBody = body }) = hashInt 1 `combine` hash body
-  hash (Func { funcCases = cases }) = hashInt 2 `combine` hash cases
-  hash (Match { matchVal = val, matchCases = cases }) =
-    hashInt 3 `combine` hash val `combine` hash cases
-  hash (Ascribe { ascribeVal = val, ascribeType = ty }) =
-    hashInt 4 `combine` hash val `combine` hash ty
-  hash (Seq { seqVals = vals }) = hashInt 5 `combine` hash vals
-  hash (Record { recFields = fields }) = hashInt 6 `combine` hash fields
-  hash (Sym { symName = name }) = hashInt 7 `combine` hash name
+  hashWithSalt s Compound { compoundBody = body } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` body
+  hashWithSalt s Func { funcCases = cases } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` cases
+  hashWithSalt s Match { matchVal = val, matchCases = cases } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` val `hashWithSalt` cases
+  hashWithSalt s Ascribe { ascribeVal = val, ascribeType = ty } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` val `hashWithSalt` ty
+  hashWithSalt s Seq { seqVals = vals } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` vals
+  hashWithSalt s Record { recFields = fields } =
+    s `hashWithSalt` (6 :: Int) `hashWithSalt` fields
+  hashWithSalt s Sym { symName = name } =
+    s `hashWithSalt` (7 :: Int) `hashWithSalt` name
 
 instance Hashable sym => Hashable (Pattern sym) where
-  hash (Construct { constructName = name, constructStrict = strict,
-                    constructArgs = args }) =
-    hashInt 1 `combine` hash name `combine` hash strict `combine` hash args
-  hash (Project { projectStrict = strict, projectFields = fields }) =
-    hashInt 2 `combine` hash strict `combine` hash fields
-  hash (Typed { typedPat = pat, typedType = ty }) =
-    hashInt 3 `combine` hash pat `combine` hash ty
-  hash (As { asName = name, asPat = pat }) =
-    hashInt 4 `combine` hash name `combine` hash pat
-  hash (Name { nameSym = name }) = hashInt 4 `combine` hash name
+  hashWithSalt s Construct { constructName = name, constructStrict = strict,
+                             constructArgs = args } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt`
+    name `hashWithSalt` strict `hashWithSalt` args
+  hashWithSalt s Project { projectStrict = strict, projectFields = fields } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` strict `hashWithSalt` fields
+  hashWithSalt s Typed { typedPat = pat, typedType = ty } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` pat `hashWithSalt` ty
+  hashWithSalt s As { asName = name, asPat = pat } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` name `hashWithSalt` pat
+  hashWithSalt s Name { nameSym = name } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` name
 
 instance Hashable sym => Hashable (Binding sym) where
-  hash (Binding { bindingName = name, bindingType = ty }) =
-    hash name `combine` hash ty
+  hashWithSalt s Binding { bindingName = name, bindingType = ty } =
+    s `hashWithSalt` name `hashWithSalt` ty
 
 instance Hashable sym => Hashable (Case sym) where
-  hash (Case { casePat = pat, caseBody = body }) =
-    hash pat `combine` hash body
+  hashWithSalt s Case { casePat = pat, caseBody = body } =
+    s `hashWithSalt` pat `hashWithSalt` body
 
 instance (Hashable sym, Hashable (con sym)) => Hashable (Entry con sym) where
-  hash (Named { namedName = name, namedVal = val }) =
-    hashInt 1 `combine` hash name `combine` hash val
-  hash (Unnamed e) = hashInt 2 `combine` hash e
+  hashWithSalt s Named { namedName = name, namedVal = val } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt` val
+  hashWithSalt s (Unnamed e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
 
 instance Functor Decl where
   fmap f d @ (Scope { scopeName = name, scopeSuperTypes = supers,
