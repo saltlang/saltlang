@@ -104,7 +104,7 @@ Test-Suite quickcheck
 --                        Language.Salt.Surface.QuickCheckTests
 
 Library
-  build-depends:        base, data-hash, proglang-util, QuickCheck,
+  build-depends:        base, proglang-util, QuickCheck,
                         bound, containers, prelude-extras, mtl, hashable,
                         hashable-extras
   exposed-modules:      Language.Salt.Core,
