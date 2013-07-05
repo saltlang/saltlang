@@ -1,5 +1,23 @@
+-- Copyright (c) 2013 Eric McCorkle.
+--
+-- This program is free software; you can redistribute it and/or
+-- modify it under the terms of the GNU General Public License as
+-- published by the Free Software Foundation; either version 2 of the
+-- License, or (at your option) any later version.
+--
+-- This program is distributed in the hope that it will be useful, but
+-- WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-- General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with this program; if not, write to the Free Software
+-- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+-- 02110-1301 USA
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
-module Frontend.Full.Token(
+
+-- | Defines the type of lexer tokens
+module Language.Salt.Surface.Token(
        Token(..)
        ) where
 
@@ -7,28 +25,51 @@ import Data.Pos
 import Data.Symbol
 import Text.Format
 
+-- | A token produced by the lexer
 data Token =
+  -- | An identifier
     Id !Symbol !Pos
+  -- | A number literal
   | Num !Integer !Pos
+  -- | The text '='
   | Equal !Pos
+  -- | The text '->'
   | Arrow !Pos
+  -- | The text '.'
   | Dot !Pos
+  -- | The text ':'
   | Colon !Pos
+  -- | The text '::'
   | ColonColon !Pos
+  -- | The text ','
   | Comma !Pos
+  -- | The text ';'
   | Semicolon !Pos
+  -- | The text '('
   | LParen !Pos
+  -- | The text ')'
   | RParen !Pos
+  -- | The text '{'
   | LBrace !Pos
+  -- | The text '}'
   | RBrace !Pos
+  -- | The text 'module'
   | Module !Pos
+  -- | The text 'signature'
   | Signature !Pos
+  -- | The text 'with'
   | With !Pos
+  -- | The text 'where'
   | Where !Pos
+  -- | The text 'public'
   | Public !Pos
+  -- | The text 'private'
   | Private !Pos
+  -- | The text 'protected'
   | Protected !Pos
+  -- | The text 'import'
   | Import !Pos
+  -- | The text 'export'
   | Export !Pos
   | EOF
 
