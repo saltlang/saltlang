@@ -112,3 +112,4 @@ Library
                         Language.Salt.Core.Syntax,
                         Language.Salt.Surface.AST
   other-modules:        Language.Salt.Surface.Common
+                        Language.Salt.Surface.Token
