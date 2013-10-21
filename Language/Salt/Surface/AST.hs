@@ -25,7 +25,10 @@
 -- meaningful way.
 module Language.Salt.Surface.AST(
        ScopeClass(..),
-       Decl(..),
+       TruthClass(..),
+       AliasClass(..),
+       Visibility(..),
+       Element(..),
        Compound(..),
        Pattern(..),
        Exp(..),
@@ -37,6 +40,7 @@ module Language.Salt.Surface.AST(
 import Control.Applicative
 import Data.Foldable
 import Data.Hashable
+import Data.Hashable.Extras
 import Data.Monoid hiding ((<>))
 import Data.Pos
 import Data.Traversable
@@ -47,9 +51,10 @@ import Prelude.Extras.ExtraInstances()
 import Test.QuickCheck
 import Text.Format
 
--- | Declarations.  These represent static declarations inside a
--- scope.  Note: some of these can be built from others.
-data Decl sym =
+-- | Scope elements.  These represent declarations, imports, and truth
+-- statements inside a scope.  Note: some of these can be built from
+-- others.
+data Element sym =
     -- | Scope entities.  This is a common structure for a number of
     -- entity declarations that all have the same structure: modules,
     -- signatures, and classes.
@@ -63,36 +68,48 @@ data Decl sym =
       -- | The parameters of the scope entity.
       scopeParams :: [Binding sym],
       -- | The entities declared by the scope.
-      scopeBody :: [Decl sym],
+      scopeBody :: [Element sym],
       -- | The position in source from which this arises.
       scopePos :: !Pos
     }
-    -- | Value entities.  These are (possibly mutable) values defined
-    -- in a scope.  These include function declarations.
-  | Value {
+    -- | Value definitions.  These are (possibly mutable) values
+    -- defined in a scope.  These include function declarations.
+  | Def {
       -- | The name of the value.
-      valueName :: !sym,
+      defName :: !sym,
       -- | Whether or not the value is mutable.
-      valueMutable :: !Bool,
+      defMutable :: !Bool,
       -- | The value's type.  Note: not all declarations will
       -- necessarily have a type associated with them.
-      valueType :: Maybe (Exp sym),
+      defType :: Maybe (Exp sym),
       -- | The value's initializer.
-      valueInit :: Exp sym,
+      defInit :: Exp sym,
       -- | The position in source from which this arises.
-      valuePos :: !Pos
+      defPos :: !Pos
     }
-    -- | Invariants.  These are propositions, which may reference
-    -- names defined in the given scope, that are added by conjunction
-    -- to every pre- and post-condition for every action within the
-    -- scope.
-  | Invariant {
-      -- | The name of the invariant.
-      invName :: !sym,
-      -- | The invariant proposition.
-      invProp :: Exp sym,
+    -- | Truths.  These are similar to declarations, except that they
+    -- affect the proof environment.  These include theorems and
+    -- invariants.
+  | Truth {
+      -- | The class of the truth.
+      truthClass :: !TruthClass,
+      -- | The name of the truth.
+      truthName :: !sym,
+      -- | The truth proposition.
+      truthProp :: Exp sym,
       -- | The position in source from which this arises.
-      invPos :: !Pos
+      truthPos :: !Pos
+    }
+    -- | Aliases.  These cover import and export declarations.
+  | Alias {
+      -- | The class of the alias.
+      aliasClass :: !AliasClass,
+      -- | The alias source (the value being aliased).
+      aliasSrc :: Exp sym,
+      -- | The alias name
+      aliasName :: Maybe sym,
+      -- | The position in source from which this arises.
+      aliasPos :: !Pos
     }
 
 -- | Compound expression elements.  These are either "ordinary"
@@ -101,7 +118,7 @@ data Compound sym =
     -- | An ordinary expression.
     Exp !(Exp sym)
     -- | A declaration.
-  | Decl !(Decl sym)
+  | Decl !(Element sym)
 
 -- | A pattern, for pattern match expressions.
 data Pattern sym =
@@ -210,6 +227,17 @@ data Exp sym =
       -- | The position in source from which this arises.
       recPos :: !Pos
     }
+    -- | A field expression.  Accesses the given field in a record.
+    -- Note that for non-static functions, this implies an extra
+    -- argument.
+  | Field {
+      -- | The inner expression
+      fieldVal :: Exp sym,
+      -- | The name of the field being accessed.
+      fieldName :: !sym,
+      -- | The position in source from which this arises.
+      fieldPos :: !Pos
+    }
     -- | Reference to a name.  Note: this is all handled with the
     -- Bound framework.
   | Sym {
@@ -256,92 +284,98 @@ data Case sym =
     casePos :: !Pos
   }
 
-instance Eq1 Decl where
-  (Scope { scopeName = name1, scopeClass = cls1, scopeParams = params1,
-           scopeSuperTypes = supers1, scopeBody = body1 }) ==#
-    (Scope { scopeName = name2, scopeClass = cls2, scopeParams = params2,
-             scopeSuperTypes = supers2, scopeBody = body2 }) =
+instance Eq1 Element where
+  Scope { scopeName = name1, scopeClass = cls1, scopeParams = params1,
+          scopeSuperTypes = supers1, scopeBody = body1 } ==#
+    Scope { scopeName = name2, scopeClass = cls2, scopeParams = params2,
+            scopeSuperTypes = supers2, scopeBody = body2 } =
     (name1 == name2) && (cls1 == cls2) && (params1 ==# params2) &&
     (supers1 ==# supers2) && (body1 ==# body2)
-  (Value { valueName = name1, valueMutable = mut1,
-           valueType = ty1, valueInit = init1 }) ==#
-    (Value { valueName = name2, valueMutable = mut2,
-             valueType = ty2, valueInit = init2 }) =
+  Def { defName = name1, defMutable = mut1,
+        defType = ty1, defInit = init1 } ==#
+    Def { defName = name2, defMutable = mut2,
+          defType = ty2, defInit = init2 } =
     (name1 == name2) && (mut1 == mut2) && (ty1 == ty2) && (init1 == init2)
-  (Invariant { invName = name1, invProp = prop1 }) ==#
-    (Invariant { invName = name2, invProp = prop2 }) =
+  Truth { truthName = name1, truthProp = prop1 } ==#
+    Truth { truthName = name2, truthProp = prop2 } =
     (name1 == name2) && (prop1 ==# prop2)
+  Alias { aliasName = name1, aliasClass = class1, aliasSrc = src1 } ==#
+    Alias { aliasName = name2, aliasClass = class2, aliasSrc = src2 } =
+    (name1 == name2) && (class1 == class2) && (src1 ==# src2)
   _ ==# _ = False
 
 instance Eq1 Compound where
   Exp e1 ==# Exp e2 = e1 ==# e2
   Decl d1 ==# Decl d2 = d1 ==# d2
   _ ==# _ = False
-
+  
 instance Eq1 Pattern where
-  (Construct { constructName = name1, constructStrict = strict1,
-               constructArgs = args1 }) ==#
-    (Construct { constructName = name2, constructStrict = strict2,
-                 constructArgs = args2 }) =
+  Construct { constructName = name1, constructStrict = strict1,
+              constructArgs = args1 } ==#
+    Construct { constructName = name2, constructStrict = strict2,
+                constructArgs = args2 } =
       (strict1 == strict2) && (name1 == name2) && (args1 == args2)
-  (Project { projectFields = fields1, projectStrict = strict1 }) ==#
-    (Project { projectFields = fields2, projectStrict = strict2 }) =
+  Project { projectFields = fields1, projectStrict = strict1 } ==#
+    Project { projectFields = fields2, projectStrict = strict2 } =
       (fields1 ==# fields2) && (strict1 == strict2)
-  (Typed { typedPat = pat1, typedType = ty1 }) ==#
-    (Typed { typedPat = pat2, typedType = ty2 }) =
+  Typed { typedPat = pat1, typedType = ty1 } ==#
+    Typed { typedPat = pat2, typedType = ty2 } =
       (pat1 ==# pat2) && (ty1 ==# ty2)
-  (As { asName = name1, asPat = pat1 }) ==#
-    (As { asName = name2, asPat = pat2 }) =
+  As { asName = name1, asPat = pat1 } ==#
+    As { asName = name2, asPat = pat2 } =
       (name1 == name2) && (pat1 ==# pat2)
-  (Name { nameSym = name1 }) ==# (Name { nameSym = name2 }) = name1 == name2
+  Name { nameSym = name1 } ==# Name { nameSym = name2 } = name1 == name2
   _ ==# _ = False
 
 instance Eq1 Exp where
-  (Sym { symName = name1 }) ==# (Sym { symName = name2 }) = name1 == name2
-  (Seq { seqVals = vals1 }) ==# (Seq { seqVals = vals2 }) = vals1 ==# vals2
-  (Record { recFields = fields1 }) ==# (Record { recFields = fields2 }) =
-    fields1 ==# fields2  
-  (Ascribe { ascribeVal = val1, ascribeType = ty1 }) ==#
-    (Ascribe { ascribeVal = val2, ascribeType = ty2 }) =
-      (val1 ==# val2) && (ty1 ==# ty2)
-  (Func { funcCases = cases1 }) ==#
-    (Func { funcCases = cases2 }) = cases1 ==# cases2
-  (Match { matchVal = val1, matchCases = cases1 }) ==#
-    (Match { matchVal = val2, matchCases = cases2 }) =
-      (val1 ==# val2) && (cases1 ==# cases2)
-  (Compound { compoundBody = body1 }) ==#
-    (Compound { compoundBody = body2 }) = body1 ==# body2
+  Sym { symName = name1 } ==# Sym { symName = name2 } = name1 == name2
+  Seq { seqVals = vals1 } ==# Seq { seqVals = vals2 } = vals1 ==# vals2
+  Record { recFields = fields1 } ==# Record { recFields = fields2 } =
+    fields1 ==# fields2
+  Field { fieldVal = val1, fieldName = name1 } ==#
+    Field { fieldVal = val2, fieldName = name2 } =
+    (name1 == name2) && (val1 ==# val2)
+  Ascribe { ascribeVal = val1, ascribeType = ty1 } ==#
+    Ascribe { ascribeVal = val2, ascribeType = ty2 } =
+    (val1 ==# val2) && (ty1 ==# ty2)
+  Func { funcCases = cases1 } ==# Func { funcCases = cases2 } =
+    cases1 ==# cases2
+  Match { matchVal = val1, matchCases = cases1 } ==#
+    Match { matchVal = val2, matchCases = cases2 } =
+    (val1 ==# val2) && (cases1 ==# cases2)
+  Compound { compoundBody = body1 } ==#
+    Compound { compoundBody = body2 } = body1 ==# body2
   _ ==# _ = False
 
 instance Eq1 con => Eq1 (Entry con) where
-  (Named { namedName = name1, namedVal = val1 }) ==#
-    (Named { namedName = name2, namedVal = val2 }) =
+  Named { namedName = name1, namedVal = val1 } ==#
+    Named { namedName = name2, namedVal = val2 } =
     (name1 == name2) && (val1 ==# val2)
   (Unnamed e1) ==# (Unnamed e2) = e1 ==# e2
   _ ==# _ = False
 
 instance Eq1 Binding where
-  (Binding { bindingName = name1, bindingType = ty1 }) ==#
-    (Binding { bindingName = name2, bindingType = ty2 }) =
+  Binding { bindingName = name1, bindingType = ty1 } ==#
+    Binding { bindingName = name2, bindingType = ty2 } =
     (name1 == name2) && (ty1 ==# ty2)
 
 instance Eq1 Case where
-  (Case { caseBody = body1, casePat = pat1 }) ==#
-    (Case { caseBody = body2, casePat = pat2 }) =
+  Case { caseBody = body1, casePat = pat1 } ==#
+    Case { caseBody = body2, casePat = pat2 } =
       (body1 ==# body2) && (pat1 ==# pat2)
 
-instance Eq sym => Eq (Decl sym) where (==) = (==#)
+instance Eq sym => Eq (Element sym) where (==) = (==#)
 instance Eq sym => Eq (Compound sym) where (==) = (==#)
 instance Eq sym => Eq (Exp sym) where (==) = (==#)
 instance Eq sym => Eq (Binding sym) where (==) = (==#)
 instance Eq sym => Eq (Case sym) where (==) = (==#)
 instance (Eq1 con, Eq sym) => Eq (Entry con sym) where (==) = (==#)
 
-instance Ord1 Decl where
-  compare1 (Scope { scopeName = name1, scopeClass = cls1, scopeBody = body1,
-                    scopeParams = params1, scopeSuperTypes = supers1 })
-           (Scope { scopeName = name2, scopeClass = cls2, scopeBody = body2,
-                    scopeParams = params2, scopeSuperTypes = supers2 }) =
+instance Ord1 Element where
+  compare1 Scope { scopeName = name1, scopeClass = cls1, scopeBody = body1,
+                   scopeParams = params1, scopeSuperTypes = supers1 }
+           Scope { scopeName = name2, scopeClass = cls2, scopeBody = body2,
+                   scopeParams = params2, scopeSuperTypes = supers2 } =
     case compare name1 name2 of
       EQ -> case compare cls1 cls2 of
         EQ -> case compare1 params1 params2 of
@@ -351,12 +385,12 @@ instance Ord1 Decl where
           out -> out
         out -> out
       out -> out
-  compare1 (Scope {}) _ = GT
-  compare1 _ (Scope {}) = LT
-  compare1 (Value { valueName = name1, valueMutable = mut1,
-                    valueType = ty1, valueInit = init1 })
-           (Value { valueName = name2, valueMutable = mut2,
-                    valueType = ty2, valueInit = init2 }) =
+  compare1 Scope {} _ = GT
+  compare1 _ Scope {} = LT
+  compare1 Def { defName = name1, defMutable = mut1,
+                 defType = ty1, defInit = init1 }
+           Def { defName = name2, defMutable = mut2,
+                 defType = ty2, defInit = init2 } =
     case compare name1 name2 of
       EQ -> case compare mut1 mut2 of
         EQ -> case compare1 ty1 ty2 of
@@ -364,12 +398,21 @@ instance Ord1 Decl where
           out -> out
         out -> out
       out -> out
-  compare1 (Value {}) _ = GT
-  compare1 _ (Value {}) = LT
-  compare1 (Invariant { invName = name1, invProp = prop1 })
-           (Invariant { invName = name2, invProp = prop2 }) =
+  compare1 Def {} _ = GT
+  compare1 _ Def {} = LT
+  compare1 Truth { truthName = name1, truthProp = prop1 }
+           Truth { truthName = name2, truthProp = prop2 } =
     case compare name1 name2 of
       EQ -> compare1 prop1 prop2
+      out -> out
+  compare1 Truth {} _ = GT
+  compare1 _ Truth {} = LT
+  compare1 Alias { aliasName = name1, aliasSrc = src1, aliasClass = cls1 }
+           Alias { aliasName = name2, aliasSrc = src2, aliasClass = cls2 } =
+    case compare cls1 cls2 of
+      EQ -> case compare name1 name2 of
+        EQ -> compare src1 src2
+        out -> out
       out -> out
 
 instance Ord1 Compound where
@@ -379,379 +422,420 @@ instance Ord1 Compound where
   compare1 (Decl d1) (Decl d2) = compare1 d1 d2
 
 instance Ord1 Exp where
-  compare1 (Compound { compoundBody = body1 })
-           (Compound { compoundBody = body2 }) =
+  compare1 Compound { compoundBody = body1 }
+           Compound { compoundBody = body2 } =
     compare body1 body2
-  compare1 (Compound {}) _ = GT
-  compare1 _ (Compound {}) = LT
-  compare1 (Func { funcCases = cases1 }) (Func { funcCases = cases2 }) = 
+  compare1 Compound {} _ = GT
+  compare1 _ Compound {} = LT
+  compare1 Func { funcCases = cases1 } Func { funcCases = cases2 } = 
     compare1 cases1 cases2
-  compare1 (Func {}) _ = GT
-  compare1 _ (Func {}) = LT
-  compare1 (Match { matchVal = val1, matchCases = cases1 })
-           (Match { matchVal = val2, matchCases = cases2 }) =
+  compare1 Func {} _ = GT
+  compare1 _ Func {} = LT
+  compare1 Match { matchVal = val1, matchCases = cases1 }
+           Match { matchVal = val2, matchCases = cases2 } =
     case compare1 val1 val2 of
       EQ -> compare1 cases1 cases2
       out -> out
-  compare1 (Match {}) _ = GT
-  compare1 _ (Match {}) = LT
-  compare1 (Seq { seqVals = vals1 }) (Seq { seqVals = vals2 }) =
+  compare1 Match {} _ = GT
+  compare1 _ Match {} = LT
+  compare1 Seq { seqVals = vals1 } Seq { seqVals = vals2 } =
     compare vals1 vals2
-  compare1 (Seq {}) _ = GT
-  compare1 _ (Seq {}) = LT
-  compare1 (Record { recFields = fields1 }) (Record { recFields = fields2 }) =
+  compare1 Seq {} _ = GT
+  compare1 _ Seq {} = LT
+  compare1 Record { recFields = fields1 } Record { recFields = fields2 } =
     compare1 fields1 fields2
-  compare1 (Record {}) _ = GT
-  compare1 _ (Record {}) = LT
-  compare1 (Ascribe { ascribeVal = val1, ascribeType = ty1 })
-           (Ascribe { ascribeVal = val2, ascribeType = ty2 }) =
+  compare1 Record {} _ = GT
+  compare1 _ Record {} = LT
+  compare1 Field { fieldVal = val1, fieldName = name1 }
+           Field { fieldVal = val2, fieldName = name2 } =
+    case compare name1 name2 of
+      EQ -> compare1 val1 val2
+      out -> out
+  compare1 Field {} _ = GT
+  compare1 _ Field {} = LT
+  compare1 Ascribe { ascribeVal = val1, ascribeType = ty1 }
+           Ascribe { ascribeVal = val2, ascribeType = ty2 } =
     case compare val1 val2 of
       EQ -> compare ty1 ty2
       out -> out
-  compare1 (Ascribe {}) _ = GT
-  compare1 _ (Ascribe {}) = LT
-  compare1 (Sym { symName = name1 }) (Sym { symName = name2 }) =
+  compare1 Ascribe {} _ = GT
+  compare1 _ Ascribe {} = LT
+  compare1 Sym { symName = name1 } Sym { symName = name2 } =
     compare name1 name2
 
 instance Ord1 Pattern where
-  compare1 (Construct { constructName = name1, constructStrict = strict1,
-                        constructArgs = args1 })
-           (Construct { constructName = name2, constructStrict = strict2,
-                        constructArgs = args2 }) =
+  compare1 Construct { constructName = name1, constructStrict = strict1,
+                       constructArgs = args1 }
+           Construct { constructName = name2, constructStrict = strict2,
+                       constructArgs = args2 } =
     case compare strict1 strict2 of
       EQ -> case compare name1 name2 of
         EQ -> compare1 args1 args2
         out -> out
       out -> out
-  compare1 (Construct {}) _ = GT
-  compare1 _ (Construct {}) = LT
-  compare1 (Project { projectFields = fields1, projectStrict = strict1 })
-           (Project { projectFields = fields2, projectStrict = strict2 }) =
+  compare1 Construct {} _ = GT
+  compare1 _ Construct {} = LT
+  compare1 Project { projectFields = fields1, projectStrict = strict1 }
+           Project { projectFields = fields2, projectStrict = strict2 } =
     case compare strict1 strict2 of
       EQ -> compare1 fields1 fields2
       out -> out
-  compare1 (Project {}) _ = GT
-  compare1 _ (Project {}) = LT
-  compare1 (Typed { typedPat = pat1, typedType = ty1 })
-           (Typed { typedPat = pat2, typedType = ty2 }) =
+  compare1 Project {} _ = GT
+  compare1 _ Project {} = LT
+  compare1 Typed { typedPat = pat1, typedType = ty1 }
+           Typed { typedPat = pat2, typedType = ty2 } =
     case compare1 pat1 pat2 of
       EQ -> compare1 ty1 ty2
       out -> out
-  compare1 (Typed {}) _ = GT
-  compare1 _ (Typed {}) = LT
-  compare1 (As { asName = name1, asPat = pat1 })
-           (As { asName = name2, asPat = pat2 }) =
+  compare1 Typed {} _ = GT
+  compare1 _ Typed {} = LT
+  compare1 As { asName = name1, asPat = pat1 }
+           As { asName = name2, asPat = pat2 } =
     case compare name1 name2 of
       EQ -> compare1 pat1 pat2
       out -> out
-  compare1 (As {}) _ = GT
-  compare1 _ (As {}) = LT
-  compare1 (Name { nameSym = name1 }) (Name { nameSym = name2 }) =
+  compare1 As {} _ = GT
+  compare1 _ As {} = LT
+  compare1 Name { nameSym = name1 } Name { nameSym = name2 } =
     compare name1 name2
 
 instance Ord1 Binding where
-  compare1 (Binding { bindingName = name1, bindingType = ty1 })
-           (Binding { bindingName = name2, bindingType = ty2 }) =
+  compare1 Binding { bindingName = name1, bindingType = ty1 }
+           Binding { bindingName = name2, bindingType = ty2 } =
     case compare name1 name2 of
       EQ -> compare1 ty1 ty2
       out -> out
 
 instance Ord1 Case where
-  compare1 (Case { casePat = pat1, caseBody = body1 })
-           (Case { casePat = pat2, caseBody = body2 }) =
+  compare1 Case { casePat = pat1, caseBody = body1 }
+           Case { casePat = pat2, caseBody = body2 } =
     case compare1 pat1 pat2 of
       EQ -> compare1 body1 body2
       out -> out
 
 instance Ord1 con => Ord1 (Entry con) where
-  compare1 (Named { namedName = name1, namedVal = val1 })
-           (Named { namedName = name2, namedVal = val2 }) =
+  compare1 Named { namedName = name1, namedVal = val1 }
+           Named { namedName = name2, namedVal = val2 } =
     case compare name1 name2 of
       EQ -> compare1 val1 val2
       out -> out
-  compare1 (Named {}) _ = GT
-  compare1 _ (Named {}) = LT
+  compare1 Named {} _ = GT
+  compare1 _ Named {} = LT
   compare1 (Unnamed e1) (Unnamed e2) = compare1 e1 e2
 
-instance Ord sym => Ord (Decl sym) where compare = compare1
+instance Ord sym => Ord (Element sym) where compare = compare1
 instance Ord sym => Ord (Compound sym) where compare = compare1
 instance Ord sym => Ord (Exp sym) where compare = compare1
 instance Ord sym => Ord (Binding sym) where compare = compare1
 instance Ord sym => Ord (Case sym) where compare = compare1
 instance (Ord1 con, Ord sym) => Ord (Entry con sym) where compare = compare1
 
-instance Position (Decl sym) where
-  pos (Scope { scopePos = p }) = p
-  pos (Value { valuePos = p }) = p
-  pos (Invariant { invPos = p }) = p
+instance Position (Element sym) where
+  pos Scope { scopePos = p } = p
+  pos Def { defPos = p } = p
+  pos Truth { truthPos = p } = p
+  pos Alias { aliasPos = p } = p
 
 instance Position (Compound sym) where
   pos (Decl d) = pos d
   pos (Exp e) = pos e
 
 instance Position (Exp sym) where
-  pos (Compound { compoundPos = p }) = p
-  pos (Func { funcPos = p }) = p
-  pos (Match { matchPos = p }) = p
-  pos (Ascribe { ascribePos = p }) = p
-  pos (Seq { seqPos = p }) = p
-  pos (Record { recPos = p }) = p
-  pos (Sym { symPos = p }) = p
+  pos Compound { compoundPos = p } = p
+  pos Func { funcPos = p } = p
+  pos Match { matchPos = p } = p
+  pos Ascribe { ascribePos = p } = p
+  pos Seq { seqPos = p } = p
+  pos Record { recPos = p } = p
+  pos Field { fieldPos = p } = p
+  pos Sym { symPos = p } = p
 
 instance Position (Pattern sym) where
-  pos (Construct { constructPos = p }) = p
-  pos (Project { projectPos = p }) = p
-  pos (Typed { typedPos = p }) = p
-  pos (As { asPos = p }) = p
-  pos (Name { namePos = p }) = p
+  pos Construct { constructPos = p } = p
+  pos Project { projectPos = p } = p
+  pos Typed { typedPos = p } = p
+  pos As { asPos = p } = p
+  pos Name { namePos = p } = p
 
 instance Position (Binding sym) where
-  pos (Binding { bindingPos = p }) = p
+  pos Binding { bindingPos = p } = p
 
 instance Position (Case sym) where
-  pos (Case { casePos = p }) = p
+  pos Case { casePos = p } = p
 
 instance Position (con sym) => Position (Entry con sym) where
-  pos (Named { namedPos = p }) = p
+  pos Named { namedPos = p } = p
   pos (Unnamed e) = pos e
 
-
-instance Hashable sym => Hashable (Decl sym) where
-  hashWithSalt s Scope { scopeName = name, scopeClass = cls,
+instance Hashable1 Element where
+  hashWithSalt1 s Scope { scopeName = name, scopeClass = cls,
                          scopeParams = params, scopeSuperTypes = supers,
                          scopeBody = body } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt`
-    cls `hashWithSalt` params `hashWithSalt` supers `hashWithSalt`
-    body `hashWithSalt` body
-  hashWithSalt s Value { valueName = name, valueMutable = mutable,
-                         valueType = ty, valueInit = val } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` name `hashWithSalt`
-    mutable `hashWithSalt` ty `hashWithSalt` val
-  hashWithSalt s Invariant { invName = name, invProp = prop } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` name `hashWithSalt` prop
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt` cls)
+    `hashWithSalt1` params `hashWithSalt1` supers `hashWithSalt1` body
+  hashWithSalt1 s Def { defName = name, defMutable = mutable,
+                       defType = ty, defInit = val } =
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` name `hashWithSalt` mutable)
+    `hashWithSalt1` ty `hashWithSalt1` val
+  hashWithSalt1 s Truth { truthClass = cls, truthName = name,
+                         truthProp = prop } =
+    (s `hashWithSalt` (3 :: Int) `hashWithSalt` cls `hashWithSalt` name)
+    `hashWithSalt1` prop
+  hashWithSalt1 s Alias { aliasName = name, aliasClass = cls, aliasSrc = src } =
+    (s `hashWithSalt` (4 :: Int) `hashWithSalt` cls `hashWithSalt` name)
+    `hashWithSalt1` src
 
-instance Hashable sym => Hashable (Compound sym) where
-  hashWithSalt s (Decl d) = s `hashWithSalt` (1 :: Int) `hashWithSalt` d
-  hashWithSalt s (Exp e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
+instance Hashable1 Compound where
+  hashWithSalt1 s (Decl d) = (s `hashWithSalt` (1 :: Int)) `hashWithSalt1` d
+  hashWithSalt1 s (Exp e) = (s `hashWithSalt` (2 :: Int)) `hashWithSalt1` e
 
-instance Hashable sym => Hashable (Exp sym) where
-  hashWithSalt s Compound { compoundBody = body } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` body
-  hashWithSalt s Func { funcCases = cases } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` cases
-  hashWithSalt s Match { matchVal = val, matchCases = cases } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` val `hashWithSalt` cases
-  hashWithSalt s Ascribe { ascribeVal = val, ascribeType = ty } =
-    s `hashWithSalt` (4 :: Int) `hashWithSalt` val `hashWithSalt` ty
-  hashWithSalt s Seq { seqVals = vals } =
-    s `hashWithSalt` (5 :: Int) `hashWithSalt` vals
-  hashWithSalt s Record { recFields = fields } =
-    s `hashWithSalt` (6 :: Int) `hashWithSalt` fields
-  hashWithSalt s Sym { symName = name } =
-    s `hashWithSalt` (7 :: Int) `hashWithSalt` name
+instance Hashable1 Exp where
+  hashWithSalt1 s Compound { compoundBody = body } =
+    (s `hashWithSalt` (1 :: Int)) `hashWithSalt1` body
+  hashWithSalt1 s Func { funcCases = cases } =
+    (s `hashWithSalt` (2 :: Int)) `hashWithSalt1` cases
+  hashWithSalt1 s Match { matchVal = val, matchCases = cases } =
+    (s `hashWithSalt` (3 :: Int)) `hashWithSalt1` val `hashWithSalt1` cases
+  hashWithSalt1 s Ascribe { ascribeVal = val, ascribeType = ty } =
+    (s `hashWithSalt` (4 :: Int)) `hashWithSalt1` val `hashWithSalt1` ty
+  hashWithSalt1 s Seq { seqVals = vals } =
+    (s `hashWithSalt` (5 :: Int)) `hashWithSalt1` vals
+  hashWithSalt1 s Record { recFields = fields } =
+    (s `hashWithSalt` (6 :: Int)) `hashWithSalt1` fields
+  hashWithSalt1 s Field { fieldVal = val, fieldName = name } =
+    (s `hashWithSalt` (7 :: Int) `hashWithSalt` name) `hashWithSalt1` val
+  hashWithSalt1 s Sym { symName = name } =
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` name
 
-instance Hashable sym => Hashable (Pattern sym) where
-  hashWithSalt s Construct { constructName = name, constructStrict = strict,
+instance Hashable1 Pattern where
+  hashWithSalt1 s Construct { constructName = name, constructStrict = strict,
                              constructArgs = args } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt`
-    name `hashWithSalt` strict `hashWithSalt` args
-  hashWithSalt s Project { projectStrict = strict, projectFields = fields } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` strict `hashWithSalt` fields
-  hashWithSalt s Typed { typedPat = pat, typedType = ty } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` pat `hashWithSalt` ty
-  hashWithSalt s As { asName = name, asPat = pat } =
-    s `hashWithSalt` (4 :: Int) `hashWithSalt` name `hashWithSalt` pat
-  hashWithSalt s Name { nameSym = name } =
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt` strict)
+    `hashWithSalt1` args
+  hashWithSalt1 s Project { projectStrict = strict, projectFields = fields } =
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` strict) `hashWithSalt1` fields
+  hashWithSalt1 s Typed { typedPat = pat, typedType = ty } =
+    (s `hashWithSalt` (3 :: Int)) `hashWithSalt1` pat `hashWithSalt1` ty
+  hashWithSalt1 s As { asName = name, asPat = pat } =
+    (s `hashWithSalt` (4 :: Int) `hashWithSalt` name) `hashWithSalt1` pat
+  hashWithSalt1 s Name { nameSym = name } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt` name
 
+instance Hashable1 Binding where
+  hashWithSalt1 s Binding { bindingName = name, bindingType = ty } =
+    (s `hashWithSalt` name) `hashWithSalt1` ty
+
+instance Hashable1 Case where
+  hashWithSalt1 s Case { casePat = pat, caseBody = body } =
+    s `hashWithSalt1` pat `hashWithSalt1` body
+
+instance Hashable1 con => Hashable1 (Entry con) where
+  hashWithSalt1 s Named { namedName = name, namedVal = val } =
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` name) `hashWithSalt1` val
+  hashWithSalt1 s (Unnamed e) = (s `hashWithSalt` (2 :: Int)) `hashWithSalt1` e
+
+instance Hashable sym => Hashable (Element sym) where
+  hashWithSalt = hashWithSalt1
+instance Hashable sym => Hashable (Compound sym) where
+  hashWithSalt = hashWithSalt1
+instance Hashable sym => Hashable (Exp sym) where
+  hashWithSalt = hashWithSalt1
 instance Hashable sym => Hashable (Binding sym) where
-  hashWithSalt s Binding { bindingName = name, bindingType = ty } =
-    s `hashWithSalt` name `hashWithSalt` ty
-
+  hashWithSalt = hashWithSalt1
 instance Hashable sym => Hashable (Case sym) where
-  hashWithSalt s Case { casePat = pat, caseBody = body } =
-    s `hashWithSalt` pat `hashWithSalt` body
+  hashWithSalt = hashWithSalt1
+instance (Hashable1 con, Hashable sym) => Hashable (Entry con sym) where
+  hashWithSalt = hashWithSalt1
 
-instance (Hashable sym, Hashable (con sym)) => Hashable (Entry con sym) where
-  hashWithSalt s Named { namedName = name, namedVal = val } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt` val
-  hashWithSalt s (Unnamed e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
-
-instance Functor Decl where
-  fmap f d @ (Scope { scopeName = name, scopeSuperTypes = supers,
-                      scopeParams = params, scopeBody = body }) =
+instance Functor Element where
+  fmap f d @ Scope { scopeName = name, scopeSuperTypes = supers,
+                     scopeParams = params, scopeBody = body } =
     d { scopeName = f name, scopeSuperTypes = fmap (fmap f) supers,
         scopeParams = fmap (fmap f) params, scopeBody = fmap (fmap f) body }
-  fmap f d @ (Value { valueName = name, valueInit = val, valueType = ty }) =
-    d { valueName = f name, valueInit = fmap f val,
-        valueType = fmap (fmap f) ty }
-  fmap f d @ (Invariant { invName = name, invProp = prop }) =
-    d { invName = f name, invProp = fmap f prop }
+  fmap f d @ Def { defName = name, defInit = val, defType = ty } =
+    d { defName = f name, defInit = fmap f val,
+        defType = fmap (fmap f) ty }
+  fmap f d @ Truth { truthName = name, truthProp = prop } =
+    d { truthName = f name, truthProp = fmap f prop }
+  fmap f d @ Alias { aliasName = name, aliasSrc = src } =
+    d { aliasName = fmap f name, aliasSrc = fmap f src }
 
 instance Functor Compound where
   fmap f (Decl d) = Decl (fmap f d)
   fmap f (Exp e) = Exp (fmap f e)
 
 instance Functor Exp where
-  fmap f e @ (Sym { symName = name }) = e { symName = f name }
-  fmap f e @ (Seq { seqVals = vals }) = e { seqVals = fmap (fmap f) vals }
-  fmap f e @ (Record { recFields = fields }) =
+  fmap f e @ Sym { symName = name } = e { symName = f name }
+  fmap f e @ Seq { seqVals = vals } = e { seqVals = fmap (fmap f) vals }
+  fmap f e @ Record { recFields = fields } =
     e { recFields = fmap (fmap f) fields }
-  fmap f e @ (Ascribe { ascribeVal = val, ascribeType = ty }) =
+  fmap f e @ Field { fieldVal = val, fieldName = name } =
+    e { fieldVal = fmap f val, fieldName = f name }
+  fmap f e @ Ascribe { ascribeVal = val, ascribeType = ty } =
     e { ascribeVal = fmap f val, ascribeType = fmap f ty }
-  fmap f e @ (Match { matchVal = val, matchCases = cases }) =
+  fmap f e @ Match { matchVal = val, matchCases = cases } =
     e { matchVal = fmap f val, matchCases = fmap (fmap f) cases }
-  fmap f e @ (Func { funcCases = cases }) =
+  fmap f e @ Func { funcCases = cases } =
     e { funcCases = fmap (fmap f) cases }
-  fmap f e @ (Compound { compoundBody = body }) =
+  fmap f e @ Compound { compoundBody = body } =
     e { compoundBody = fmap (fmap f) body }
 
 instance Functor Pattern where
-  fmap f p @ (Construct { constructName = name, constructArgs = args }) =
+  fmap f p @ Construct { constructName = name, constructArgs = args } =
     p { constructName = f name, constructArgs = fmap (fmap f) args }
-  fmap f p @ (Project { projectFields = fields }) =
+  fmap f p @ Project { projectFields = fields } =
     p { projectFields = fmap (fmap f) fields }
-  fmap f p @ (Typed { typedPat = pat, typedType = ty }) =
+  fmap f p @ Typed { typedPat = pat, typedType = ty } =
     p { typedPat = fmap f pat, typedType = fmap f ty }
-  fmap f p @ (As { asName = name, asPat = pat }) =
+  fmap f p @ As { asName = name, asPat = pat } =
     p { asName = f name, asPat = fmap f pat }
-  fmap f p @ (Name { nameSym = name }) = p { nameSym = f name }
+  fmap f p @ Name { nameSym = name } = p { nameSym = f name }
 
 instance Functor Binding where
-  fmap f b @ (Binding { bindingName = name, bindingType = ty }) =
+  fmap f b @ Binding { bindingName = name, bindingType = ty } =
     b { bindingName = f name, bindingType = fmap f ty }
 
 instance Functor Case where
-  fmap f b @ (Case { casePat = pat, caseBody = body }) =
+  fmap f b @ Case { casePat = pat, caseBody = body } =
     b { casePat = fmap f pat, caseBody = fmap f body }
 
 instance Functor con => Functor (Entry con) where
-  fmap f e @ (Named { namedName = name, namedVal = val }) =
+  fmap f e @ Named { namedName = name, namedVal = val } =
     e { namedName = f name, namedVal = fmap f val }
   fmap f (Unnamed e) = Unnamed (fmap f e)
 
-instance Foldable Decl where
-  foldMap f (Scope { scopeName = name, scopeSuperTypes = supers,
-                     scopeParams = params, scopeBody = body }) =
+instance Foldable Element where
+  foldMap f Scope { scopeName = name, scopeSuperTypes = supers,
+                    scopeParams = params, scopeBody = body } =
     f name `mappend` foldMap (foldMap f) supers `mappend`
     foldMap (foldMap f) params `mappend` foldMap (foldMap f) body
-  foldMap f (Value { valueName = name, valueInit = val, valueType = ty }) =
+  foldMap f Def { defName = name, defInit = val, defType = ty } =
     f name `mappend` foldMap f val `mappend` foldMap (foldMap f) ty
-  foldMap f (Invariant { invName = name, invProp = prop }) =
+  foldMap f Truth { truthName = name, truthProp = prop } =
     f name `mappend` foldMap f prop
+  foldMap f Alias { aliasName = name, aliasSrc = src } =
+    foldMap f name `mappend` foldMap f src
 
 instance Foldable Compound where
   foldMap f (Decl d) = foldMap f d
   foldMap f (Exp e) = foldMap f e
 
 instance Foldable Exp where
-  foldMap f (Sym { symName = name }) = f name
-  foldMap f (Seq { seqVals = vals }) = foldMap (foldMap f) vals
-  foldMap f (Record { recFields = fields }) = foldMap (foldMap f) fields
-  foldMap f (Ascribe { ascribeVal = val, ascribeType = ty }) =
+  foldMap f Sym { symName = name } = f name
+  foldMap f Seq { seqVals = vals } = foldMap (foldMap f) vals
+  foldMap f Record { recFields = fields } = foldMap (foldMap f) fields
+  foldMap f Field { fieldVal = val, fieldName = name } =
+    f name `mappend` foldMap f val
+  foldMap f Ascribe { ascribeVal = val, ascribeType = ty } =
     foldMap f val `mappend` foldMap f ty
-  foldMap f (Func { funcCases = cases }) = foldMap (foldMap f) cases
-  foldMap f (Match { matchVal = val, matchCases = cases }) =
+  foldMap f Func { funcCases = cases } = foldMap (foldMap f) cases
+  foldMap f Match { matchVal = val, matchCases = cases } =
     foldMap f val `mappend` foldMap (foldMap f) cases
-  foldMap f (Compound { compoundBody = body }) = foldMap (foldMap f) body
+  foldMap f Compound { compoundBody = body } = foldMap (foldMap f) body
 
 instance Foldable Pattern where
-  foldMap f (Construct { constructName = name, constructArgs = args }) =
+  foldMap f Construct { constructName = name, constructArgs = args } =
     f name `mappend` foldMap (foldMap f) args
-  foldMap f (Project { projectFields = fields }) = foldMap (foldMap f) fields
-  foldMap f (Typed { typedPat = pat, typedType = ty }) =
+  foldMap f Project { projectFields = fields } = foldMap (foldMap f) fields
+  foldMap f Typed { typedPat = pat, typedType = ty } =
     foldMap f pat `mappend` foldMap f ty
-  foldMap f (As { asName = name, asPat = pat }) =
+  foldMap f As { asName = name, asPat = pat } =
     f name `mappend` foldMap f pat
-  foldMap f (Name { nameSym = name }) = f name
+  foldMap f Name { nameSym = name } = f name
 
 instance Foldable Binding where
-  foldMap f (Binding { bindingName = name, bindingType = ty }) =
+  foldMap f Binding { bindingName = name, bindingType = ty } =
     f name `mappend` foldMap f ty
 
 instance Foldable Case where
-  foldMap f (Case { casePat = pat, caseBody = body }) =
+  foldMap f Case { casePat = pat, caseBody = body } =
     foldMap f pat `mappend` foldMap f body
 
 instance Foldable con => Foldable (Entry con) where
-  foldMap f (Named { namedName = name, namedVal = val }) =
+  foldMap f Named { namedName = name, namedVal = val } =
     f name `mappend` foldMap f val
   foldMap f (Unnamed e) = foldMap f e
 
-instance Traversable Decl where
-  traverse f d @ (Scope { scopeName = name, scopeSuperTypes = supers,
-                      scopeParams = params, scopeBody = body }) =
+instance Traversable Element where
+  traverse f d @ Scope { scopeName = name, scopeSuperTypes = supers,
+                         scopeParams = params, scopeBody = body } =
     (\name' supers' params' body' ->
       d { scopeName = name', scopeSuperTypes = supers',
         scopeParams = params', scopeBody = body' }) <$>
       f name <*> traverse (traverse f) supers <*>
       traverse (traverse f) params <*> traverse (traverse f) body 
-  traverse f d @ (Value { valueName = name, valueInit = val, valueType = ty }) =
+  traverse f d @ Def { defName = name, defInit = val, defType = ty } =
     (\name' val' ty' ->
-      d { valueName = name', valueInit = val', valueType = ty' }) <$>
+      d { defName = name', defInit = val', defType = ty' }) <$>
       f name <*> traverse f val <*> traverse (traverse f) ty
-  traverse f d @ (Invariant { invName = name, invProp = prop }) =
-    (\name' prop' -> d { invName = name', invProp = prop' }) <$>
+  traverse f d @ Truth { truthName = name, truthProp = prop } =
+    (\name' prop' -> d { truthName = name', truthProp = prop' }) <$>
       f name <*> traverse f prop
+  traverse f d @ Alias { aliasName = name, aliasSrc = src } =
+    (\name' src' -> d { aliasName = name', aliasSrc = src' }) <$>
+      traverse f name <*> traverse f src
 
 instance Traversable Compound where
   traverse f (Decl d) = Decl <$> traverse f d
   traverse f (Exp e) = Exp <$> traverse f e
 
 instance Traversable Exp where
-  traverse f e @ (Sym { symName = name }) =
+  traverse f e @ Sym { symName = name } =
     (\name' -> e { symName = name' }) <$> f name
-  traverse f e @ (Ascribe { ascribeVal = val, ascribeType = ty }) =
+  traverse f e @ Ascribe { ascribeVal = val, ascribeType = ty } =
     (\val' ty' -> e { ascribeVal = val', ascribeType = ty' }) <$>
       traverse f val <*> traverse f ty
-  traverse f e @ (Seq { seqVals = vals }) =
+  traverse f e @ Seq { seqVals = vals } =
     (\vals' -> e { seqVals = vals' }) <$> traverse (traverse f) vals
-  traverse f e @ (Record { recFields = fields }) =
+  traverse f e @ Record { recFields = fields } =
     (\fields' -> e { recFields = fields' }) <$> traverse (traverse f) fields
-  traverse f e @ (Func { funcCases = cases }) =
+  traverse f e @ Field { fieldVal = val, fieldName = name } =
+    (\val' name' -> e { fieldVal = val', fieldName = name' }) <$>
+      traverse f val <*> f name
+  traverse f e @ Func { funcCases = cases } =
     (\cases' -> e { funcCases = cases' }) <$> traverse (traverse f) cases
-  traverse f e @ (Match { matchVal = val, matchCases = cases }) =
+  traverse f e @ Match { matchVal = val, matchCases = cases } =
     (\val' cases' -> e { matchVal = val', matchCases = cases' }) <$>
       traverse f val <*> traverse (traverse f) cases
-  traverse f e @ (Compound { compoundBody = body }) =
+  traverse f e @ Compound { compoundBody = body } =
     (\body' -> e { compoundBody = body' }) <$> traverse (traverse f) body
 
 instance Traversable Pattern where
-  traverse f p @ (Construct { constructName = name, constructArgs = args }) =
+  traverse f p @ Construct { constructName = name, constructArgs = args } =
     (\name' args' -> p { constructName = name', constructArgs = args' }) <$>
       f name <*> traverse (traverse f) args
-  traverse f p @ (Project { projectFields = fields }) =
+  traverse f p @ Project { projectFields = fields } =
     (\fields' -> p { projectFields = fields' }) <$>
       traverse (traverse f) fields
-  traverse f p @ (Typed { typedPat = pat, typedType = ty }) =
+  traverse f p @ Typed { typedPat = pat, typedType = ty } =
     (\pat' ty' -> p { typedPat = pat', typedType = ty' }) <$>
       traverse f pat <*> traverse f ty
-  traverse f p @ (As { asName = name, asPat = pat }) =
+  traverse f p @ As { asName = name, asPat = pat } =
     (\name' pat' -> p { asName = name', asPat = pat' }) <$>
       f name <*> traverse f pat
-  traverse f p @ (Name { nameSym = name }) =
+  traverse f p @ Name { nameSym = name } =
     (\name' -> p { nameSym = name' }) <$> f name
 
 instance Traversable Binding where
-  traverse f b @ (Binding { bindingName = name, bindingType = ty }) =
+  traverse f b @ Binding { bindingName = name, bindingType = ty } =
     (\name' ty' -> b { bindingName = name', bindingType = ty' }) <$>
       f name <*> traverse f ty
 
 instance Traversable Case where
-  traverse f b @ (Case { casePat = pat, caseBody = body }) =
+  traverse f b @ Case { casePat = pat, caseBody = body } =
     (\pat' body' -> b { casePat = pat', caseBody = body' }) <$>
       traverse f pat <*> traverse f body
 
 instance Traversable con => Traversable (Entry con) where
-  traverse f e @ (Named { namedName = name, namedVal = val }) =
+  traverse f e @ Named { namedName = name, namedVal = val } =
     (\name' val' -> e { namedName = name', namedVal = val' }) <$>
       f name <*> traverse f val
   traverse f (Unnamed e) = Unnamed <$> traverse f e
 
-instance Format sym => Format (Decl sym) where
-  format (Scope { scopeName = name, scopeClass = cls,
-                  scopeSuperTypes = supers, scopeParams = params,
-                  scopeBody = body }) =
+instance Format sym => Format (Element sym) where
+  format Scope { scopeName = name, scopeClass = cls,
+                 scopeSuperTypes = supers, scopeParams = params,
+                 scopeBody = body } =
     let
       header = show cls <+> name
       withparams = case params of
@@ -763,72 +847,83 @@ instance Format sym => Format (Decl sym) where
           (nest 2 (sep (punctuate comma supers')))
     in
       braceBlock withsupers body
-  format (Value { valueName = name, valueMutable = True,
-                  valueType = Just ty, valueInit = val }) =
+  format Def { defName = name, defMutable = True,
+               defType = Just ty, defInit = val } =
     name <+> colon <+> nest 2 (sep [format "mutable", format ty,
                                     equals, format val])
-  format (Value { valueName = name, valueMutable = False,
-                  valueType = Just ty, valueInit = val }) =
+  format Def { defName = name, defMutable = False,
+               defType = Just ty, defInit = val } =
     name <+> colon <+> nest 2 (sep [format ty, equals, format val])
-  format (Value { valueName = name, valueMutable = True,
-                  valueType = Nothing, valueInit = val }) =
+  format Def { defName = name, defMutable = True,
+               defType = Nothing, defInit = val } =
     name <+> colon <+> nest 2 (sep [format "mutable", equals, format val])
-  format (Value { valueName = name, valueMutable = False,
-                  valueType = Nothing, valueInit = val }) =
+  format Def { defName = name, defMutable = False,
+               defType = Nothing, defInit = val } =
     name <+> equals <+> nest 2 val
-  format (Invariant { invName = name, invProp = prop }) =
-    hang (format "invariant" <+> name <+> equals) 2 prop
+  format Truth { truthClass = cls, truthName = name, truthProp = prop } =
+    hang (format cls <+> name <+> equals) 2 prop
+  format Alias { aliasClass = Import, aliasName = Just name, aliasSrc = src } =
+    "import" <+> src <+> "as" <+> name <> semi
+  format Alias { aliasClass = Import, aliasName = Nothing, aliasSrc = src } =
+    "import" <+> src <> semi
+  format Alias { aliasClass = Export, aliasName = Just name, aliasSrc = src } =
+    "export" <+> src <+> "as" <+> name <> semi
+  format Alias { aliasClass = Export, aliasName = Nothing, aliasSrc = src } =
+    "export" <+> src <> semi
+  format Alias { aliasClass = Open, aliasSrc = src } =
+    "import" <+> src <+> ".*;"
 
 instance Format sym => Format (Compound sym) where
   format (Decl d) = format d
   format (Exp e) = format e
 
 instance Format sym => Format (Exp sym) where
-  format (Compound { compoundBody = body }) =
+  format Compound { compoundBody = body } =
     block 2 (lbrace) (sep body) rbrace
-  format (Func { funcCases = cases }) = (sep (punctuate (format "|") cases))
-  format (Match { matchVal = val, matchCases = cases }) =
+  format Func { funcCases = cases } = (sep (punctuate (format "|") cases))
+  format Match { matchVal = val, matchCases = cases } =
     hang (format "match" <+> val) 2 (sep (punctuate (format "|") cases))
-  format (Ascribe { ascribeVal = val, ascribeType = ty }) =
+  format Ascribe { ascribeVal = val, ascribeType = ty } =
     hang (val <+> colon) 2 ty
-  format (Seq { seqVals = vals }) = nest 2 (sep vals)
-  format (Record { recFields = fields }) =
+  format Seq { seqVals = vals } = nest 2 (sep vals)
+  format Record { recFields = fields } =
     lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
-  format (Sym { symName = name }) = format name
+  format Field { fieldVal = val, fieldName = name } = val <> "." <> name
+  format Sym { symName = name } = format name
 
 instance Format sym => Format (Pattern sym) where
-  format (Project { projectFields = fields, projectStrict = True }) =
+  format Project { projectFields = fields, projectStrict = True } =
     lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
-  format (Project { projectFields = fields, projectStrict = False }) =
+  format Project { projectFields = fields, projectStrict = False } =
     let
       withdots = (map format fields) ++ [format "..."]
     in
     lparen <> (nest 2 (sep (punctuate comma withdots))) <> rparen
-  format (Construct { constructName = name, constructArgs = args,
-                      constructStrict = True }) = parenList name args
-  format (Construct { constructName = name, constructArgs = args,
-                      constructStrict = False }) =
+  format Construct { constructName = name, constructArgs = args,
+                     constructStrict = True } = parenList name args
+  format Construct { constructName = name, constructArgs = args,
+                     constructStrict = False } =
     parenList name ((map format args) ++ [format "..."])
-  format (Typed { typedPat = pat, typedType = ty }) =
+  format Typed { typedPat = pat, typedType = ty } =
     hang (pat <+> colon) 2 ty
-  format (As { asName = name, asPat = pat }) =
+  format As { asName = name, asPat = pat } =
     format pat <+> format "as" <+> format name
-  format (Name { nameSym = name }) = format name
+  format Name { nameSym = name } = format name
 
 instance Format sym => Format (Binding sym) where
-  format (Binding { bindingName = name, bindingType = ty }) =
+  format Binding { bindingName = name, bindingType = ty } =
     hang (name <+> colon) 2 ty
 
 instance Format sym => Format (Case sym) where
-  format (Case { casePat = pat, caseBody = body }) =
+  format Case { casePat = pat, caseBody = body } =
     hang (pat <+> equals) 2 body
 
 instance (Format sym, Format (con sym)) => Format (Entry con sym) where
-  format (Named { namedName = name, namedVal = val }) =
+  format Named { namedName = name, namedVal = val } =
     hang val 2 (format "as" <+> name)
   format (Unnamed e) = format e
 
-instance Format sym => Show (Decl sym) where
+instance Format sym => Show (Element sym) where
   show = show . format
 
 instance Format sym => Show (Exp sym) where
@@ -939,3 +1034,4 @@ arbitraryExp size =
 
 instance Arbitrary (Exp String) where
   arbitrary = sized arbitraryExp
+
