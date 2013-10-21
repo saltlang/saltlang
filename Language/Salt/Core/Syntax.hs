@@ -463,6 +463,8 @@ instance (Default b, Eq b) => Eq1 (Comp b) where
   Seq { seqType = ty1, seqPat = pat1, seqCmd = cmd1, seqNext = next1 } ==#
     Seq { seqType = ty2, seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
       pat1 ==# pat2 && cmd1 ==# cmd2 && next1 ==# next2 && ty1 ==# ty2
+  End { endCmd = Eval { evalTerm = Comp { compBody = c1 } } } ==# c2 = c1 ==# c2
+  c1 ==# End { endCmd = Eval { evalTerm = Comp { compBody = c2 } } } = c1 ==# c2
   End { endCmd = cmd1 } ==# End { endCmd = cmd2 } = cmd1 ==# cmd2
   BadComp _ ==# BadComp _ = True
   _ ==# _ = False
@@ -961,20 +963,20 @@ instance Default b => Applicative (Comp b) where
   pure = return
   (<*>) = ap
 
-caseSubstTerm :: Default c => (a -> Term c b) -> Case c a -> Case c b
+caseSubstTerm :: (a -> Term c b) -> Case c a -> Case c b
 caseSubstTerm f c @ Case { casePat = pat, caseBody = body } =
   c { casePat = pat >>>= f, caseBody = body >>>= f }
 
-elementSubstTerm :: Default c => (a -> Term c b) -> Element c a -> Element c b
+elementSubstTerm :: (a -> Term c b) -> Element c a -> Element c b
 elementSubstTerm f e @ Element { elemPat = pat, elemType = ty } =
   e { elemPat = pat >>>= f, elemType = ty >>>= f }
 
-cmdSubstTerm :: Default c => (a -> Term c b) -> Cmd c a -> Cmd c b
+cmdSubstTerm :: (a -> Term c b) -> Cmd c a -> Cmd c b
 cmdSubstTerm f c @ Value { valTerm = term } = c { valTerm = term >>= f }
 cmdSubstTerm f c @ Eval { evalTerm = term } = c { evalTerm = term >>= f }
 cmdSubstTerm _ (BadCmd p) = BadCmd p
 
-compSubstTerm :: Default c => (a -> Term c b) -> Comp c a -> Comp c b
+compSubstTerm :: (a -> Term c b) -> Comp c a -> Comp c b
 compSubstTerm f c @ Seq { seqCmd = cmd, seqNext = next,
                           seqType = ty, seqPat = pat } =
   c { seqType = ty >>= f, seqPat = pat >>>= f, seqCmd = cmdSubstTerm f cmd,
@@ -983,7 +985,7 @@ compSubstTerm f c @ End { endCmd = cmd } =
   c { endCmd = cmdSubstTerm f cmd }
 compSubstTerm _ (BadComp p) = BadComp p
 
-instance Default b => Monad (Term b) where
+instance Monad (Term b) where
   return sym = Var { varSym = sym, varPos = injectpos }
 
   t @ ProdType { prodArgs = argtys, prodRetTy = retty } >>= f =
@@ -1011,27 +1013,28 @@ instance Default b => Monad (Term b) where
   BadTerm p >>= _ = BadTerm p
 
 termSubstComp :: (a -> Comp c b) -> a -> Term c b
-termSubstComp f sym = Comp { compBody = f sym, compPos = substpos }
+termSubstComp f sym =
+  case f sym of
+    End { endCmd = Eval { evalTerm = term } } -> term
+    body -> Comp { compBody = body, compPos = substpos }
 
-cmdSubstComp :: Default c => (a -> Comp c b) -> Cmd c a -> Cmd c b
+cmdSubstComp :: (a -> Comp c b) -> Cmd c a -> Cmd c b
 cmdSubstComp f c @ Value { valTerm = term } =
   c { valTerm = term >>= termSubstComp f }
 cmdSubstComp f c @ Eval { evalTerm = term } =
   c { evalTerm = term >>= termSubstComp f }
 cmdSubstComp _ (BadCmd p) = BadCmd p
 
-instance Default b => Monad (Comp b) where
+instance Monad (Comp b) where
   return sym =
     End { endCmd = Eval { evalTerm = Var { varSym = sym, varPos = injectpos },
                           evalPos = injectpos },
           endPos = injectpos }
+
   c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
     c { seqType = ty >>= termSubstComp f, seqNext = next >>>= f,
         seqPat = pat >>>= termSubstComp f, seqCmd = cmdSubstComp f cmd }
-  c @ End { endCmd = cmd } >>= f =
-    case cmdSubstComp f cmd of
-      Eval { evalTerm = Comp { compBody = body } } -> body
-      cmd' -> c { endCmd = cmd' }
+  c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
 abstractfun :: Ord s => Set s -> s -> Maybe s
@@ -1436,7 +1439,6 @@ instance (Default s, Ord s, Arbitrary s) => Arbitrary (Comp s s) where
     do
       syms <- listOf1 arbitrary
       sized (arbitraryComp (Set.fromList syms))
-{-
   shrink c @ Seq { seqCmd = cmd, seqNext = next, seqPos = p,
                    seqType = ty, seqPat = pat } =
     End { endCmd = cmd, endPos = p } :
@@ -1448,106 +1450,120 @@ instance (Default s, Ord s, Arbitrary s) => Arbitrary (Comp s s) where
   shrink c @ End { endCmd = cmd } =
     map (\cmd' -> c { endCmd = cmd' }) (shrink cmd)
   shrink (BadComp _) = []
--}
+
 formatBind :: (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
               (b, t s) -> Doc
-formatBind (name, bind) = hang bind 2 ("as" <+> name)
+formatBind (name, bind) = name <+> equals <+> bind
 
 instance Format Quantifier where
-  format Forall = format "forall"
-  format Exists = format "exists"
+  format Forall = format "Forall"
+  format Exists = format "Exists"
 
 instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
          Format (Pattern b t s) where
   format Deconstruct { deconstructConstructor = constructor,
                        deconstructBinds = binds,
                        deconstructStrict = strict } =
-    let
-      bindDocs = map formatBind (Map.assocs binds)
-      withStrict = if strict then bindDocs else bindDocs ++ [format "..."]
-    in if defaultVal /= constructor
-      then parenList constructor withStrict
-      else lparen <> (nest 2 (sep (punctuate comma withStrict))) <> rparen
+    braceBlock "Deconstruct" [
+        "constructor" <+> equals <+> constructor,
+        "strict" <+> equals <+> strict,
+        "binds" <+> equals <+>
+        headlessBracketList (map formatBind (Map.assocs binds))
+      ]
   format As { asBind = bind, asName = name } =
-    hang bind 2 ("as" <+> format name)
-  format Name { nameSym = sym } = format sym
+    braceBlock "As" [
+        "bind" <+> equals <+> bind,
+        "name" <+> equals <+> name
+      ]
+  format Name { nameSym = sym } =
+    braceBlock "Name" [ "sym" <+> equals <+> sym ]
   format (Constant t) =   block 2 ("val" <+> lparen) (format t) rparen
 
 instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Case b s) where
-  format Case { casePat = pat, caseBody = body } = hang (pat <+> equals) 2 body
+  format Case { casePat = pat, caseBody = body } =
+    braceBlock "Case" [
+        "pat" <+> equals <+> pat,
+        "body" <+> equals <+> body
+      ]
 
 instance (Default b, Ord b, Eq b, Format b, Format s) =>
          Format (Element b s) where
   format Element { elemPat = pat, elemType = ty, elemName = name } =
-    hang (lparen <> pat <> rparen) 2
-         (sep [ "as" <+> name <+> colon, format ty  ])
+    braceBlock "Element" [
+        "name" <+> equals <+> name,
+        "pat" <+> equals <+> pat,
+        "type" <+> equals <+> ty
+      ]
 
 instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
   format ProdType { prodArgs = args, prodRetTy = ret } =
-    let
-      argsDoc = lparen <> (nest 1 (sep (punctuate comma args))) <> rparen
-    in
-      hang (argsDoc <+> "->") 2 (lparen <> format ret <> rparen)
+    braceBlock "ProdType" [
+        "args" <+> equals <+> headlessBracketList args,
+        "ret" <+> equals <+> ret
+      ] 
   format SumType { sumBody = body } =
-    lparen <> (nest 1 (sep (punctuate comma body))) <> rparen
+    braceBlock "SumType" [ "body" <+> equals <+> headlessBracketList body ]
   format RefineType { refineType = ty, refineCases = cases } =
-    (ty <+> "where") <+> (nest 2 (sep (punctuate "|" cases)))
+    braceBlock "RefineType" [
+        "type" <+> equals <+> ty,
+        "cases" <+> equals <+> headlessBracketList cases
+      ]
   format CompType { compType = ty, compPat = pat, compSpec = spec } =
-    let
-      patDoc =
-        hang (lparen <> pat <> rparen <+> colon) 2 (lparen <> ty <> rparen)
-      propDoc = lparen <> format spec <> rparen
-    in
-      hang patDoc 2 ("with spec" <+> propDoc)
+    braceBlock "CompType" [
+        "type" <+> equals <+> ty,
+        "pat" <+> equals <+> pat,
+        "spec" <+> equals <+> spec
+      ]
   format Quantified { quantKind = kind, quantType = ty, quantCases = cases } =
-    let
-      headDoc = block 2 (kind <+> lparen) ty rparen
-      propDoc = lparen <> sep (punctuate "|" cases) <> rparen
-    in
-      hang headDoc 2 propDoc
+    braceBlock kind [
+        "type" <+> equals <+> ty,
+        "cases" <+> equals <+> headlessBracketList cases        
+      ]
   format Call { callFunc = func, callArgs = args } =
-    parenList func (map formatBind (Map.assocs args))
-  format Var { varSym = sym } = format sym
+    braceBlock "Call" [
+        "func" <+> equals <+> func,
+        "args" <+> equals <+>
+        headlessBracketList (map formatBind (Map.assocs args))
+      ]
+  format Var { varSym = sym } =
+    braceBlock "Var" [ "name" <+> equals <+> format sym ]
   format Typed { typedTerm = term, typedType = ty } =
-    hang (lparen <> term <> rparen <+> colon) 2 (lparen <> ty <> rparen)
+    braceBlock "Typed" [
+        "term" <+> equals <+> term,
+        "type" <+> equals <+> ty
+      ]
   format Lambda { lambdaCases = cases } =
-    "fun" <+> (nest 2 (sep (punctuate "|" cases)))
+    braceBlock "Lambda" [ "cases" <+> equals <+> headlessBracketList cases ]
   format Record { recVals = vals } =
-    let
-      valDocs = map formatBind (Map.assocs vals)
-    in
-      lparen <> (nest 1 (sep (punctuate comma valDocs))) <> rparen
+    bracketList "Record" (map formatBind (Map.assocs vals))
   format Fix { fixTerms = terms } =
-    let
-      mapfun False (name, term) = hang (name <+> equals) 2 term
-      mapfun True (name, term) = hang ("and" <+> name <+> equals) 2 term
-
-    in case Map.assocs terms of
-      first : rest -> sep (mapfun False first : map (mapfun True) rest)
-      [] -> error "Empty mutually recursive binding list"
+    bracketList "Fix" (map formatBind (Map.assocs terms))
   format Comp { compBody = body } =
-    block 2 lbrace (sep (punctuate semi (formatList body))) rbrace
+    braceBlock "Comp" ["compBody" <+> equals <+> body]
   format Eta { etaType = ty, etaTerm = term } =
     hang ("eta" <+> lparen <> term <> rparen <+> colon) 2
       (lparen <> ty <> rparen)
-  format (BadTerm _) = format "<bad term>"
+  format (BadTerm _) = format "BadTerm"
 
 instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Cmd b s) where
-  format Value { valTerm = term } = format term
-  format Eval { evalTerm = term } = "eval" <+> term
-  format (BadCmd _) = format "<bad command>"
+  format Value { valTerm = term } =
+    braceBlock "Value" ["term" <+> equals <+> term]
+  format Eval { evalTerm = term } =
+    braceBlock "Eval" ["term" <+> equals <+> term]
+  format (BadCmd _) = format "BadCmd"
 
 instance (Default b, Ord b, Eq b, Format b, Format s) =>
-         FormatList (Comp b s) where
-  formatList Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
-    let
-      binderDoc = hang
-        (lparen <> pat <> rparen <+> colon) 2
-        (lparen <> ty <> rparen <+> equals <+> cmd)
-    in
-      binderDoc : formatList next
-  formatList End { endCmd = cmd } = [ format cmd ]
-  formatList (BadComp _) = [ format "<bad comp>" ]
+         Format (Comp b s) where
+  format Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
+    braceBlock "Seq" [
+        "type" <+> equals <+> ty,
+        "pat" <+> equals <+> pat,
+        "cmd" <+> equals <+> cmd,
+        "next" <+> equals <+> next
+      ]
+  format End { endCmd = cmd } =
+    braceBlock "End" [ "cmd" <+> equals <+> format cmd ]
+  format (BadComp _) = format "BadComp"
 
 instance Show Quantifier where
   show = show . format
@@ -1571,8 +1587,4 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Show (Cmd b s) where
 
 instance (Default b, Ord b, Eq b, Format b, Format s) =>
          Show (Comp b s) where
-  show comp =
-    let
-      body = formatList comp
-    in
-      show (block 2 lbrace (sep (punctuate semi (formatList body))) rbrace)
+  show = show . format
