@@ -25,12 +25,22 @@ module Language.Salt.Surface.Common(
        ) where
 
 import Data.Hashable
-import Data.Word
 import Test.QuickCheck
+import Text.Format
 
 -- | Scope classes.  These define the exact semantics of a scoped
 -- entity declaration.
 data ScopeClass =
+    -- | Signatures are similar to SML signatures, or Fortress traits.
+    -- A signature declares a type, which may not be directly
+    -- instantiated, and whose mutable fields are not automatically
+    -- inherited by scopes which declare the class as a supertype.
+    -- Multiple inheritence of signatures is allowed.
+    Signature
+    -- | Interfaces are classes that are only allowed to contain
+    -- function declarations and/or definitions.  They behave exactly
+    -- like Java interfaces (as of JDK 8).
+  | Interface
     -- | Modules are similar to SML modules.  Unlike SML, a module may
     -- be used at runtime.  Modules declare a named instance of an
     -- anonymous record type
@@ -41,13 +51,7 @@ data ScopeClass =
     -- 
     -- Put in terms of classes, modules are like declaring a class
     -- anonymously, then instantiating it.
-    Module
-    -- | Signatures are similar to SML signatures, or Fortress traits.
-    -- A signature declares a type, which may not be directly
-    -- instantiated, and whose mutable fields are not automatically
-    -- inherited by scopes which declare the class as a supertype.
-    -- Multiple inheritence of signatures is allowed.
-  | Signature
+  | Module
     -- | Classes are similar to Java classes.  A Class defines a type
     -- which may be directly instantiated, and whose mutable fields
     -- are automatically inherited by scopes which declare the class
@@ -98,27 +102,29 @@ data Visibility =
     deriving (Ord, Eq)
 
 instance Hashable ScopeClass where
-  hashWithSalt s Module = s `hashWithSalt` (1 :: Word)
-  hashWithSalt s Signature = s `hashWithSalt` (2 :: Word)
-  hashWithSalt s Class = s `hashWithSalt` (3 :: Word)
+  hashWithSalt s Signature = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s Interface = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s Module = s `hashWithSalt` (3 :: Int)
+  hashWithSalt s Class = s `hashWithSalt` (4 :: Int)
 
 instance Hashable TruthClass where
-  hashWithSalt s Theorem = s `hashWithSalt` (1 :: Word)
-  hashWithSalt s Invariant = s `hashWithSalt` (2 :: Word)
+  hashWithSalt s Theorem = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s Invariant = s `hashWithSalt` (2 :: Int)
 
 instance Hashable AliasClass where
-  hashWithSalt s Import = s `hashWithSalt` (1 :: Word)
-  hashWithSalt s Open = s `hashWithSalt` (2 :: Word)
-  hashWithSalt s Export = s `hashWithSalt` (3 :: Word)
+  hashWithSalt s Import = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s Open = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s Export = s `hashWithSalt` (3 :: Int)
 
 instance Hashable Visibility where
-  hashWithSalt s Private = s `hashWithSalt` (1 :: Word)
-  hashWithSalt s Protected = s `hashWithSalt` (2 :: Word)
-  hashWithSalt s Public = s `hashWithSalt` (3 :: Word)
+  hashWithSalt s Private = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s Protected = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s Public = s `hashWithSalt` (3 :: Int)
 
 instance Show ScopeClass where
-  show Module = "module"
   show Signature = "signature"
+  show Interface = "interface"
+  show Module = "module"
   show Class = "class"
 
 instance Show TruthClass where
@@ -130,8 +136,12 @@ instance Show Visibility where
   show Protected = "protected"
   show Public = "public"
 
+instance Format ScopeClass where format = text . show
+instance Format TruthClass where format = text . show
+instance Format Visibility where format = text . show
+
 instance Arbitrary ScopeClass where
-  arbitrary = elements [ Module, Signature, Class ]
+  arbitrary = elements [ Module, Signature, Class, Interface ]
 
 instance Arbitrary TruthClass where
   arbitrary = elements [ Theorem, Invariant ]
