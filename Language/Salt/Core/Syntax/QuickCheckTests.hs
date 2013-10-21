@@ -19,168 +19,168 @@
 module Language.Salt.Core.Syntax.QuickCheckTests(tests) where
 
 import Data.Default
+import Data.Word
 import Distribution.TestSuite
 import Distribution.TestSuite.QuickCheck
 import Language.Salt.Core.Syntax
+import Text.Format
 
-instance Default Int where defaultVal = 0
+instance Default Word where defaultVal = 0
 
-instance Show (Int -> Int) where
-  show f = "Function"
+instance Format f => Format (Word -> f) where
+  format f = format "Function" --bracketList "Function" (map (\n -> n <+> equals <+> f n) [0..8])
 
-instance Show (Int -> Term Int Int) where
-  show f = "Function"
+instance Format f => Show (Word -> f) where
+  show = show . format
 
-instance Show (Int -> Comp Int Int) where
-  show f = "Function"
-
-patternEqOrNeq :: (Pattern Int (Term Int) Int,
-                   Pattern Int (Term Int) Int) -> Bool
+patternEqOrNeq :: (Pattern Word (Term Word) Word,
+                   Pattern Word (Term Word) Word) -> Bool
 patternEqOrNeq (a, b) = a == b || a /= b
 
-patternEqOrd :: (Pattern Int (Term Int) Int, Pattern Int (Term Int) Int) -> Bool
+patternEqOrd :: (Pattern Word (Term Word) Word, Pattern Word (Term Word) Word) -> Bool
 patternEqOrd (a, b) = (a == b && compare a b == EQ) ||
                       (a /= b && compare a b /= EQ)
 
-patternOrdRev :: (Pattern Int (Term Int) Int,
-                  Pattern Int (Term Int) Int) -> Bool
+patternOrdRev :: (Pattern Word (Term Word) Word,
+                  Pattern Word (Term Word) Word) -> Bool
 patternOrdRev (a, b) =
   case compare a b of
     LT -> compare b a == GT
     EQ -> compare b a == EQ
     GT -> compare b a == LT
 
-patternFunctorID :: Pattern Int (Term Int) Int -> Bool
+patternFunctorID :: Pattern Word (Term Word) Word -> Bool
 patternFunctorID pattern = pattern == fmap id pattern
 
-patternFunctorCompose :: (Int -> Int, Int -> Int,
-                          Pattern Int (Term Int) Int) -> Bool
+patternFunctorCompose :: (Word -> Word, Word -> Word,
+                          Pattern Word (Term Word) Word) -> Bool
 patternFunctorCompose (f, g, pattern) =
   (fmap (f . g) pattern) == (((fmap f) . (fmap g)) pattern)
 
-caseEqOrNeq :: (Case Int Int, Case Int Int) -> Bool
+caseEqOrNeq :: (Case Word Word, Case Word Word) -> Bool
 caseEqOrNeq (a, b) = a == b || a /= b
 
-caseEqOrd :: (Case Int Int, Case Int Int) -> Bool
+caseEqOrd :: (Case Word Word, Case Word Word) -> Bool
 caseEqOrd (a, b) = (a == b && compare a b == EQ) ||
                       (a /= b && compare a b /= EQ)
 
-caseOrdRev :: (Case Int Int, Case Int Int) -> Bool
+caseOrdRev :: (Case Word Word, Case Word Word) -> Bool
 caseOrdRev (a, b) =
   case compare a b of
     LT -> compare b a == GT
     EQ -> compare b a == EQ
     GT -> compare b a == LT
 
-caseFunctorID :: Case Int Int -> Bool
+caseFunctorID :: Case Word Word -> Bool
 caseFunctorID c = c == fmap id c
 
-caseFunctorCompose :: (Int -> Int, Int -> Int, Case Int Int) -> Bool
+caseFunctorCompose :: (Word -> Word, Word -> Word, Case Word Word) -> Bool
 caseFunctorCompose (f, g, c) =
   (fmap (f . g) c) == (((fmap f) . (fmap g)) c)
 
-elementEqOrNeq :: (Element Int Int, Element Int Int) -> Bool
+elementEqOrNeq :: (Element Word Word, Element Word Word) -> Bool
 elementEqOrNeq (a, b) = a == b || a /= b
 
-elementEqOrd :: (Element Int Int, Element Int Int) -> Bool
+elementEqOrd :: (Element Word Word, Element Word Word) -> Bool
 elementEqOrd (a, b) = (a == b && compare a b == EQ) ||
                       (a /= b && compare a b /= EQ)
 
-elementOrdRev :: (Element Int Int, Element Int Int) -> Bool
+elementOrdRev :: (Element Word Word, Element Word Word) -> Bool
 elementOrdRev (a, b) =
   case compare a b of
     LT -> compare b a == GT
     EQ -> compare b a == EQ
     GT -> compare b a == LT
 
-elementFunctorID :: Element Int Int -> Bool
+elementFunctorID :: Element Word Word -> Bool
 elementFunctorID c = c == fmap id c
 
-elementFunctorCompose :: (Int -> Int, Int -> Int, Element Int Int) -> Bool
+elementFunctorCompose :: (Word -> Word, Word -> Word, Element Word Word) -> Bool
 elementFunctorCompose (f, g, c) =
   (fmap (f . g) c) == (((fmap f) . (fmap g)) c)
 
-termEqOrNeq :: (Term Int Int, Term Int Int) -> Bool
+termEqOrNeq :: (Term Word Word, Term Word Word) -> Bool
 termEqOrNeq (a, b) = a == b || a /= b
 
-termEqOrd :: (Term Int Int, Term Int Int) -> Bool
+termEqOrd :: (Term Word Word, Term Word Word) -> Bool
 termEqOrd (a, b) = (a == b && compare a b == EQ) ||
                    (a /= b && compare a b /= EQ)
 
-termOrdRev :: (Term Int Int, Term Int Int) -> Bool
+termOrdRev :: (Term Word Word, Term Word Word) -> Bool
 termOrdRev (a, b) =
   case compare a b of
     LT -> compare b a == GT
     EQ -> compare b a == EQ
     GT -> compare b a == LT
 
-termFunctorID :: Term Int Int -> Bool
+termFunctorID :: Term Word Word -> Bool
 termFunctorID term = term == fmap id term
 
-termFunctorCompose :: (Int -> Int, Int -> Int, Term Int Int) -> Bool
+termFunctorCompose :: (Word -> Word, Word -> Word, Term Word Word) -> Bool
 termFunctorCompose (f, g, term) =
   (fmap (f . g) term) == (((fmap f) . (fmap g)) term)
 
-termMonadLeftID :: (Int -> Term Int Int, Int) -> Bool
+termMonadLeftID :: (Word -> Term Word Word, Word) -> Bool
 termMonadLeftID (f, x) = (return x >>= f) == (f x)
 
-termMonadRightID :: Term Int Int -> Bool
+termMonadRightID :: Term Word Word -> Bool
 termMonadRightID x = (x >>= return) == x
 
-termMonadAssoc :: (Int -> Term Int Int, Int -> Term Int Int, Term Int Int) ->
+termMonadAssoc :: (Word -> Term Word Word, Word -> Term Word Word, Term Word Word) ->
                    Bool
 termMonadAssoc (f, g, x) = ((x >>= f) >>= g) == (x >>= (\m -> f m >>= g))
 
-cmdEqOrNeq :: (Cmd Int Int, Cmd Int Int) -> Bool
+cmdEqOrNeq :: (Cmd Word Word, Cmd Word Word) -> Bool
 cmdEqOrNeq (a, b) = a == b || a /= b
 
-cmdEqOrd :: (Cmd Int Int, Cmd Int Int) -> Bool
+cmdEqOrd :: (Cmd Word Word, Cmd Word Word) -> Bool
 cmdEqOrd (a, b) = (a == b && compare a b == EQ) ||
                    (a /= b && compare a b /= EQ)
 
-cmdOrdRev :: (Cmd Int Int, Cmd Int Int) -> Bool
+cmdOrdRev :: (Cmd Word Word, Cmd Word Word) -> Bool
 cmdOrdRev (a, b) =
   case compare a b of
     LT -> compare b a == GT
     EQ -> compare b a == EQ
     GT -> compare b a == LT
 
-cmdFunctorID :: Cmd Int Int -> Bool
+cmdFunctorID :: Cmd Word Word -> Bool
 cmdFunctorID cmd = cmd == fmap id cmd
 
-cmdFunctorCompose :: (Int -> Int, Int -> Int, Cmd Int Int) -> Bool
+cmdFunctorCompose :: (Word -> Word, Word -> Word, Cmd Word Word) -> Bool
 cmdFunctorCompose (f, g, cmd) =
   (fmap (f . g) cmd) == (((fmap f) . (fmap g)) cmd)
 
-compEqOrNeq :: (Comp Int Int, Comp Int Int) -> Bool
+compEqOrNeq :: (Comp Word Word, Comp Word Word) -> Bool
 compEqOrNeq (a, b) = a == b || a /= b
 
-compEqOrd :: (Comp Int Int, Comp Int Int) -> Bool
+compEqOrd :: (Comp Word Word, Comp Word Word) -> Bool
 compEqOrd (a, b) = (a == b && compare a b == EQ) ||
                    (a /= b && compare a b /= EQ)
 
-compOrdRev :: (Comp Int Int, Comp Int Int) -> Bool
+compOrdRev :: (Comp Word Word, Comp Word Word) -> Bool
 compOrdRev (a, b) =
   case compare a b of
     LT -> compare b a == GT
     EQ -> compare b a == EQ
     GT -> compare b a == LT
 
-compFunctorID :: Comp Int Int -> Bool
+compFunctorID :: Comp Word Word -> Bool
 compFunctorID comp = comp == fmap id comp
 
-compFunctorCompose :: (Int -> Int, Int -> Int, Comp Int Int) -> Bool
+compFunctorCompose :: (Word -> Word, Word -> Word, Comp Word Word) -> Bool
 compFunctorCompose (f, g, comp) =
   (fmap (f . g) comp) == (((fmap f) . (fmap g)) comp)
 
-compMonadLeftID :: (Int -> Comp Int Int, Int) -> Bool
+compMonadLeftID :: (Word -> Comp Word Word, Word) -> Bool
 compMonadLeftID (f, x) = (return x >>= f) == (f x)
 
-compMonadRightID :: Comp Int Int -> Bool
+compMonadRightID :: Comp Word Word -> Bool
 compMonadRightID x = (x >>= return) == x
 
-compMonadAssoc :: (Int -> Comp Int Int, Int -> Comp Int Int, Comp Int Int) ->
-                   Bool
+compMonadAssoc :: (Word -> Comp Word Word,
+                   Word -> Comp Word Word,
+                   Comp Word Word) -> Bool
 compMonadAssoc (f, g, x) = ((x >>= f) >>= g) == (x >>= (\m -> f m >>= g))
 
 testlist = [
