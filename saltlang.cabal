@@ -109,7 +109,7 @@ Library
                         hashable-extras
   exposed-modules:      Language.Salt.Core,
                         Language.Salt.Core.PatternMatch,
-                        Language.Salt.Core.Syntax,
+                        Language.Salt.Core.Syntax
                         Language.Salt.Surface.AST
   other-modules:        Language.Salt.Surface.Common
                         Language.Salt.Surface.Token
