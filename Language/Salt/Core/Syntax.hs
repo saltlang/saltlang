@@ -228,9 +228,6 @@ data Term bound free =
   -- and so on.
   | Call {
       -- | The arguments to the call.  These are introduction terms.
-      -- This list must be sorted by the bound variable, and bound
-      -- variables must be unique (in essence, this must be what you'd
-      -- expect from Map.toList)
       callArgs :: Map bound (Term bound free),
       -- | The function being called.  This must be an elimination
       -- term.
@@ -283,9 +280,7 @@ data Term bound free =
   -- syntax.  Ordered structures are transliterated into named
   -- structures, with the fields "1", "2", and so on.
   | Record {
-      -- | The bindings for this record.  This list must be sorted by
-      -- the bound variable, and bound variables must be unique (in
-      -- essence, this must be what you'd expect from Map.toList).
+      -- | The bindings for this record.  These are introduction terms.
       recVals :: Map bound (Term bound free),
       -- | The position in source from which this originates.
       recPos :: !Pos
