@@ -88,7 +88,7 @@ Category:               Languages
 Build-type:             Simple
 Cabal-version:          >= 1.9.2
 
-Test-Suite quickcheck
+Test-Suite smoketest
     type:               detailed-0.9
     build-depends:      base, Cabal >= 1.9.2, QuickCheck, random, proglang-util,
                         containers, bound, prelude-extras, hashable-extras,
@@ -98,6 +98,7 @@ Test-Suite quickcheck
                         Language.QuickCheckTests,
                         Language.Salt.QuickCheckTests,
                         Language.Salt.Core.QuickCheckTests,
+                        Language.Salt.Core.PatternMatch,
                         Language.Salt.Core.PatternMatch.QuickCheckTests,
                         Language.Salt.Core.Syntax,
                         Language.Salt.Core.Syntax.QuickCheckTests
