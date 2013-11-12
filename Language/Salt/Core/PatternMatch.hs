@@ -91,8 +91,12 @@ patternMatchTail result (Constant t1) t2
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
 patternMatch :: (Default sym, Eq sym) =>
-                Pattern sym (Term sym) sym -> Term sym sym ->
-                Maybe [(sym, (Term sym sym))]
+                Pattern sym (Term sym) sym
+             -- ^ The pattern being matched.
+             -> Term sym sym
+             -- ^ The term attempting to match the pattern.
+             -> Maybe [(sym, (Term sym sym))]
+             -- ^ A list of bindings from the pattern, or Nothing.
 patternMatch = patternMatchTail []
 
 -- | Given a list of bindings and an accompanying list of terms, find
