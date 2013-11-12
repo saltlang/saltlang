@@ -261,4 +261,4 @@ testlist = [
   ]
 
 tests :: [Test]
-tests = [testGroup "Syntax" testlist]
+tests = [testGroup "Core.Syntax" testlist]
