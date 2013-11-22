@@ -28,24 +28,27 @@ module Language.Salt.Core.PatternMatch(
 import Data.Default
 import Language.Salt.Core.Syntax
 
+import Debug.Trace
+import Text.Format
+
 import qualified Data.Map as Map
 
 -- | Given sorted lists of bindings and terms, attempt to match them up
 -- and produce a unifier
-zipBinds :: (Default sym, Eq sym) =>
+zipBinds :: (Default sym, Eq sym, Ord sym, Format sym, Show sym) =>
             Bool -> [(sym, Pattern sym (Term sym) sym)] ->
             [(sym, Term sym sym)] -> [(sym, Term sym sym)] ->
             Maybe [(sym, Term sym sym)]
-zipBinds strict ((name, bind) : binds)
-         allterms @ ((name', term) : terms) result
+zipBinds strict allbinds @ ((name, bind) : binds) allterms @ ((name', term) : terms) result
+  | trace ("zipBinds " ++ show strict ++ " " ++ show allbinds ++ " " ++ show allterms++ " " ++ show result) False = undefined
 -- If the names match, then run pattern match
   | name == name' =
     do
       result' <- patternMatchTail result bind term
       zipBinds strict binds terms result'
--- If the names don't match, and we're strict, discard the binding and
--- continue
-  | not strict = zipBinds strict binds allterms result
+-- If the names don't match, and we're not strict, discard the term
+-- and keep going
+  | not strict = zipBinds strict allbinds terms result
 -- Otherwise, we have an error
   | otherwise = Nothing
 -- Termination condition: run out of both lists, regardless of strictness
@@ -56,7 +59,7 @@ zipBinds False [] _ result = return result
 zipBinds _ _ _ _ = Nothing
 
 -- | Tail-recursive work function for pattern matching
-patternMatchTail :: (Default sym, Eq sym) =>
+patternMatchTail :: (Default sym, Eq sym, Ord sym, Format sym, Show sym) =>
                     [(sym, (Term sym sym))] ->
                     Pattern sym (Term sym) sym -> Term sym sym ->
                     Maybe [(sym, (Term sym sym))]
@@ -90,7 +93,7 @@ patternMatchTail result (Constant t1) t2
 -- represented by the binding.  If the match succeeds, return a
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
-patternMatch :: (Default sym, Eq sym) =>
+patternMatch :: (Default sym, Eq sym, Ord sym, Format sym, Show sym) =>
                 Pattern sym (Term sym) sym
              -- ^ The pattern being matched.
              -> Term sym sym
