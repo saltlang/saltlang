@@ -16,13 +16,15 @@
 -- 02110-1301 USA
 {-# LANGUAGE FlexibleInstances #-}
 
-module Language.Salt.Core.PatternMatch.QuickCheckTests(tests) where
+module Language.Salt.Core.PatternMatch.QuickCheckTests where
 
 import Control.Monad
 import Data.Default
+import Data.List(sort)
 import Data.Map
 import Data.Pos
 import Data.Word
+import Debug.Trace
 import Distribution.TestSuite
 import Distribution.TestSuite.QuickCheck
 import Language.Salt.Core.Syntax
@@ -41,55 +43,73 @@ data MismatchPair =
                  mismatchTerm :: Term Sym Sym }
   deriving Show
 
-type Sym = Maybe Word
+data Sym = Sym (Maybe Word)
+  deriving (Ord, Eq)
 
-instance Format (Maybe Word) where
-  format Nothing = format "<unused>"
-  format (Just n) = format n
+instance Arbitrary Sym where
+  arbitrary = arbitrary >>= return . Sym . Just
 
-instance Default (Maybe m) where
-  defaultVal = Nothing
+instance Default Sym where
+  defaultVal = Sym Nothing
+
+instance Format Sym where
+  format (Sym Nothing) = format "<unused>"
+  format (Sym (Just n)) = format n
+
+instance Show Sym where
+  show = show . format
 
 arbitraryPos :: Pos
 arbitraryPos = internal "arbitrary"
 
-genAnyTerm :: Gen (Term Sym Sym)
-genAnyTerm =
+genAnyTerm :: Int -> Gen (Term Sym Sym)
+genAnyTerm size =
   let
     genAnySymbol :: Gen (Term Sym Sym)
     genAnySymbol =
       do
         sym <- arbitrary
-        return Var { varSym = Just sym, varPos = arbitraryPos }
+        return Var { varSym = Sym (Just sym), varPos = arbitraryPos }
 
-    genAnyField :: Gen (Sym, Term Sym Sym)
-    genAnyField =
+    genAnyField :: Int -> Gen (Sym, Term Sym Sym)
+    genAnyField size =
       do
         sym <- arbitrary
-        term <- genAnyTerm
+        term <- genAnyTerm size
         return (sym, term)
 
-    genAnyFields :: Gen (Map Sym (Term Sym Sym))
-    genAnyFields =
+    genFieldSizes :: Int -> Gen [Int]
+    genFieldSizes size
+      | size > 0 =
+        do
+          out <- choose (0, size)
+          outs <- genFieldSizes (size - out - 1)
+          return (out : outs)
+      | otherwise = return []
+
+    genAnyFields :: Int -> Gen (Map Sym (Term Sym Sym))
+    genAnyFields size =
       do
-        fields <- listOf1 genAnyField
+        fieldsizes <- genFieldSizes size
+        fields <- mapM genAnyField fieldsizes
         return (fromList fields)
 
-    genAnyRecord :: Gen (Term Sym Sym)
-    genAnyRecord =
+    genAnyRecord :: Int -> Gen (Term Sym Sym)
+    genAnyRecord size =
       do
-        fields <- genAnyFields
+        fields <- genAnyFields (size - 1)
         return Record { recVals = fields, recPos = arbitraryPos }
 
-    genAnyConstruction :: Gen (Term Sym Sym)
-    genAnyConstruction = 
+    genAnyConstruction :: Int -> Gen (Term Sym Sym)
+    genAnyConstruction size =
       do
         sym <- genAnySymbol
-        fields <- genAnyFields
+        fields <- genAnyFields (size - 1)
         return Call { callFunc = sym, callArgs = fields,
                       callPos = arbitraryPos }
-  in
-    oneof [ genAnySymbol, genAnyRecord, genAnyConstruction ]
+  in if size > 0
+    then oneof [ genAnySymbol, genAnyRecord size, genAnyConstruction size ]
+    else genAnySymbol
 
 genMatchingFields :: Bool -> Map Sym (Pattern Sym (Term Sym) Sym) ->
                      Gen (Map Sym (Term Sym Sym), [(Sym, Term Sym Sym)])
@@ -107,14 +127,14 @@ genMatchingFields strict fieldmap =
     addExtras :: Map Sym (Term Sym Sym) -> Gen (Map Sym (Term Sym Sym))
     addExtras fieldmap =
       let
-        addExtras' :: Int -> Map Sym (Term Sym Sym) ->
+        addExtras' :: Word -> Map Sym (Term Sym Sym) ->
                     Gen (Map Sym (Term Sym Sym))
         addExtras' 0 m = return m
         addExtras' n fieldmap =
           do
-            sym <- suchThat arbitrary (\x -> notMember (Just x) fieldmap)
-            term <- genAnyTerm
-            addExtras' (n - 1) (insert (Just sym) term fieldmap)
+            sym <- suchThat arbitrary (\x -> notMember (Sym (Just x)) fieldmap)
+            term <- sized genAnyTerm
+            addExtras' (n - 1) (insert (Sym (Just sym)) term fieldmap)
       in
         if strict
           then return fieldmap
@@ -128,7 +148,7 @@ genMatchingFields strict fieldmap =
 
 genMatchingExp :: Pattern Sym (Term Sym) Sym ->
                   Gen (Term Sym Sym, [(Sym, Term Sym Sym)])
-genMatchingExp Deconstruct { deconstructConstructor = Nothing,
+genMatchingExp Deconstruct { deconstructConstructor = Sym Nothing,
                              deconstructStrict = strict,
                              deconstructBinds = binds } =
   do
@@ -147,7 +167,7 @@ genMatchingExp As { asBind = pat, asName = sym } =
     return (term, (sym, term) : matches)
 genMatchingExp Name { nameSym = sym } =
   do
-    term <- genAnyTerm
+    term <- sized genAnyTerm
     return (term, [(sym, term)])
 genMatchingExp (Constant const) = return (const, [])
 
@@ -165,8 +185,12 @@ match MatchPair { matchPattern = pattern,
                   matchTerm = term,
                   matchMatches = matches } =
   case patternMatch pattern term of
-    Just matches' -> (fromList matches) == (fromList matches')
-    _ -> False
+    Just matches' ->
+      if (sort matches) == (sort matches')
+        then True
+        else trace ("expected matches " ++ show matches ++
+                    "\nbut got\n" ++ show matches') False
+    _ -> trace "match failed unexpectedly!" False
 --genMatch :: Gen MatchPair
 
 testlist = [
