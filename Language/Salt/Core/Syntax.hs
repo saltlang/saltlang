@@ -235,14 +235,6 @@ data Term bound free =
       -- | The position in source from which this originates.
       callPos :: !Pos
     }
-  -- | A variable symbol.  Since we know the types of all variables,
-  -- this is an elimination term.
-  | Var {
-      -- | The underlying symbol.
-      varSym :: !free,
-      -- | The position in source from which this originates.
-      varPos :: !Pos
-    }
   -- | A typed term.  This is an introduction term with an explicit
   -- type tag, which makes it an elimination term.
   | Typed {
@@ -253,11 +245,21 @@ data Term bound free =
       -- | The position in source from which this originates.
       typedPos :: !Pos
     }
+  -- | A variable symbol.  Since we know the types of all variables,
+  -- this is an elimination term.
+  | Var {
+      -- | The underlying symbol.
+      varSym :: !free,
+      -- | The position in source from which this originates.
+      varPos :: !Pos
+    }
 
   -- Introduction Terms.  These terms require a type in type checking.
 
   -- | An eta expansion.  This is present for type checking only.
   -- This represents a "frozen" substitution.
+  -- 
+  -- XXX Quite possibly this will be removed
   | Eta {
       etaTerm :: Term bound free,
       etaType :: Term bound free,
