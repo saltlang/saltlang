@@ -114,6 +114,7 @@ Library
                         Language.Salt.Surface.AST
   other-modules:        Control.Monad.ProofObligations.Class,
                         Control.Monad.TypeErrors.Class,
+                        Control.Monad.TypeCheck.Class,
                         Language.Salt.Surface.Common,
                         Language.Salt.Surface.Token
 
