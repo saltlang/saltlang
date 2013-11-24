@@ -110,7 +110,10 @@ Library
                         hashable-extras
   exposed-modules:      Language.Salt.Core,
                         Language.Salt.Core.PatternMatch,
-                        Language.Salt.Core.Syntax
+                        Language.Salt.Core.Syntax,
                         Language.Salt.Surface.AST
-  other-modules:        Language.Salt.Surface.Common
+  other-modules:        Control.Monad.ProofObligations.Class,
+                        Control.Monad.TypeErrors.Class,
+                        Language.Salt.Surface.Common,
                         Language.Salt.Surface.Token
+
