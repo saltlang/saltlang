@@ -14,50 +14,62 @@
 -- along with this program; if not, write to the Free Software
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
+
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 -- | A class of monads for outputting compiler messages.
 module Control.Monad.TypeErrors.Class(
        MonadTypeErrors(..)
        ) where
 
+import Data.Pos
 import Language.Salt.Core.Syntax
 
 -- | Monad class representing the different kinds of compiler error
 -- messages that can be generated.
-class Monad m => MonadTypeErrors m where
-  -- | Log a type mismatch error.
-  typeMismatch :: Term bound free
+class Monad m => MonadTypeErrors sym m where
+  -- | Log a type mismatch error, when a term's actual type is not a
+  -- subtype of its expected type.
+  typeMismatch :: Term sym sym
                -- ^ The term from which this originates.
-               -> Term bound free
+               -> Term sym sym
                -- ^ The expected type.
-               -> Term bound free
+               -> Term sym sym
                -- ^ The actual type.
-               -> m ()
-  -- | Log an error when a function type was expected, but the term
-  -- wasn't of the right form.
-  expectedFunction :: Term bound free
+               -> m (Term sym sym)
+               -- ^ A type to return instead of the expected type.
+
+  -- | Log an error when a term with a particular type was expected,
+  -- but the term wasn't of the right form.
+  formMismatch :: Term sym sym
+               -- ^ The term whose form is incorrect.
+               -> Term sym sym
+               -- ^ The term's expected type.
+               -> m (Term sym sym)
+               -- ^ A type to return instead of the expected type.
+
+  -- | Log an error when term with a function type is expected, but
+  -- the actual type is something else
+  expectedFunction :: Term sym sym
                    -- ^ The term from which this originates.
-                   -> Term bound free
+                   -> Term sym sym
                    -- ^ The term's actual type.
-                   -> m ()
-  -- | Log an error when a record type was expected, but the term
-  -- wasn't of the right form.
-  expectedRecord :: Term bound free
-                 -- ^ The term from which this originates.
-                 -> Term bound free
-                 -- ^ The term's actual type.
-                 -> m ()
-  -- | Log an error when a computation type was expected, but the term
-  -- wasn't of the right form.
-  expectedComp :: Term bound free
-               -- ^ The term from which this originates.
-               -> Term bound free
-               -- ^ The term's actual type.
-               -> m ()
+                   -> m (Term sym sym)
+                   -- ^ A type to return instead of the expected type.
+
   -- | Log an error for an unbounded-rank type.
-  infiniteType :: Term bound free
+  infiniteType :: Term sym sym
                -- ^ The illegal type.
-               -> Term bound free
+               -> Term sym sym
                -- ^ The term's actual type.
-               -> m ()
+               -> m (Term sym sym)
+               -- ^ A type to return instead of the expected type.
+
+  -- | Log an undefined symbol error.
+  undefSym :: sym
+           -- ^ The symbol that is not defined.
+           -> Pos
+           -- ^ The position at which this occurred.
+           -> m (Term sym sym)
+           -- ^ A type representing the type of undefined symbols.
