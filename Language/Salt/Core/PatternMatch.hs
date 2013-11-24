@@ -28,19 +28,15 @@ module Language.Salt.Core.PatternMatch(
 import Data.Default
 import Language.Salt.Core.Syntax
 
-import Debug.Trace
-import Text.Format
-
 import qualified Data.Map as Map
 
 -- | Given sorted lists of bindings and terms, attempt to match them up
 -- and produce a unifier
-zipBinds :: (Default sym, Eq sym, Ord sym, Format sym, Show sym) =>
+zipBinds :: (Default sym, Eq sym, Ord sym) =>
             Bool -> [(sym, Pattern sym (Term sym) sym)] ->
             [(sym, Term sym sym)] -> [(sym, Term sym sym)] ->
             Maybe [(sym, Term sym sym)]
-zipBinds strict allbinds @ ((name, bind) : binds) allterms @ ((name', term) : terms) result
-  | trace ("zipBinds " ++ show strict ++ " " ++ show allbinds ++ " " ++ show allterms++ " " ++ show result) False = undefined
+zipBinds strict allbinds @ ((name, bind) : binds) ((name', term) : terms) result
 -- If the names match, then run pattern match
   | name == name' =
     do
@@ -59,7 +55,7 @@ zipBinds False [] _ result = return result
 zipBinds _ _ _ _ = Nothing
 
 -- | Tail-recursive work function for pattern matching
-patternMatchTail :: (Default sym, Eq sym, Ord sym, Format sym, Show sym) =>
+patternMatchTail :: (Default sym, Eq sym, Ord sym) =>
                     [(sym, (Term sym sym))] ->
                     Pattern sym (Term sym) sym -> Term sym sym ->
                     Maybe [(sym, (Term sym sym))]
@@ -93,7 +89,7 @@ patternMatchTail result (Constant t1) t2
 -- represented by the binding.  If the match succeeds, return a
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
-patternMatch :: (Default sym, Eq sym, Ord sym, Format sym, Show sym) =>
+patternMatch :: (Default sym, Eq sym, Ord sym) =>
                 Pattern sym (Term sym) sym
              -- ^ The pattern being matched.
              -> Term sym sym
