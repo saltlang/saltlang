@@ -111,6 +111,7 @@ Library
   exposed-modules:      Language.Salt.Core,
                         Language.Salt.Core.PatternMatch,
                         Language.Salt.Core.Syntax,
+                        Language.Salt.Core.TypeCheck,
                         Language.Salt.Surface.AST
   other-modules:        Control.Monad.ProofObligations.Class,
                         Control.Monad.TypeErrors.Class,
