@@ -20,7 +20,9 @@
 
 -- | A module defining a monad class for implementing the type checker
 module Control.Monad.TypeCheck.Class(
-       MonadTypeCheck(..)
+       MonadProofObligations(..),
+       MonadTypeCheck(..),
+       MonadTypeErrors(..)
        ) where
 
 import Control.Monad.ProofObligations.Class
