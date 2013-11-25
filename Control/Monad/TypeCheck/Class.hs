@@ -31,8 +31,8 @@ import Language.Salt.Core.Syntax
 
 -- | A monad class encapsulating all context information needed by the
 -- type checker
-class (MonadProofObligations m, MonadTypeErrors s m) =>
-      MonadTypeCheck s m where
+class (MonadProofObligations m, MonadTypeErrors sym m) =>
+      MonadTypeCheck sym m where
   -- | The type of propositions
   propType :: m (Term sym sym)
   -- | The type of types
