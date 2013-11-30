@@ -15,7 +15,7 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-{-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
+{-# OPTIONS_GHC -funbox-strict-fields -Wall #-}
 
 -- | The type checker module.
 module Language.Salt.Core.TypeCheck(
