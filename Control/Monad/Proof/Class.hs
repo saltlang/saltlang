@@ -18,9 +18,9 @@
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
--- | A module defining a monad class for the proof checker.
-module Control.Monad.ProofCheck.Class(
-       MonadProofCheck(..)
+-- | A module defining a monad class for recording or checking proofs.
+module Control.Monad.Proof.Class(
+       MonadProof(..)
        ) where
 
 import Data.Map
@@ -30,10 +30,10 @@ import Language.Salt.Core.Syntax
 -- intuitionistic predicate logic upon which the Salt language is
 -- built.
 -- 
--- This class is only designed with *checking* proofs in mind, not
--- synthesizing them.  Hence the monad produces no usable value, the
--- assumption being that whatever artifact is produced is contained
--- within the monad.
+-- This class is only designed with checking or recording proofs in
+-- mind, not synthesizing them (ie in an automated prover).  Hence the
+-- monad produces no usable value, the assumption being that whatever
+-- artifact is produced is contained within the monad.
 -- 
 -- One use of this is to simply assert the applicability of these
 -- rules, then update the truth and type contexts and the goals
@@ -53,7 +53,7 @@ import Language.Salt.Core.Syntax
 -- 
 -- The names of these axioms are borrowed in part
 -- from Coq tactics.
-class Monad m => MonadProofCheck sym m where
+class Monad m => MonadProof sym m where
   -- |
   --   -------------
   --    Env, P |- P
