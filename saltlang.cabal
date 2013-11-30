@@ -113,7 +113,7 @@ Library
                         Language.Salt.Core.Syntax,
                         Language.Salt.Core.TypeCheck,
                         Language.Salt.Surface.AST
-  other-modules:        Control.Monad.ProofCheck.Class,
+  other-modules:        Control.Monad.Proof.Class,
                         Control.Monad.ProofObligations.Class,
                         Control.Monad.TypeErrors.Class,
                         Control.Monad.TypeCheck.Class,
