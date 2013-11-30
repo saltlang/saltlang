@@ -27,6 +27,7 @@ import Data.Default
 import Data.Hashable
 import Data.Message.Class
 import Data.Pos
+import Data.Word
 import Language.Salt.Core.Syntax
 import Text.Format
 
@@ -37,21 +38,21 @@ data ProofError sym =
   -- truth envirnoment.
     UndefProp {
       -- | The name of the undefined proposition.
-      undefName :: sym,
+      undefName :: !sym,
       -- | The position at which the bad use of "exact" occurred.
-      undefPos :: Pos
+      undefPos :: !Pos
     }
   -- | An error message representing an attempt to use the "exact"
   -- rule with a proposition that does not match the goal.
   | ExactMismatch {
       -- | The name of the mismatched proposition in the truth environment.
-      exactName :: sym,
+      exactName :: !sym,
       -- | The proposition from the truth environment.
       exactProp :: Term sym sym,
       -- | The goal proposition.
       exactGoal :: Term sym sym,
       -- | The position at which the bad use of "exact" occurred.
-      exactPos :: Pos
+      exactPos :: !Pos
     }
   -- | An error message representing an attempt to use the "intro"
   -- rule with a goal that is not an implies proposition.
@@ -59,7 +60,7 @@ data ProofError sym =
       -- | The goal proposition.
       introGoal :: Term sym sym,
       -- | The position at which the bad use of "exact" occurred.
-      introPos :: Pos
+      introPos :: !Pos
     }
   -- | An error message representing an attempt to use the "introVar"
   -- rule with a goal that is not a forall proposition.
@@ -67,7 +68,15 @@ data ProofError sym =
       -- | The goal proposition.
       introVarGoal :: Term sym sym,
       -- | The position at which the bad use of "exact" occurred.
-      introVarPos :: Pos
+      introVarPos :: !Pos
+    }
+  -- | An error message representing an attempt to use the "apply"
+  -- rule with a proposition that is not a forall proposition.
+  | ApplyMismatch {
+      -- | The proposition attempting to be applied.
+      applyProp :: Term sym sym,
+      -- | The position at which the bad use of "apply" occurred.
+      applyPos :: !Pos
     }
   deriving (Ord, Eq)
 
@@ -76,18 +85,21 @@ instance Position (ProofError sym) where
   pos ExactMismatch { exactPos = p } = p
   pos IntroMismatch { introPos = p } = p
   pos IntroVarMismatch { introVarPos = p } = p
+  pos ApplyMismatch { applyPos = p } = p
 
 instance (Default sym, Hashable sym) => Hashable (ProofError sym) where
   hashWithSalt s UndefProp { undefName = name, undefPos = p } =
-    s `hashWithSalt` name `hashWithSalt` p
+    s `hashWithSalt` (0 :: Word) `hashWithSalt` name `hashWithSalt` p
   hashWithSalt s ExactMismatch { exactName = name, exactProp = prop,
                                  exactGoal = goal, exactPos = p } =
-    s `hashWithSalt` name `hashWithSalt`
+    s `hashWithSalt` (1 :: Word) `hashWithSalt` name `hashWithSalt`
     prop `hashWithSalt` goal `hashWithSalt` p
   hashWithSalt s IntroMismatch { introGoal = goal, introPos = p } =
-    s `hashWithSalt` goal `hashWithSalt` p
+    s `hashWithSalt` (2 :: Word) `hashWithSalt` goal `hashWithSalt` p
   hashWithSalt s IntroVarMismatch { introVarGoal = goal, introVarPos = p } =
-    s `hashWithSalt` goal `hashWithSalt` p
+    s `hashWithSalt` (3 :: Word) `hashWithSalt` goal `hashWithSalt` p
+  hashWithSalt s ApplyMismatch { applyProp = prop, applyPos = p } =
+    s `hashWithSalt` (4 :: Word) `hashWithSalt` prop `hashWithSalt` p
 
 instance (Default sym, Format sym, Ord sym) => Format (ProofError sym) where
   format UndefProp { undefName = name } =
@@ -100,6 +112,8 @@ instance (Default sym, Format sym, Ord sym) => Format (ProofError sym) where
     "goal" <+> goal <+> "is not an implication"
   format IntroVarMismatch { introVarGoal = goal } =
     "goal" <+> goal <+> "is not a universal quantification"
+  format ApplyMismatch { applyProp = prop } =
+    "proposition" <+> prop <+> "is not a universal quantification"
 
 -- Don't add the positions here, they will be added by other error
 -- message machinery.
