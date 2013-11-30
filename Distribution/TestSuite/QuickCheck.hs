@@ -10,8 +10,10 @@ import qualified Test.QuickCheck as QC
 
 runTest :: QC.Testable prop => prop -> IO Progress
 runTest prop =
-  do
-    result <- QC.quickCheckResult prop
+  let
+    args = QC.stdArgs { QC.maxSize = 30 }
+  in do
+    result <- QC.quickCheckWithResult args prop
     case result of
       QC.Success {} -> return (Finished Pass)
       _ -> return (Finished (Fail (show result)))
