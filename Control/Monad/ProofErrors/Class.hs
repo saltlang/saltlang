@@ -56,3 +56,10 @@ class Monad m => MonadProofErrors sym m where
                    -> Term sym sym
                    -- ^ The goal proposition.
                    -> m ()
+  -- | Log an error message when using apply, but the proposition
+  -- isn't a forall.
+  applyMismatch :: Pos
+                -- ^ The position from which this arises.
+                -> Term sym sym
+                -- ^ The goal proposition.
+                -> m ()
