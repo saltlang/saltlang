@@ -23,7 +23,7 @@ module Control.Monad.Proof.Class(
        MonadProof(..)
        ) where
 
-import Data.Map
+import Data.Pos
 import Language.Salt.Core.Syntax
 
 -- | This is a monad class containing rules for the five axioms of the
@@ -57,32 +57,44 @@ class Monad m => MonadProof sym m where
   -- |
   --   -------------
   --    Env, P |- P
-  exact :: sym
+  exact :: Pos
+        -- ^ The position from which this originates.
+        -> sym
         -- ^ The name of the equivalent proposition in the truth environment
         -> m ()
 
   -- |   Env, P |- Q
   --   ---------------
   --    Env |- P -> Q
-  intro :: sym
+  intro :: Pos
+        -- ^ The position from which this originates.
+        -> sym
         -- ^ The name in the truth environment to give the left hand side
         -> m ()
 
   -- |  Env, x_1 : T_1 ... x_n : T_n |- P
   --   -----------------------------------
   --     Env |- forall (pattern) : T. P
-  introVars :: m ()
+  introVars :: Pos
+            -- ^ The position from which this originates.
+            -> m ()
 
   -- |  Env |- P -> Q    Env |- P
   --   ---------------------------
   --            Env |- Q
-  cut :: Term sym sym
+  cut :: Pos
+      -- ^ The position from which this originates.
+      -> Term sym sym
       -- ^ The proposition by which to do the cut
       -> m ()
 
   -- |  Env |- forall (pattern) : T. P   Env |- V : T
   --   -----------------------------------------------
   --                 Env |- [V/(pattern)]P
-  apply :: Map sym (Term sym sym)
+  apply :: Pos
+        -- ^ The position from which this originates.
+        -> Term sym sym
+        -- ^ The proposition to apply
+        -> Term sym sym
         -- ^ The arguments to the application
         -> m ()
