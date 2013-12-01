@@ -29,7 +29,7 @@ import Control.Monad.State
 import Control.Monad.Writer
 --import Control.Monad.Trans
 import Data.Pos
-import Language.Salt.Core.ProofScript
+import Language.Salt.Core.Proofs.ProofScript
 import Language.Salt.Core.Syntax
 
 -- | A simple monad transformer for recording proofs.  This is
