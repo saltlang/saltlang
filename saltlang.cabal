@@ -109,7 +109,7 @@ Library
                         bound, containers, prelude-extras, mtl, hashable,
                         hashable-extras
   exposed-modules:      Language.Salt.Core,
-                        Language.Salt.Core.PatternMatch,
+                        Language.Salt.Core.Patterns,
                         Language.Salt.Core.Syntax,
                         Language.Salt.Core.TypeCheck,
                         Language.Salt.Surface.AST

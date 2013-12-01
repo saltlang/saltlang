@@ -21,7 +21,7 @@
 -- 
 -- The single function in this module attempts to create a unifier
 -- from a pattern and a term.
-module Language.Salt.Core.PatternMatch(
+module Language.Salt.Core.Patterns(
        patternMatch
        ) where
 
