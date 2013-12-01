@@ -27,7 +27,6 @@ import Data.Default
 import Data.Hashable
 import Data.Message.Class
 import Data.Pos
-import Data.Word
 import Language.Salt.Core.Syntax
 import Text.Format
 
@@ -78,7 +77,13 @@ data ProofError sym =
       -- | The position at which the bad use of "apply" occurred.
       applyPos :: !Pos
     }
-  deriving (Ord, Eq)
+  -- | An error message indicating that a proof script ended before
+  -- the proof was complete.
+  | Incomplete
+  -- | An error message indicating that a proof script continues after
+  -- the proof is complete.
+  | Complete
+    deriving (Ord, Eq)
 
 instance Position (ProofError sym) where
   pos UndefProp { undefPos = p } = p
@@ -86,20 +91,23 @@ instance Position (ProofError sym) where
   pos IntroMismatch { introPos = p } = p
   pos IntroVarMismatch { introVarPos = p } = p
   pos ApplyMismatch { applyPos = p } = p
+  pos Incomplete
 
 instance (Default sym, Hashable sym) => Hashable (ProofError sym) where
   hashWithSalt s UndefProp { undefName = name, undefPos = p } =
-    s `hashWithSalt` (0 :: Word) `hashWithSalt` name `hashWithSalt` p
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` name `hashWithSalt` p
   hashWithSalt s ExactMismatch { exactName = name, exactProp = prop,
                                  exactGoal = goal, exactPos = p } =
-    s `hashWithSalt` (1 :: Word) `hashWithSalt` name `hashWithSalt`
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt`
     prop `hashWithSalt` goal `hashWithSalt` p
   hashWithSalt s IntroMismatch { introGoal = goal, introPos = p } =
-    s `hashWithSalt` (2 :: Word) `hashWithSalt` goal `hashWithSalt` p
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` goal `hashWithSalt` p
   hashWithSalt s IntroVarMismatch { introVarGoal = goal, introVarPos = p } =
-    s `hashWithSalt` (3 :: Word) `hashWithSalt` goal `hashWithSalt` p
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` goal `hashWithSalt` p
   hashWithSalt s ApplyMismatch { applyProp = prop, applyPos = p } =
-    s `hashWithSalt` (4 :: Word) `hashWithSalt` prop `hashWithSalt` p
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` prop `hashWithSalt` p
+  hashWithSalt s Incomplete = s `hashWithSalt` (5 :: Int)
+  hashWithSalt s Complete = s `hashWithSalt` (6 :: Int)
 
 instance (Default sym, Format sym, Ord sym) => Format (ProofError sym) where
   format UndefProp { undefName = name } =
@@ -114,6 +122,8 @@ instance (Default sym, Format sym, Ord sym) => Format (ProofError sym) where
     "goal" <+> goal <+> "is not a universal quantification"
   format ApplyMismatch { applyProp = prop } =
     "proposition" <+> prop <+> "is not a universal quantification"
+  format Incomplete = format "Proof is incomplete"
+  format Complete = format "Proof script continues after proof is complete"
 
 -- Don't add the positions here, they will be added by other error
 -- message machinery.

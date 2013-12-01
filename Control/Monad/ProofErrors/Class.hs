@@ -35,6 +35,9 @@ import Language.Salt.Core.Syntax
 class Monad m => MonadProtoProofErrors m where
   -- | Log an error message if a proof terminates while still incomplete.
   incomplete :: m ()
+  -- | Log an error message if a proof script continues after the
+  -- proof is complete.
+  complete :: m ()
 
 -- | A monad class for the error messages that can arise during proof checking.
 class MonadProtoProofErrors m => MonadProofErrors sym m where
@@ -77,6 +80,7 @@ class MonadProtoProofErrors m => MonadProofErrors sym m where
 
 instance MonadProtoProofErrors m => MonadProtoProofErrors (ReaderT s m) where
   incomplete = lift incomplete
+  complete = lift complete
 
 instance MonadProofErrors sym m => MonadProofErrors sym (ReaderT s m) where
   undefProp p = lift . undefProp p
@@ -87,6 +91,7 @@ instance MonadProofErrors sym m => MonadProofErrors sym (ReaderT s m) where
 
 instance MonadProtoProofErrors m => MonadProtoProofErrors (StateT s m) where
   incomplete = lift incomplete
+  complete = lift complete
 
 instance MonadProofErrors sym m => MonadProofErrors sym (StateT s m) where
   undefProp p = lift . undefProp p
@@ -98,6 +103,7 @@ instance MonadProofErrors sym m => MonadProofErrors sym (StateT s m) where
 instance (Monoid s, MonadProtoProofErrors m) =>
          MonadProtoProofErrors (WriterT s m) where
   incomplete = lift incomplete
+  complete = lift complete
 
 instance (Monoid s, MonadProofErrors sym m) =>
          MonadProofErrors sym (WriterT s m) where
