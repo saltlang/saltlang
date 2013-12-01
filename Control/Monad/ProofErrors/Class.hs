@@ -16,17 +16,28 @@
 -- 02110-1301 USA
 
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 
 -- | A module defining a monad class for the proof checker.
 module Control.Monad.ProofErrors.Class(
+       MonadProtoProofErrors(..),
        MonadProofErrors(..)
        ) where
 
+import Control.Monad.Reader
+import Control.Monad.State
+import Control.Monad.Writer
 import Data.Pos
 import Language.Salt.Core.Syntax
 
-class Monad m => MonadProofErrors sym m where
+-- | A monad class for proof-checking error messages that don't depend
+-- on the symbol type.
+class Monad m => MonadProtoProofErrors m where
+  -- | Log an error message if a proof terminates while still incomplete.
+  incomplete :: m ()
+
+-- | A monad class for the error messages that can arise during proof checking.
+class MonadProtoProofErrors m => MonadProofErrors sym m where
   -- | Log an error when using exact with an undefined symbol.
   undefProp :: Pos
             -- ^ The position from which this arises.
@@ -63,3 +74,35 @@ class Monad m => MonadProofErrors sym m where
                 -> Term sym sym
                 -- ^ The goal proposition.
                 -> m ()
+
+instance MonadProtoProofErrors m => MonadProtoProofErrors (ReaderT s m) where
+  incomplete = lift incomplete
+
+instance MonadProofErrors sym m => MonadProofErrors sym (ReaderT s m) where
+  undefProp p = lift . undefProp p
+  exactMismatch p sym prop = lift . exactMismatch p sym prop
+  introMismatch p = lift . introMismatch p
+  introVarMismatch p = lift . introVarMismatch p
+  applyMismatch p = lift . applyMismatch p
+
+instance MonadProtoProofErrors m => MonadProtoProofErrors (StateT s m) where
+  incomplete = lift incomplete
+
+instance MonadProofErrors sym m => MonadProofErrors sym (StateT s m) where
+  undefProp p = lift . undefProp p
+  exactMismatch p sym prop = lift . exactMismatch p sym prop
+  introMismatch p = lift . introMismatch p
+  introVarMismatch p = lift . introVarMismatch p
+  applyMismatch p = lift . applyMismatch p
+
+instance (Monoid s, MonadProtoProofErrors m) =>
+         MonadProtoProofErrors (WriterT s m) where
+  incomplete = lift incomplete
+
+instance (Monoid s, MonadProofErrors sym m) =>
+         MonadProofErrors sym (WriterT s m) where
+  undefProp p = lift . undefProp p
+  exactMismatch p sym prop = lift . exactMismatch p sym prop
+  introMismatch p = lift . introMismatch p
+  introVarMismatch p = lift . introVarMismatch p
+  applyMismatch p = lift . applyMismatch p
