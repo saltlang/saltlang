@@ -18,7 +18,7 @@
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 
 -- | A module implementing a data type for proof scripts.
-module Language.Salt.Core.ProofScript(
+module Language.Salt.Core.Proofs.ProofScript(
        ProofScriptElem(..),
        ProofScript
        ) where

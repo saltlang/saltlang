@@ -118,7 +118,7 @@ Library
                         Control.Monad.ProofRecorder,
                         Control.Monad.TypeErrors.Class,
                         Control.Monad.TypeCheck.Class,
-                        Language.Salt.Core.ProofScript,
+                        Language.Salt.Core.Proof.ProofScript,
                         Language.Salt.Diagnostics.ProofError,
                         Language.Salt.Surface.Common,
                         Language.Salt.Surface.Token
