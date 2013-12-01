@@ -20,9 +20,12 @@
 -- | A module implementing a data type for proof scripts.
 module Language.Salt.Core.Proofs.ProofScript(
        ProofScriptElem(..),
-       ProofScript
+       ProofScript,
+       runScriptElem,
+       runScript
        ) where
 
+import Control.Monad.Proof.Class
 import Data.Default
 import Data.Hashable
 import Data.Pos
@@ -81,6 +84,20 @@ data ProofScriptElem sym =
       applyPos :: !Pos
     }
   deriving (Ord, Eq)
+
+-- | Perform the action represented by a proof script element inside a
+-- proof monad.
+runScriptElem :: MonadProof sym m => ProofScriptElem sym -> m ()
+runScriptElem Exact { exactName = name, exactPos = p } = exact p name
+runScriptElem Intro { introName = name, introPos = p } = intro p name
+runScriptElem IntroVars { introVarsPos = p } = introVars p
+runScriptElem Cut { cutProp = prop, cutPos = p } = cut p prop
+runScriptElem Apply { applyProp = prop, applyArg = arg, applyPos = p } =
+  apply p prop arg
+
+-- | Perform the actions represented by a proof script inside a proof monad.
+runScript :: MonadProof sym m => ProofScript sym -> m ()
+runScript = mapM_ runScriptElem
 
 instance Position (ProofScriptElem sym) where
   pos Exact { exactPos = p } = p

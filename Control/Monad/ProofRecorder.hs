@@ -27,7 +27,6 @@ module Control.Monad.ProofRecorder(
 import Control.Monad.Proof.Class
 import Control.Monad.State
 import Control.Monad.Writer
---import Control.Monad.Trans
 import Data.Pos
 import Language.Salt.Core.Proofs.ProofScript
 import Language.Salt.Core.Syntax
@@ -71,10 +70,12 @@ instance Monad m => Monad (ProofRecorderT sym m) where
   return = ProofRecorderT . return
   (ProofRecorderT m) >>= f = ProofRecorderT $ m >>= unpackProofRecorderT . f
 
-instance Monad m => MonadProof sym (ProofRecorderT sym m) where
+instance Monad m => MonadProtoProof (ProofRecorderT sym m) where
+  introVars = ProofRecorderT . introVars'
+
+instance MonadProtoProof m => MonadProof sym (ProofRecorderT sym m) where
   exact p = ProofRecorderT . exact' p
   intro p = ProofRecorderT . intro' p
-  introVars = ProofRecorderT . introVars'
   cut p = ProofRecorderT . cut' p
   apply p prop = ProofRecorderT . apply' p prop
 

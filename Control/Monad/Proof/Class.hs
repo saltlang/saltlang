@@ -16,13 +16,17 @@
 -- 02110-1301 USA
 
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 
 -- | A module defining a monad class for recording or checking proofs.
 module Control.Monad.Proof.Class(
+       MonadProtoProof(..),
        MonadProof(..)
        ) where
 
+import Control.Monad.Reader
+import Control.Monad.State
+import Control.Monad.Writer
 import Data.Pos
 import Language.Salt.Core.Syntax
 
@@ -53,7 +57,7 @@ import Language.Salt.Core.Syntax
 -- 
 -- The names of these axioms are borrowed in part
 -- from Coq tactics.
-class Monad m => MonadProof sym m where
+class MonadProtoProof m => MonadProof sym m where
   -- |
   --   -------------
   --    Env, P |- P
@@ -71,13 +75,6 @@ class Monad m => MonadProof sym m where
         -> sym
         -- ^ The name in the truth environment to give the left hand side
         -> m ()
-
-  -- |  Env, x_1 : T_1 ... x_n : T_n |- P
-  --   -----------------------------------
-  --     Env |- forall (pattern) : T. P
-  introVars :: Pos
-            -- ^ The position from which this originates.
-            -> m ()
 
   -- |  Env |- P -> Q    Env |- P
   --   ---------------------------
@@ -98,3 +95,40 @@ class Monad m => MonadProof sym m where
         -> Term sym sym
         -- ^ The arguments to the application
         -> m ()
+
+-- | This class contains proof rules that don't depend on a symbol
+-- type.
+class Monad m => MonadProtoProof m where
+  -- |  Env, x_1 : T_1 ... x_n : T_n |- P
+  --   -----------------------------------
+  --     Env |- forall (pattern) : T. P
+  introVars :: Pos
+            -- ^ The position from which this originates.
+            -> m ()
+
+instance MonadProtoProof m => MonadProtoProof (ReaderT s m) where
+  introVars = lift . introVars
+
+instance MonadProof sym m => MonadProof sym (ReaderT s m) where
+  exact p = lift . exact p
+  intro p = lift. intro p
+  cut p = lift . cut p
+  apply p prop = lift . apply p prop
+
+instance MonadProtoProof m => MonadProtoProof (StateT s m) where
+  introVars = lift . introVars
+
+instance MonadProof sym m => MonadProof sym (StateT s m) where
+  exact p = lift . exact p
+  intro p = lift. intro p
+  cut p = lift . cut p
+  apply p prop = lift . apply p prop
+
+instance (Monoid s, MonadProtoProof m) => MonadProtoProof (WriterT s m) where
+  introVars = lift . introVars
+
+instance (Monoid s, MonadProof sym m) => MonadProof sym (WriterT s m) where
+  exact p = lift . exact p
+  intro p = lift. intro p
+  cut p = lift . cut p
+  apply p prop = lift . apply p prop
