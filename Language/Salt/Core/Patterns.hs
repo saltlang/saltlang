@@ -22,7 +22,8 @@
 -- The single function in this module attempts to create a unifier
 -- from a pattern and a term.
 module Language.Salt.Core.Patterns(
-       patternMatch
+       patternMatch,
+       patternTypes
        ) where
 
 import Data.Default
@@ -85,7 +86,7 @@ patternMatchTail result (Constant t1) t2
   | t1 == t2 = return result
   | otherwise = Nothing
 
--- | Take a binding and a term, and attempt to match the pattern
+-- | Take a pattern and a term and attempt to match the pattern
 -- represented by the binding.  If the match succeeds, return a
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
@@ -98,7 +99,15 @@ patternMatch :: (Default sym, Eq sym, Ord sym) =>
              -- ^ A list of bindings from the pattern, or Nothing.
 patternMatch = patternMatchTail []
 
--- | Given a list of bindings and an accompanying list of terms, find
--- the first successful pattern match.
---firstMatch :: [Binding b (Term b) s] -> [Term b s] -> Maybe (Map b (Term b s))
-
+-- | Take a pattern and a type and extract the typings for all the
+-- variables bound by this pattern.  Note: this is only guaranteed to
+-- work for well-typed patterns; if the pattern does not have the
+-- given type, it may fail.
+patternTypes :: (Default sym, Eq sym, Ord sym) =>
+                Pattern sym (Term sym) sym
+             -- ^ The pattern being matched.
+             -> Term sym sym
+             -- ^ The term attempting to match the pattern.
+             -> Maybe [(sym, (Term sym sym))]
+             -- ^ A list of bindings from the pattern, or Nothing.
+patternMatch = error "XXX not implemented"
