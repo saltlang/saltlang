@@ -19,8 +19,12 @@
 
 -- | A module containing representations of the state of a proof.
 module Language.Salt.Core.Proofs.ProofState(
-       ProofState(..)
+       ProofState(..),
+       Goal(..)
        ) where
+
+import Data.Map
+import Language.Salt.Core.Syntax
 
 -- | A representation of a proof state.
 data ProofState sym =
