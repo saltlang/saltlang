@@ -115,6 +115,7 @@ Library
                         Language.Salt.Surface.AST
   other-modules:        Control.Monad.Proof.Class,
                         Control.Monad.ProofErrors.Class,
+                        Control.Monad.ProofNames.Class,
                         Control.Monad.ProofObligations.Class,
                         Control.Monad.ProofRecorder,
                         Control.Monad.TypeErrors.Class,
