@@ -20,7 +20,7 @@
 
 -- | A module defining a monad and transformer that record proof scripts.
 module Control.Monad.ProofRecorder(
-       ProofRecorderT(..),
+       ProofRecorderT,
        runProofRecorderT
        ) where
 
