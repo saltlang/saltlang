@@ -31,14 +31,26 @@ import Language.Salt.Core.Syntax
 class Monad m => MonadProofNames sym m where
   -- | The term representing the implies proposition.
   impliesProp :: m (Term sym sym)
+  -- | The symbol for the name "premise", an argument to the implies
+  -- function.
+  premiseName :: m sym
+  -- | The symbol for the name "consequence", an argument to the
+  -- implies function.
+  consequenceName :: m sym
 
 instance MonadProofNames sym m => MonadProofNames sym (ReaderT s m) where
   impliesProp = lift impliesProp
+  premiseName = lift premiseName
+  consequenceName = lift consequenceName
 
 instance MonadProofNames sym m => MonadProofNames sym (StateT s m) where
   impliesProp = lift impliesProp
+  premiseName = lift premiseName
+  consequenceName = lift consequenceName
 
 instance (Monoid s, MonadProofNames sym m) =>
          MonadProofNames sym (WriterT s m) where
   impliesProp = lift impliesProp
+  premiseName = lift premiseName
+  consequenceName = lift consequenceName
 
