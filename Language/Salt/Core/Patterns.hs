@@ -110,4 +110,4 @@ patternTypes :: (Default sym, Eq sym, Ord sym) =>
              -- ^ The term attempting to match the pattern.
              -> Maybe [(sym, (Term sym sym))]
              -- ^ A list of bindings from the pattern, or Nothing.
-patternMatch = error "XXX not implemented"
+patternTypes = error "XXX not implemented"
