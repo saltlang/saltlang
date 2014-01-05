@@ -58,7 +58,8 @@ zipBinds _ _ _ _ = Nothing
 -- | Tail-recursive work function for pattern matching
 patternMatchTail :: (Default sym, Eq sym, Ord sym) =>
                     [(sym, (Term sym sym))] ->
-                    Pattern sym (Term sym) sym -> Term sym sym ->
+                    Pattern sym (Term sym) sym ->
+                    Term sym sym ->
                     Maybe [(sym, (Term sym sym))]
 patternMatchTail result Deconstruct { deconstructConstructor = constructor,
                                       deconstructStrict = strict,
@@ -99,6 +100,53 @@ patternMatch :: (Default sym, Eq sym, Ord sym) =>
              -- ^ A list of bindings from the pattern, or Nothing.
 patternMatch = patternMatchTail []
 
+-- | Given sorted lists of bindings and types, get a list of variable,
+-- type pairs that get bound.
+zipTypes :: (Default sym, Eq sym, Ord sym) =>
+            Bool -> [(sym, Pattern sym (Term sym) sym)] ->
+            [(sym, Term sym sym)] -> [(sym, Term sym sym)] ->
+            Maybe [(sym, Term sym sym)]
+zipTypes strict allbinds @ ((name, bind) : binds) ((name', term) : terms) result
+-- If the names match, then run pattern match
+  | name == name' =
+    do
+      result' <- patternTypesTail result bind term
+      zipBinds strict binds terms result'
+-- If the names don't match, and we're not strict, discard the term
+-- and keep going
+  | not strict = zipBinds strict allbinds terms result
+-- Otherwise, we have an error
+  | otherwise = Nothing
+-- Termination condition: run out of both lists, regardless of strictness
+zipTypes _ [] [] result = return result
+-- Termination condition: run out of binders, and we're not strict
+zipTypes False [] _ result = return result
+-- Everything else is a match error
+zipTypes _ _ _ _ = Nothing
+
+patternTypesTail result Deconstruct { deconstructConstructor = constructor,
+                                      deconstructStrict = strict,
+                                      deconstructBinds = binds } term
+  | constructor == defaultVal =
+    case term of
+      Record { recVals = vals } ->
+        zipTypes strict (Map.toAscList binds) (Map.toAscList vals) result
+      _ -> Nothing
+  | otherwise =
+    case term of
+      Call { callFunc = Var { varSym = func }, callArgs = args } ->
+        if func == constructor
+        then zipTypes strict (Map.toAscList binds) (Map.toAscList args) result
+        else Nothing
+      _ -> Nothing
+-- As bindings bind the current term and then continue
+patternTypesTail result As { asName = name, asBind = bind } t =
+  patternTypesTail ((name, t) : result) bind t
+-- Name patterns bind the type to the pattern
+patternTypesTail result Name { nameSym = sym } t = Just [(sym, t)]
+-- Constants don't bind any symbols
+patternTypesTail result (Constant _) t2 = Just []
+
 -- | Take a pattern and a type and extract the typings for all the
 -- variables bound by this pattern.  Note: this is only guaranteed to
 -- work for well-typed patterns; if the pattern does not have the
@@ -107,7 +155,7 @@ patternTypes :: (Default sym, Eq sym, Ord sym) =>
                 Pattern sym (Term sym) sym
              -- ^ The pattern being matched.
              -> Term sym sym
-             -- ^ The term attempting to match the pattern.
-             -> Maybe [(sym, (Term sym sym))]
+             -- ^ The type given to the pattern.
+             -> Maybe [(sym, Term sym sym)]
              -- ^ A list of bindings from the pattern, or Nothing.
-patternTypes = error "XXX not implemented"
+patternMatch = patternTypesTail []

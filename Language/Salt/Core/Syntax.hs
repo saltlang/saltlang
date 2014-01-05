@@ -152,27 +152,27 @@ data Term bound free =
   -- patterns.
 
   -- | Dependent product type.  This is the type given to functions.
-    ProdType {
+    FuncType {
       -- | The binding order for arguments.  This is used to determine
       -- the order in which to evaluate scopes.
-      prodArgs :: [Element bound free],
+      funcTypeArgs :: [Element bound free],
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
-      prodRetTy :: Scope bound (Term bound) free,
+      funcTypeRetTy :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
-      prodTypePos :: !Pos
+      funcTypePos :: !Pos
     }
   -- | Dependent sum type.  This is the type given to structures.
-  | SumType {
+  | RecordType {
       -- | The remaining elements of the sum type.  The first element
       -- in the binding order is a degenerate scope; the remaining
       -- scopes may reference any previous elements from the binding
       -- order, but not themselves or any future scopes.
       -- 
       -- Note: all fields are given names by transliteration.
-      sumBody :: [Element bound free],
+      recTypeBody :: [Element bound free],
       -- | The position in source from which this originates.
-      sumTypePos :: !Pos
+      recTypePos :: !Pos
     }
   -- | Refinement type.  This type represents all members of a type
   -- satisfying a given proposition.
@@ -419,10 +419,11 @@ instance (Default b, Eq b) => Eq1 (Element b) where
     name1 == name2 && ty1 ==# ty2 && pat1 ==# pat2
 
 instance (Default b, Eq b) => Eq1 (Term b) where
-  ProdType { prodArgs = argtys1, prodRetTy = retty1 } ==#
-    ProdType { prodArgs = argtys2, prodRetTy = retty2 } =
+  FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 } ==#
+    FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
       argtys1 ==# argtys2 && retty1 ==# retty2
-  SumType { sumBody = body1 } ==# SumType { sumBody = body2 } = body1 ==# body2
+  RecordType { recTypeBody = body1 } ==# RecordType { recTypeBody = body2 } =
+    body1 ==# body2
   RefineType { refineType = ty1, refineCases = cases1 } ==#
     RefineType { refineType = ty2, refineCases = cases2 } =
       ty1 ==# ty2 && cases1 ==# cases2
@@ -515,17 +516,18 @@ instance (Default b, Ord b) => Ord1 (Element b) where
       out -> out
 
 instance (Default b, Ord b) => Ord1 (Term b) where
-  compare1 ProdType { prodArgs = argtys1, prodRetTy = retty1 }
-           ProdType { prodArgs = argtys2, prodRetTy = retty2 } =
+  compare1 FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 }
+           FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
     case compare1 retty1 retty2 of
       EQ -> compare1 argtys1 argtys2
       out -> out
-  compare1 ProdType {} _ = GT
-  compare1 _ ProdType {} = LT
-  compare1 SumType { sumBody = body1 } SumType { sumBody = body2 } =
+  compare1 FuncType {} _ = GT
+  compare1 _ FuncType {} = LT
+  compare1 RecordType { recTypeBody = body1 }
+    RecordType { recTypeBody = body2 } =
     compare1 body1 body2
-  compare1 SumType {} _ = GT
-  compare1 _ SumType {} = LT
+  compare1 RecordType {} _ = GT
+  compare1 _ RecordType {} = LT
   compare1 RefineType { refineType = ty1, refineCases = cases1 }
            RefineType { refineType = ty2, refineCases = cases2 } =
     case compare1 ty1 ty2 of
@@ -646,8 +648,8 @@ instance Position (Element b s) where
   pos Element { elemPos = p } = p
 
 instance Position (Term b s) where
-  pos ProdType { prodTypePos = p } = p
-  pos SumType { sumTypePos = p } = p
+  pos FuncType { funcTypePos = p } = p
+  pos RecordType { recTypePos = p } = p
   pos RefineType { refinePos = p } = p
   pos CompType { compTypePos = p } = p
   pos Quantified { quantPos = p } = p
@@ -692,9 +694,9 @@ instance (Default b, Hashable b) => Hashable1 (Element b) where
     (s `hashWithSalt` name) `hashWithSalt1` pat `hashWithSalt1` ty
 
 instance (Default b, Hashable b) => Hashable1 (Term b) where
-  hashWithSalt1 s ProdType { prodArgs = argtys, prodRetTy = retty } =
+  hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` argtys `hashWithSalt` retty
-  hashWithSalt1 s SumType { sumBody = body } =
+  hashWithSalt1 s RecordType { recTypeBody = body } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` body
   hashWithSalt1 s RefineType { refineType = ty, refineCases = cases } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
@@ -776,9 +778,10 @@ instance Functor (Element b) where
     e { elemPat = fmap f pat, elemType = fmap f ty }
 
 instance Functor (Term b) where
-  fmap f t @ ProdType { prodArgs = argtys, prodRetTy = retty } =
-    t { prodArgs = fmap (fmap f) argtys, prodRetTy = fmap f retty }
-  fmap f t @ SumType { sumBody = body } = t { sumBody = fmap (fmap f) body }
+  fmap f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
+    t { funcTypeArgs = fmap (fmap f) argtys, funcTypeRetTy = fmap f retty }
+  fmap f t @ RecordType { recTypeBody = body } =
+    t { recTypeBody = fmap (fmap f) body }
   fmap f t @ RefineType { refineType = ty, refineCases = cases } =
     t { refineType = fmap f ty, refineCases = fmap (fmap f) cases }
   fmap f t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
@@ -826,9 +829,9 @@ instance Foldable (Element b) where
     foldMap f pat `mappend` foldMap f ty
 
 instance Foldable (Term b) where
-  foldMap f ProdType { prodArgs = argtys, prodRetTy = retty } =
+  foldMap f FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     foldMap (foldMap f) argtys `mappend` foldMap f retty
-  foldMap f SumType { sumBody = body } = foldMap (foldMap f) body
+  foldMap f RecordType { recTypeBody = body } = foldMap (foldMap f) body
   foldMap f RefineType { refineType = ty, refineCases = cases } =
     foldMap f ty `mappend` foldMap (foldMap f) cases
   foldMap f CompType { compType = ty, compPat = pat, compSpec = spec } =
@@ -880,11 +883,11 @@ instance Traversable (Element b) where
       traverse f pat <*> traverse f ty
 
 instance Traversable (Term b) where
-  traverse f t @ ProdType { prodArgs = argtys, prodRetTy = retty } =
-    (\argtys' retty' -> t { prodArgs = argtys', prodRetTy = retty' }) <$>
+  traverse f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
+    (\argtys' retty' -> t { funcTypeArgs = argtys', funcTypeRetTy = retty' }) <$>
       traverse (traverse f) argtys <*> traverse f retty
-  traverse f t @ SumType { sumBody = body } =
-    (\body' -> t { sumBody = body' }) <$> traverse (traverse f) body
+  traverse f t @ RecordType { recTypeBody = body } =
+    (\body' -> t { recTypeBody = body' }) <$> traverse (traverse f) body
   traverse f t @ RefineType { refineType = ty, refineCases = cases } =
     (\ty' cases' -> t { refineType = ty', refineCases = cases' }) <$>
       traverse f ty <*> traverse (traverse f) cases
@@ -985,10 +988,10 @@ compSubstTerm _ (BadComp p) = BadComp p
 instance Monad (Term b) where
   return sym = Var { varSym = sym, varPos = injectpos }
 
-  t @ ProdType { prodArgs = argtys, prodRetTy = retty } >>= f =
-    t { prodArgs = fmap (elementSubstTerm f) argtys, prodRetTy = retty >>>= f }
-  t @ SumType { sumBody = body } >>= f =
-    t { sumBody = fmap (elementSubstTerm f) body }
+  t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } >>= f =
+    t { funcTypeArgs = fmap (elementSubstTerm f) argtys, funcTypeRetTy = retty >>>= f }
+  t @ RecordType { recTypeBody = body } >>= f =
+    t { recTypeBody = fmap (elementSubstTerm f) body }
   t @ RefineType { refineType = ty, refineCases = cases } >>= f =
     t { refineType = ty >>= f, refineCases = fmap (caseSubstTerm f) cases }
   t @ CompType { compType = ty, compPat = pat, compSpec = spec } >>= f =
@@ -1150,18 +1153,18 @@ arbitraryTerm bindings size =
           return ((field, val) : rest)
       | otherwise = return []
 
-    arbitraryProdType =
+    arbitraryFuncType =
       do
         argssize <- choose (1, size)
         (args, newscope) <- arbitraryElements bindings argssize
         retty <- arbitraryTerm newscope (size - argssize - 1)
-        return ProdType { prodRetTy = abstract (abstractfun newscope) retty,
-                          prodArgs = args, prodTypePos = arbitraryPos }
+        return FuncType { funcTypeRetTy = abstract (abstractfun newscope) retty,
+                          funcTypeArgs = args, funcTypePos = arbitraryPos }
 
-    arbitrarySumType =
+    arbitraryRecordType =
       do
         (body, _) <- arbitraryElements bindings size
-        return SumType { sumBody = body, sumTypePos = arbitraryPos }
+        return RecordType { recTypeBody = body, recTypePos = arbitraryPos }
 
     arbitraryRefineType =
       do
@@ -1255,7 +1258,7 @@ arbitraryTerm bindings size =
         comp <- arbitraryComp bindings size
         return Comp { compBody = comp, compPos = arbitraryPos }
   in if 0 < size
-    then oneof [ arbitraryProdType, arbitrarySumType, arbitraryRefineType,
+    then oneof [ arbitraryFuncType, arbitraryRecordType, arbitraryRefineType,
                  arbitraryCompType, arbitraryQuantifiedTerm,
                  arbitraryLambdaTerm, arbitraryBoundVarTerm,
                  arbitraryFreeVarTerm, arbitraryTypedTerm, arbitraryRecordTerm,
@@ -1384,11 +1387,11 @@ instance (Default s, Ord s, Arbitrary s) => Arbitrary (Term s s) where
   -- XXX The types, the Forall/Exists, and Fix may end up creating
   -- orhpaned bound variables in scopes.  We probably need a function
   -- to go through and convert those into free variables.
-  shrink t @ ProdType { prodArgs = argtys, prodRetTy = retty } =
-    map (\argtys' -> t { prodArgs = argtys' }) (shrink argtys) ++
-    map (\retty' -> t { prodRetTy = retty' }) (shrinkScope retty)
-  shrink t @ SumType { sumBody = body } =
-    map (\body' -> t { sumBody = body' }) (shrink body)
+  shrink t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
+    map (\argtys' -> t { funcTypeArgs = argtys' }) (shrink argtys) ++
+    map (\retty' -> t { funcTypeRetTy = retty' }) (shrinkScope retty)
+  shrink t @ RecordType { recTypeBody = body } =
+    map (\body' -> t { recTypeBody = body' }) (shrink body)
   shrink t @ RefineType { refineType = ty, refineCases = cases } =
     map (\ty' -> t { refineType = ty' }) (shrink ty) ++
     map (\cases' -> t { refineCases = cases' }) (shrink cases)
@@ -1493,13 +1496,13 @@ instance (Default b, Ord b, Eq b, Format b, Format s) =>
       ]
 
 instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
-  format ProdType { prodArgs = args, prodRetTy = ret } =
-    braceBlock "ProdType" [
+  format FuncType { funcTypeArgs = args, funcTypeRetTy = ret } =
+    braceBlock "FuncType" [
         "args" <+> equals <+> headlessBracketList args,
         "ret" <+> equals <+> ret
       ] 
-  format SumType { sumBody = body } =
-    braceBlock "SumType" [ "body" <+> equals <+> headlessBracketList body ]
+  format RecordType { recTypeBody = body } =
+    braceBlock "RecordType" [ "body" <+> equals <+> headlessBracketList body ]
   format RefineType { refineType = ty, refineCases = cases } =
     braceBlock "RefineType" [
         "type" <+> equals <+> ty,

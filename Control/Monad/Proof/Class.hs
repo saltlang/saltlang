@@ -20,13 +20,13 @@
 
 -- | A module defining a monad class for recording or checking proofs.
 module Control.Monad.Proof.Class(
-       MonadProtoProof(..),
        MonadProof(..)
        ) where
 
 import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Writer
+import Data.Map(Map)
 import Data.Pos
 import Language.Salt.Core.Syntax
 
@@ -57,14 +57,15 @@ import Language.Salt.Core.Syntax
 -- 
 -- The names of these axioms are borrowed in part
 -- from Coq tactics.
-class MonadProtoProof m => MonadProof sym m where
+class Monad m => MonadProof sym m where
   -- |
   --   -------------
   --    Env, P |- P
-  exact :: Pos
+  apply :: Pos
         -- ^ The position from which this originates.
         -> sym
-        -- ^ The name of the equivalent proposition in the truth environment
+        -- ^ The name of the equivalent proposition in the truth
+        -- environment
         -> m ()
 
   -- |   Env, P |- Q
@@ -88,47 +89,43 @@ class MonadProtoProof m => MonadProof sym m where
   -- |  Env |- forall (pattern) : T. P   Env |- V : T
   --   -----------------------------------------------
   --                 Env |- [V/(pattern)]P
-  apply :: Pos
-        -- ^ The position from which this originates.
-        -> Term sym sym
-        -- ^ The proposition to apply
-        -> Term sym sym
-        -- ^ The arguments to the application
-        -> m ()
+  applyWith :: Pos
+            -- ^ The position from which this originates.
+            -> Term sym sym
+            -- ^ The proposition to apply
+            -> [Term sym sym]
+            -- ^ The argument to the application
+            -> m ()
 
--- | This class contains proof rules that don't depend on a symbol
--- type.
-class Monad m => MonadProtoProof m where
   -- |  Env, x_1 : T_1 ... x_n : T_n |- P
   --   -----------------------------------
   --     Env |- forall (pattern) : T. P
   introVars :: Pos
             -- ^ The position from which this originates.
+            -> [Map sym sym]
+            -- ^ A list of symbol renaming functions, one for each
+            -- case, that possibly rename all symbols bound by that
+            -- case.  Must be as many elements in the list as there
+            -- are cases in the predicate.
             -> m ()
 
-instance MonadProtoProof m => MonadProtoProof (ReaderT s m) where
-  introVars = lift . introVars
-
 instance MonadProof sym m => MonadProof sym (ReaderT s m) where
-  exact p = lift . exact p
+  apply p = lift . apply p
   intro p = lift. intro p
+  introVars p = lift . introVars p
   cut p = lift . cut p
-  apply p prop = lift . apply p prop
-
-instance MonadProtoProof m => MonadProtoProof (StateT s m) where
-  introVars = lift . introVars
+  applyWith p prop = lift . applyWith p prop
 
 instance MonadProof sym m => MonadProof sym (StateT s m) where
-  exact p = lift . exact p
+  apply p = lift . apply p
   intro p = lift. intro p
+  introVars p = lift . introVars p
   cut p = lift . cut p
-  apply p prop = lift . apply p prop
-
-instance (Monoid s, MonadProtoProof m) => MonadProtoProof (WriterT s m) where
-  introVars = lift . introVars
+  applyWith p prop = lift . applyWith p prop
 
 instance (Monoid s, MonadProof sym m) => MonadProof sym (WriterT s m) where
-  exact p = lift . exact p
+  apply p = lift . apply p
   intro p = lift. intro p
+  introVars p = lift . introVars p
   cut p = lift . cut p
-  apply p prop = lift . apply p prop
+  applyWith p prop = lift . applyWith p prop

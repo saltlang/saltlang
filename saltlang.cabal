@@ -114,6 +114,7 @@ Library
                         Language.Salt.Core.TypeCheck,
                         Language.Salt.Surface.AST
   other-modules:        Control.Monad.Proof.Class,
+                        Control.Monad.ProofChecker,
                         Control.Monad.ProofErrors.Class,
                         Control.Monad.ProofNames.Class,
                         Control.Monad.ProofObligations.Class,
@@ -121,6 +122,7 @@ Library
                         Control.Monad.TypeErrors.Class,
                         Control.Monad.TypeCheck.Class,
                         Language.Salt.Core.Proofs.ProofScript,
+                        Language.Salt.Core.Proofs.ProofState,
                         Language.Salt.Diagnostics.ProofError,
                         Language.Salt.Surface.Common,
                         Language.Salt.Surface.Token

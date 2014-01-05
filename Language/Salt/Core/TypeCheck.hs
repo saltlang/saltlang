@@ -52,11 +52,11 @@ checkSubType :: (MonadTypeCheck sym m, Default sym, Ord sym) =>
           -> m Bool
 -- For function types, the return type is covariant, and the arguments
 -- are contravariant.
-checkSubType ctx ProdType {} ProdType {} = error "XXX not implemented"
+checkSubType ctx FuncType {} FuncType {} = error "XXX not implemented"
 -- For record types, the subtype must have all the fields of the
 -- supertype, and they must be subtypes of the corresponding fields in
 -- the supertype.  However, there can be extra fields in the subtype.
-checkSubType ctx SumType {} SumType {} = error "XXX not implemented"
+checkSubType ctx RecordType {} RecordType {} = error "XXX not implemented"
 -- For refinement types, the base types are covariant, and the
 -- predicate of the subtype must imply the predicate of the supertype.
 checkSubType ctx RefineType { refineType = subbasety }
@@ -151,12 +151,12 @@ checkIntroTerm ctx ty term @ Quantified { quantType = quantty,
       else formMismatch term ty
 -- For lambda terms, it is ok to assert that it's a function type, as
 -- long as the arguments match up.
-checkIntroTerm ctx ProdType {} Lambda {} = error "XXX not implemented yet"
+checkIntroTerm ctx FuncType {} Lambda {} = error "XXX not implemented yet"
 -- Anything else is a type error
 checkIntroTerm ctx ty term @ Lambda {} = formMismatch term ty
 -- For records, the expected type needs to be a record type, with the
 -- correct fields.
-checkIntroTerm ctx SumType {} Record {} = error "XXX not implemented yet"
+checkIntroTerm ctx RecordType {} Record {} = error "XXX not implemented yet"
 -- Anything else is a type error
 checkIntroTerm ctx ty term @ Record {} = formMismatch term ty
 -- For computation terms, expect them to have a computation type
@@ -193,7 +193,7 @@ checkElimTerm ctx Call { callFunc = func, callPos = p } =
     case functy of
       -- Now, check that the arguments match, and then figure out the
       -- return type.
-      ProdType {} -> error "XXX not implemented yet"
+      FuncType {} -> error "XXX not implemented yet"
       -- Pass bad types on through
       bad @ (BadTerm _) -> return (BadTerm p, bad)
       -- Anything else is an error

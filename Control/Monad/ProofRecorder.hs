@@ -27,6 +27,7 @@ module Control.Monad.ProofRecorder(
 import Control.Monad.Proof.Class
 import Control.Monad.State
 import Control.Monad.Writer
+import Data.Map(Map)
 import Data.Pos
 import Language.Salt.Core.Proofs.ProofScript
 import Language.Salt.Core.Syntax
@@ -49,35 +50,36 @@ runProofRecorderT :: Monad m =>
                   -- ^ The result, and the recorded proof.
 runProofRecorderT = runWriterT . unpackProofRecorderT
 
-exact' :: Monad m => Pos -> sym -> (WriterT (ProofScript sym) m) ()
-exact' p name = tell [Exact { exactName = name, exactPos = p }]
+apply' :: Monad m => Pos -> sym -> (WriterT (ProofScript sym) m) ()
+apply' p name = tell [Apply { applyName = name, applyPos = p }]
 
 intro' :: Monad m => Pos -> sym -> (WriterT (ProofScript sym) m) ()
 intro' p name = tell [Intro { introName = name, introPos = p }]
 
-introVars' :: Monad m => Pos -> (WriterT (ProofScript sym) m) ()
-introVars' p = tell [IntroVars { introVarsPos = p }]
+introVars' :: Monad m => Pos -> [Map sym sym] ->
+              (WriterT (ProofScript sym) m) ()
+introVars' p namemaps =
+  tell [IntroVars { introVarsMaps = namemaps, introVarsPos = p }]
 
 cut' :: Monad m => Pos -> Term sym sym -> (WriterT (ProofScript sym) m) ()
 cut' p prop = tell [Cut { cutProp = prop, cutPos = p }]
 
-apply' :: Monad m => Pos -> Term sym sym -> Term sym sym ->
-                     (WriterT (ProofScript sym) m) ()
-apply' p prop arg = tell [Apply { applyProp = prop, applyArg = arg,
-                                  applyPos = p }]
+applyWith' :: Monad m => Pos -> Term sym sym -> [Term sym sym] ->
+              (WriterT (ProofScript sym) m) ()
+applyWith' p prop args = tell [ApplyWith { applyWithProp = prop,
+                                           applyWithArgs = args,
+                                           applyWithPos = p }]
 
 instance Monad m => Monad (ProofRecorderT sym m) where
   return = ProofRecorderT . return
   (ProofRecorderT m) >>= f = ProofRecorderT $ m >>= unpackProofRecorderT . f
 
-instance Monad m => MonadProtoProof (ProofRecorderT sym m) where
-  introVars = ProofRecorderT . introVars'
-
-instance MonadProtoProof m => MonadProof sym (ProofRecorderT sym m) where
-  exact p = ProofRecorderT . exact' p
+instance Monad m => MonadProof sym (ProofRecorderT sym m) where
+  apply p = ProofRecorderT . apply' p
   intro p = ProofRecorderT . intro' p
+  introVars p = ProofRecorderT . introVars' p
   cut p = ProofRecorderT . cut' p
-  apply p prop = ProofRecorderT . apply' p prop
+  applyWith p prop = ProofRecorderT . applyWith' p prop
 
 instance MonadIO m => MonadIO (ProofRecorderT sym m) where
   liftIO = ProofRecorderT . liftIO
