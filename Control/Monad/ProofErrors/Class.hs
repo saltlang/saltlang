@@ -49,7 +49,7 @@ class MonadProtoProofErrors m => MonadProofErrors sym m where
             -> m ()
   -- | Log an error when using exact, but the proposition in the truth
   -- environment doesn't match the goal.
-  exactMismatch :: Pos
+  applyMismatch :: Pos
                 -- ^ The position from which this arises.
                 -> sym
                 -- ^ The name of the proposition in the proof environment.
@@ -65,18 +65,18 @@ class MonadProtoProofErrors m => MonadProofErrors sym m where
                 -- ^ The goal proposition.
                 -> m ()
   -- | Log an error when using introVar, but the goal isn't a forall.
-  introVarMismatch :: Pos
-                   -- ^ The position from which this arises.
-                   -> Term sym sym
-                   -- ^ The goal proposition.
-                   -> m ()
+  introVarsMismatch :: Pos
+                    -- ^ The position from which this arises.
+                    -> Term sym sym
+                    -- ^ The goal proposition.
+                    -> m ()
   -- | Log an error message when using apply, but the proposition
   -- isn't a forall.
-  applyMismatch :: Pos
-                -- ^ The position from which this arises.
-                -> Term sym sym
-                -- ^ The goal proposition.
-                -> m ()
+  applyWithMismatch :: Pos
+                    -- ^ The position from which this arises.
+                    -> Term sym sym
+                    -- ^ The goal proposition.
+                    -> m ()
 
 instance MonadProtoProofErrors m => MonadProtoProofErrors (ReaderT s m) where
   incomplete = lift incomplete
@@ -84,10 +84,10 @@ instance MonadProtoProofErrors m => MonadProtoProofErrors (ReaderT s m) where
 
 instance MonadProofErrors sym m => MonadProofErrors sym (ReaderT s m) where
   undefProp p = lift . undefProp p
-  exactMismatch p sym prop = lift . exactMismatch p sym prop
+  applyMismatch p sym prop = lift . applyMismatch p sym prop
   introMismatch p = lift . introMismatch p
-  introVarMismatch p = lift . introVarMismatch p
-  applyMismatch p = lift . applyMismatch p
+  introVarsMismatch p = lift . introVarsMismatch p
+  applyWithMismatch p = lift . applyWithMismatch p
 
 instance MonadProtoProofErrors m => MonadProtoProofErrors (StateT s m) where
   incomplete = lift incomplete
@@ -95,10 +95,10 @@ instance MonadProtoProofErrors m => MonadProtoProofErrors (StateT s m) where
 
 instance MonadProofErrors sym m => MonadProofErrors sym (StateT s m) where
   undefProp p = lift . undefProp p
-  exactMismatch p sym prop = lift . exactMismatch p sym prop
+  applyMismatch p sym prop = lift . applyMismatch p sym prop
   introMismatch p = lift . introMismatch p
-  introVarMismatch p = lift . introVarMismatch p
-  applyMismatch p = lift . applyMismatch p
+  introVarsMismatch p = lift . introVarsMismatch p
+  applyWithMismatch p = lift . applyWithMismatch p
 
 instance (Monoid s, MonadProtoProofErrors m) =>
          MonadProtoProofErrors (WriterT s m) where
@@ -108,7 +108,7 @@ instance (Monoid s, MonadProtoProofErrors m) =>
 instance (Monoid s, MonadProofErrors sym m) =>
          MonadProofErrors sym (WriterT s m) where
   undefProp p = lift . undefProp p
-  exactMismatch p sym prop = lift . exactMismatch p sym prop
+  applyMismatch p sym prop = lift . applyMismatch p sym prop
   introMismatch p = lift . introMismatch p
-  introVarMismatch p = lift . introVarMismatch p
-  applyMismatch p = lift . applyMismatch p
+  introVarsMismatch p = lift . introVarsMismatch p
+  applyWithMismatch p = lift . applyWithMismatch p

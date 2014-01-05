@@ -1,4 +1,4 @@
--- Copyright (c) 2013 Eric McCorkle.
+-- Copyright (c) 2013, 2014 Eric McCorkle.
 --
 -- This program is free software; you can redistribute it and/or
 -- modify it under the terms of the GNU General Public License as
@@ -88,7 +88,7 @@ class Monad m => MonadProof sym m where
 
   -- |  Env |- forall (pattern) : T. P   Env |- V : T
   --   -----------------------------------------------
-  --                 Env |- [V/(pattern)]P
+  --                Env |- [V/(pattern)]P
   applyWith :: Pos
             -- ^ The position from which this originates.
             -> Term sym sym

@@ -43,15 +43,15 @@ data ProofError sym =
     }
   -- | An error message representing an attempt to use the "exact"
   -- rule with a proposition that does not match the goal.
-  | ExactMismatch {
+  | ApplyMismatch {
       -- | The name of the mismatched proposition in the truth environment.
-      exactName :: !sym,
+      applyName :: !sym,
       -- | The proposition from the truth environment.
-      exactProp :: Term sym sym,
+      applyProp :: Term sym sym,
       -- | The goal proposition.
-      exactGoal :: Term sym sym,
+      applyGoal :: Term sym sym,
       -- | The position at which the bad use of "exact" occurred.
-      exactPos :: !Pos
+      applyPos :: !Pos
     }
   -- | An error message representing an attempt to use the "intro"
   -- rule with a goal that is not an implies proposition.
@@ -71,11 +71,11 @@ data ProofError sym =
     }
   -- | An error message representing an attempt to use the "apply"
   -- rule with a proposition that is not a forall proposition.
-  | ApplyMismatch {
+  | ApplyWithMismatch {
       -- | The proposition attempting to be applied.
-      applyProp :: Term sym sym,
+      applyWithProp :: Term sym sym,
       -- | The position at which the bad use of "apply" occurred.
-      applyPos :: !Pos
+      applyWithPos :: !Pos
     }
   -- | An error message indicating that a proof script continues after
   -- the proof is complete.
@@ -90,10 +90,10 @@ data ProofError sym =
 
 instance Position (ProofError sym) where
   pos UndefProp { undefPos = p } = p
-  pos ExactMismatch { exactPos = p } = p
+  pos ApplyMismatch { applyPos = p } = p
   pos IntroMismatch { introPos = p } = p
   pos IntroVarMismatch { introVarPos = p } = p
-  pos ApplyMismatch { applyPos = p } = p
+  pos ApplyWithMismatch { applyWithPos = p } = p
   pos Complete { completePos = p } = p
   -- XXX Need a position indicating end of input
   pos Incomplete = undefined
@@ -101,15 +101,15 @@ instance Position (ProofError sym) where
 instance (Default sym, Hashable sym) => Hashable (ProofError sym) where
   hashWithSalt s UndefProp { undefName = name, undefPos = p } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt` p
-  hashWithSalt s ExactMismatch { exactName = name, exactProp = prop,
-                                 exactGoal = goal, exactPos = p } =
+  hashWithSalt s ApplyMismatch { applyName = name, applyProp = prop,
+                                 applyGoal = goal, applyPos = p } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` name `hashWithSalt`
     prop `hashWithSalt` goal `hashWithSalt` p
   hashWithSalt s IntroMismatch { introGoal = goal, introPos = p } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt` goal `hashWithSalt` p
   hashWithSalt s IntroVarMismatch { introVarGoal = goal, introVarPos = p } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt` goal `hashWithSalt` p
-  hashWithSalt s ApplyMismatch { applyProp = prop, applyPos = p } =
+  hashWithSalt s ApplyWithMismatch { applyWithProp = prop, applyWithPos = p } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt` prop `hashWithSalt` p
   hashWithSalt s Complete { completePos = p } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt` p
@@ -119,15 +119,15 @@ instance (Default sym, Hashable sym) => Hashable (ProofError sym) where
 instance (Default sym, Format sym, Ord sym) => Format (ProofError sym) where
   format UndefProp { undefName = name } =
     "proposition" <+> name <+> "is not defined in the truth environment"
-  format ExactMismatch { exactName = name, exactGoal = goal,
-                         exactProp = prop } = 
+  format ApplyMismatch { applyName = name, applyGoal = goal,
+                         applyProp = prop } = 
     "proposition" <+> name <+> equals <+> prop <+>
     "does not equal goal" <+> goal
   format IntroMismatch { introGoal = goal } =
     "goal" <+> goal <+> "is not an implication"
   format IntroVarMismatch { introVarGoal = goal } =
     "goal" <+> goal <+> "is not a universal quantification"
-  format ApplyMismatch { applyProp = prop } =
+  format ApplyWithMismatch { applyWithProp = prop } =
     "proposition" <+> prop <+> "is not a universal quantification"
   format Complete {} = format "proof script continues after proof is complete"
   format Incomplete = format "proof script ends before proof is complete"

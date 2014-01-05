@@ -1,4 +1,4 @@
--- Copyright (c) 2013 Eric McCorkle.
+-- Copyright (c) 2013, 2014 Eric McCorkle.
 --
 -- This program is free software; you can redistribute it and/or
 -- modify it under the terms of the GNU General Public License as
@@ -43,13 +43,13 @@ getSymType ctx sym p =
    Nothing -> undefSym sym p
 
 checkSubType :: (MonadTypeCheck sym m, Default sym, Ord sym) =>
-             TypeContext sym
-          -- ^ The type check context
-          -> Term sym sym
-          -- ^ The supposed subtype
-          -> Term sym sym
-          -- ^ The supposed supertype
-          -> m Bool
+                TypeContext sym
+             -- ^ The type check context
+             -> Term sym sym
+             -- ^ The supposed subtype
+             -> Term sym sym
+             -- ^ The supposed supertype
+             -> m Bool
 -- For function types, the return type is covariant, and the arguments
 -- are contravariant.
 checkSubType ctx FuncType {} FuncType {} = error "XXX not implemented"
