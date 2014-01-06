@@ -26,8 +26,8 @@ runTest :: HUnit.Test -> IO Progress
 runTest test =
   do
     (counts, shows) <- HUnit.runTestText HUnit.putTextToShowS test
-    if HUnit.errors counts /= 0
-      then if HUnit.failures counts /= 0
+    if HUnit.errors counts == 0
+      then if HUnit.failures counts == 0
         then return (Finished Pass)
         else return (Finished (Fail (shows "")))
       else return (Finished (Error (shows "")))

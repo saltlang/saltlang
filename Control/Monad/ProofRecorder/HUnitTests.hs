@@ -40,7 +40,7 @@ applyNameVal = 1
 applyPosVal = point "Apply" 2 3 4
 applyEntry = Apply { applyName = applyNameVal, applyPos = applyPosVal }
 
-genApply :: ProofRecorder Symbol ()
+genApply :: Monad m => ProofRecorderT Symbol m ()
 genApply =
   do
     apply applyPosVal applyNameVal
@@ -50,7 +50,7 @@ introNameVal = 1
 introPosVal = point "Intro" 2 3 4
 introEntry = Intro { introName = introNameVal, introPos = introPosVal }
 
-genIntro :: ProofRecorder Symbol ()
+genIntro :: Monad m => ProofRecorderT Symbol m ()
 genIntro =
   do
     intro introPosVal introNameVal
@@ -60,7 +60,7 @@ cutPropVal = Var { varSym = 2, varPos = point "Cut" 1 2 3 }
 cutPosVal = point "Cut" 4 5 6
 cutEntry = Cut { cutProp = cutPropVal, cutPos = cutPosVal }
 
-genCut :: ProofRecorder Symbol ()
+genCut :: Monad m => ProofRecorderT Symbol m ()
 genCut =
   do
     cut cutPosVal cutPropVal
@@ -75,7 +75,7 @@ applyWithEntry = ApplyWith { applyWithProp = applyWithPropVal,
                              applyWithArgs = applyWithArgsVals,
                              applyWithPos = applyWithPosVal }
 
-genApplyWith :: ProofRecorder Symbol ()
+genApplyWith :: Monad m => ProofRecorderT Symbol m ()
 genApplyWith =
   do
     applyWith applyWithPosVal applyWithPropVal applyWithArgsVals
@@ -89,13 +89,13 @@ introVarsPosVal = point "IntroVars" 2 3 4
 introVarsEntry = IntroVars { introVarsMaps = introVarsMapsVal,
                              introVarsPos = introVarsPosVal }
 
-genIntroVars :: ProofRecorder Symbol ()
+genIntroVars :: Monad m => ProofRecorderT Symbol m ()
 genIntroVars =
   do
     introVars introVarsPosVal introVarsMapsVal
     return ()
 
-genMulti :: ProofRecorder Symbol ()
+genMulti :: Monad m => ProofRecorderT Symbol m ()
 genMulti =
   do
     apply applyPosVal applyNameVal
@@ -119,13 +119,13 @@ tests =
     "cut" ~: do
       (_, entry) <- runProofRecorder genCut
       return ([cutEntry] == entry),
-    "apply with" ~: do
+    "applyWith" ~: do
       (_, entry) <- runProofRecorder genApplyWith
       return ([applyWithEntry] == entry),
-    "intro vars" ~: do
+    "introVars" ~: do
       (_, entry) <- runProofRecorder genIntroVars
       return ([introVarsEntry] == entry),
-    "intro vars" ~: do
+    "multi" ~: do
       (_, entries) <- runProofRecorder genMulti
       return (multiEntries == entries)
   ]
