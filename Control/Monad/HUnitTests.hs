@@ -18,5 +18,6 @@
 module Control.Monad.HUnitTests(testsuite) where
 
 import Test.HUnit
+import qualified Control.Monad.ProofRecorder.HUnitTests as ProofRecorder
 
-testsuite = TestLabel "Control" (TestList [])
+testsuite = TestLabel "Monad" (TestList [ ProofRecorder.testsuite ])

@@ -89,8 +89,10 @@ Build-type:             Simple
 Cabal-version:          >= 1.9.2
 
 Executable RunHUnitTests
-    Build-Depends:      base, HUnit, Cabal
     Main-Is:            HUnitTestMain.hs
+    build-depends:      base, Cabal >= 1.9.2, HUnit, random, proglang-util,
+                        containers, bound, prelude-extras, hashable-extras,
+                        hashable, mtl, QuickCheck
     ghc-options:        -fhpc
 
 Test-Suite unit-tests
@@ -109,12 +111,12 @@ Library
                         bound, containers, prelude-extras, mtl, hashable,
                         hashable-extras
   exposed-modules:      Language.Salt.Core,
-                        Language.Salt.Core.Patterns,
+--                        Language.Salt.Core.Patterns,
                         Language.Salt.Core.Syntax,
                         Language.Salt.Core.TypeCheck,
                         Language.Salt.Surface.AST
   other-modules:        Control.Monad.Proof.Class,
-                        Control.Monad.ProofChecker,
+--                        Control.Monad.ProofChecker,
                         Control.Monad.ProofErrors.Class,
                         Control.Monad.ProofNames.Class,
                         Control.Monad.ProofObligations.Class,

@@ -20,8 +20,11 @@
 
 -- | A module defining a monad and transformer that record proof scripts.
 module Control.Monad.ProofRecorder(
+       MonadProof(..),
        ProofRecorderT,
-       runProofRecorderT
+       ProofRecorder,
+       runProofRecorderT,
+       runProofRecorder
        ) where
 
 import Control.Monad.Proof.Class
@@ -36,6 +39,7 @@ import Language.Salt.Core.Syntax
 -- essentially a wrapper around a WriterT.
 newtype ProofRecorderT sym m a =
   ProofRecorderT ((WriterT (ProofScript sym) m) a)
+type ProofRecorder sym a = ProofRecorderT sym IO a
 
 unpackProofRecorderT :: ProofRecorderT sym m a
                      -> (WriterT (ProofScript sym) m) a
@@ -49,6 +53,14 @@ runProofRecorderT :: Monad m =>
                   -> m (a, ProofScript sym)
                   -- ^ The result, and the recorded proof.
 runProofRecorderT = runWriterT . unpackProofRecorderT
+
+-- | Execute a proof recorder monad, and return the result along with
+-- the recorded proof.
+runProofRecorder :: ProofRecorder sym a
+                 -- ^ The monad to execute.
+                 -> IO (a, ProofScript sym)
+                 -- ^ The result, and the recorded proof.
+runProofRecorder = runProofRecorderT
 
 apply' :: Monad m => Pos -> sym -> (WriterT (ProofScript sym) m) ()
 apply' p name = tell [Apply { applyName = name, applyPos = p }]
