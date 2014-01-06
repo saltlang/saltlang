@@ -88,6 +88,14 @@ Category:               Languages
 Build-type:             Simple
 Cabal-version:          >= 1.9.2
 
+Test-Suite unit-tests
+    type:               detailed-0.9
+    build-depends:      base, Cabal >= 1.9.2, HUnit, random, proglang-util,
+                        containers, bound, prelude-extras, hashable-extras,
+                        hashable, mtl
+    test-module:        HUnitTests
+    other-modules:      Distribution.TestSuite.HUnit
+
 Test-Suite smoketest
     type:               detailed-0.9
     build-depends:      base, Cabal >= 1.9.2, QuickCheck, random, proglang-util,
@@ -98,11 +106,11 @@ Test-Suite smoketest
                         Language.QuickCheckTests,
                         Language.Salt.QuickCheckTests,
                         Language.Salt.Core.QuickCheckTests,
-                        Language.Salt.Core.PatternMatch,
+                        Language.Salt.Core.Patterns,
                         Language.Salt.Core.PatternMatch.QuickCheckTests,
                         Language.Salt.Core.Syntax,
                         Language.Salt.Core.Syntax.QuickCheckTests
---                        Language.Salt.Surface.QuickCheckTests
+                        Language.Salt.Surface.QuickCheckTests
 
 Library
   build-depends:        base, proglang-util, QuickCheck,
