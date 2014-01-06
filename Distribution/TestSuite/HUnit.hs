@@ -1,4 +1,4 @@
--- Copyright (c) 2013, 2014 Eric McCorkle.
+-- Copyright (c) 2014 Eric McCorkle.
 --
 -- This program is free software; you can redistribute it and/or
 -- modify it under the terms of the GNU General Public License as
@@ -16,8 +16,7 @@
 -- 02110-1301 USA
 
 module Distribution.TestSuite.HUnit(
-       test,
-       testTags
+       convertTests,
        ) where
 
 import Distribution.TestSuite
@@ -33,12 +32,21 @@ runTest test =
         else return (Finished (Fail (shows "")))
       else return (Finished (Error (shows "")))
 
-test :: String -> HUnit.Test -> Test
-test name = testTags name []
-
-testTags :: String -> [String] -> HUnit.Test -> Test
-testTags name tags prop =
-  Test TestInstance {
-      run = runTest prop, name = name, tags = tags,
-      options = [], setOption = undefined
-    }
+convertTests :: HUnit.Test -> Test
+convertTests =
+  let
+    convertTests' :: String -> HUnit.Test -> Test
+    convertTests' path (HUnit.TestLabel name (HUnit.TestList tests)) =
+      Group { groupTests = map (convertTests' (path ++ "." ++ name)) tests,
+              groupName = path, concurrently = True }
+    convertTests' path (HUnit.TestLabel name test) =
+      Group { groupTests = [convertTests' (path ++ "." ++ name) test],
+              groupName = path, concurrently = True }
+    convertTests' path (HUnit.TestList tests) =
+      Group { groupTests = map (convertTests' path) tests,
+              groupName = path, concurrently = True }
+    convertTests' path test @ (HUnit.TestCase _) =
+      Test TestInstance { run = runTest test, name = path, tags = [],
+                          options = [], setOption = undefined }
+  in
+    convertTests' ""
