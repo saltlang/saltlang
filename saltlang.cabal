@@ -89,17 +89,20 @@ Build-type:             Simple
 Cabal-version:          >= 1.9.2
 
 Executable RunHUnitTests
-  Build-Depends:  base, HUnit
-  Main-Is:        UnitTestMain.hs
-  ghc-options:    -fhpc
+    Build-Depends:      base, HUnit, Cabal
+    Main-Is:            HUnitTestMain.hs
+    ghc-options:        -fhpc
 
 Test-Suite unit-tests
     type:               detailed-0.9
     build-depends:      base, Cabal >= 1.9.2, HUnit, random, proglang-util,
                         containers, bound, prelude-extras, hashable-extras,
                         hashable, mtl
-    test-module:        HUnitTests
-    other-modules:      Distribution.TestSuite.HUnit
+    test-module:        UnitTest
+    other-modules:      Control.HUnitTests
+                        Control.Monad.HUnitTests
+                        Distribution.TestSuite.HUnit
+                        HUnitTests
 
 Library
   build-depends:        base, proglang-util, QuickCheck,

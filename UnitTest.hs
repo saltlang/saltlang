@@ -15,13 +15,13 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-module HUnitTests(
-       testsuite
+module UnitTest(
+       tests
        ) where
 
-import Test.HUnit
+import Distribution.TestSuite
+import Distribution.TestSuite.HUnit
+import HUnitTests
 
-import qualified Control.HUnitTests as Control
-
-testsuite :: Test
-testsuite = TestList [Control.testsuite]
+tests :: IO [Test]
+tests = return (convertTests testsuite)

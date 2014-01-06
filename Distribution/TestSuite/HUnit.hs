@@ -32,21 +32,22 @@ runTest test =
         else return (Finished (Fail (shows "")))
       else return (Finished (Error (shows "")))
 
-convertTests :: HUnit.Test -> Test
+convertTests :: HUnit.Test -> [Test]
 convertTests =
   let
-    convertTests' :: String -> HUnit.Test -> Test
-    convertTests' path (HUnit.TestLabel name (HUnit.TestList tests)) =
-      Group { groupTests = map (convertTests' (path ++ "." ++ name)) tests,
-              groupName = path, concurrently = True }
-    convertTests' path (HUnit.TestLabel name test) =
-      Group { groupTests = [convertTests' (path ++ "." ++ name) test],
-              groupName = path, concurrently = True }
+    convertTests' :: String -> HUnit.Test -> [Test]
+    convertTests' path (HUnit.TestLabel name test @ (HUnit.TestLabel _ _)) =
+      convertTests' (path ++ "." ++ name) test
+    convertTests' path (HUnit.TestLabel name test @ (HUnit.TestList _)) =
+      [ Group { groupTests = convertTests' (path ++ "." ++ name) test,
+                groupName = path, concurrently = True } ]
+    convertTests' path (HUnit.TestLabel name test @ (HUnit.TestCase _)) =
+      [ Test TestInstance { run = runTest test, name = path ++ "." ++ name,
+                            tags = [], options = [], setOption = undefined } ]
     convertTests' path (HUnit.TestList tests) =
-      Group { groupTests = map (convertTests' path) tests,
-              groupName = path, concurrently = True }
+      concat (map (convertTests' path) tests)
     convertTests' path test @ (HUnit.TestCase _) =
-      Test TestInstance { run = runTest test, name = path, tags = [],
-                          options = [], setOption = undefined }
+      [ Test TestInstance { run = runTest test, name = path, tags = [],
+                            options = [], setOption = undefined } ]
   in
     convertTests' ""

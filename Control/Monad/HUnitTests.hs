@@ -15,13 +15,8 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-module HUnitTests(
-       testsuite
-       ) where
+module Control.Monad.HUnitTests(testsuite) where
 
 import Test.HUnit
 
-import qualified Control.HUnitTests as Control
-
-testsuite :: Test
-testsuite = TestList [Control.testsuite]
+testsuite = TestLabel "Control" (TestList [])
