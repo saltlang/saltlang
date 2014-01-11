@@ -36,65 +36,172 @@ type Symbol = Int
 instance Default Int where
   defaultVal = 0
 
-applyNameVal = 1
-applyPosVal = point "Apply" 2 3 4
-applyEntry = Apply { applyName = applyNameVal, applyPos = applyPosVal }
+-- | Run a test case
+runTestCase :: String
+            -- ^ The name of the test case.
+            -> (ProofRecorderT Symbol IO (), ProofScript Symbol)
+            -- ^ The test case to run.
+            -> Test
+runTestCase testname (command, expected) =
+  testname ~: do
+    ((), actual) <- runProofRecorder command
+    return (expected @?= actual)
 
-genApply :: Monad m => ProofRecorderT Symbol m ()
-genApply =
-  do
-    apply applyPosVal applyNameVal
-    return ()
+-- | Generate an apply test case from parameters
+assumptionTestCase :: Monad m =>
+                      Pos
+                   -- ^ The position.
+                   -> Symbol
+                   -- ^ The name.
+                   -> (ProofRecorderT Symbol m (), ProofScript Symbol)
+                   -- ^ A monad to execute, and the proof script that
+                   -- should result from it.
+assumptionTestCase pos name =
+  let
+    doAssumption :: Monad m => ProofRecorderT Symbol m ()
+    doAssumption =
+      do
+        assumption pos name
+        return ()
+  in
+    (doAssumption, [Assumption { assumptionName = name, assumptionPos = pos }])
 
-introNameVal = 1
-introPosVal = point "Intro" 2 3 4
-introEntry = Intro { introName = introNameVal, introPos = introPosVal }
+-- | Generate an apply test from parameters
+assumptionTest :: Pos
+               -- ^ The position.
+               -> Symbol
+               -- ^ The name.
+               -> Test
+               -- ^ A test that "assumption pos name" generates a proof
+               -- script containing an Assumption element with the right
+               -- data.
+assumptionTest pos name =
+  runTestCase ("assumption " ++ show pos ++ " " ++ show name)
+              (assumptionTestCase pos name)
 
-genIntro :: Monad m => ProofRecorderT Symbol m ()
-genIntro =
-  do
-    intro introPosVal introNameVal
-    return ()
+introTestCase :: Monad m =>
+                 Pos
+              -- ^ The position.
+              -> Symbol
+              -- ^ The name.
+              -> (ProofRecorderT Symbol m (), ProofScript Symbol)
+              -- ^ A monad to execute, and the proof script that
+              -- should result from it.
+introTestCase pos name =
+  let
+    doIntro :: Monad m => ProofRecorderT Symbol m ()
+    doIntro =
+      do
+        intro pos name
+        return ()
+  in
+    (doIntro, [Intro { introName = name, introPos = pos }])
 
-cutPropVal = Var { varSym = 2, varPos = point "Cut" 1 2 3 }
-cutPosVal = point "Cut" 4 5 6
-cutEntry = Cut { cutProp = cutPropVal, cutPos = cutPosVal }
+introTest :: Pos
+          -- ^ The position.
+          -> Symbol
+          -- ^ The name.
+          -> Test
+          -- ^ A test that "intro pos name" generates a proof script
+          -- containing an Intro element with the right data.
+introTest pos name = runTestCase ("intro " ++ show pos ++ " " ++ show name)
+                                 (introTestCase pos name)
 
-genCut :: Monad m => ProofRecorderT Symbol m ()
-genCut =
-  do
-    cut cutPosVal cutPropVal
-    return ()
+cutTestCase :: Monad m =>
+               Pos
+            -- ^ The position.
+            -> Term Symbol Symbol
+            -- ^ The cut proposition.
+            -> (ProofRecorderT Symbol m (), ProofScript Symbol)
+            -- ^ A monad to execute, and the proof script that
+            -- should result from it.
+cutTestCase pos prop =
+  let
+    doCut :: Monad m => ProofRecorderT Symbol m ()
+    doCut =
+      do
+        cut pos prop
+        return ()
+  in
+    (doCut, [Cut { cutProp = prop, cutPos = pos }])
 
-applyWithPropVal = Var { varSym = 2, varPos = point "ApplyWith" 1 2 3 }
-applyWithArgsVals =
-  [ Var { varSym = 2, varPos = point "ApplyWith" 4 5 6 },
-    Var { varSym = 7, varPos = point "ApplyWith" 7 8 9 } ]
-applyWithPosVal = point "ApplyWith" 4 5 6
-applyWithEntry = ApplyWith { applyWithProp = applyWithPropVal,
-                             applyWithArgs = applyWithArgsVals,
-                             applyWithPos = applyWithPosVal }
+cutTest :: Pos
+        -- ^ The position.
+        -> Term Symbol Symbol
+        -- ^ The cut proposition.
+        -> Test
+        -- ^ A test that "cut pos prop" generates a proof script
+        -- containing a Cut element with the right data.
+cutTest pos prop = runTestCase ("cut " ++ show pos ++ " " ++ show prop)
+                               (cutTestCase pos prop)
 
-genApplyWith :: Monad m => ProofRecorderT Symbol m ()
-genApplyWith =
-  do
-    applyWith applyWithPosVal applyWithPropVal applyWithArgsVals
-    return ()
+-- | Generate an apply test case from parameters
+applyTestCase :: Monad m =>
+                 Pos
+              -- ^ The position.
+              -> Term Symbol Symbol
+              -- ^ The proposition to apply.
+              -> [Term Symbol Symbol]
+              -- ^ The arguments to the proposition.
+              -> (ProofRecorderT Symbol m (), ProofScript Symbol)
+              -- ^ A monad to execute, and the proof script that
+              -- should result from it.
+applyTestCase pos prop args =
+  let
+    doApply :: Monad m => ProofRecorderT Symbol m ()
+    doApply =
+      do
+        apply pos prop args
+        return ()
+  in
+    (doApply, [Apply { applyProp = prop, applyArgs = args, applyPos = pos }])
 
-introVarsMapsVal =
-  [ Map.fromList [ (1, 2), (3, 4) ],
-    Map.fromList [ (5, 6), (7, 8), (9, 0) ],
-    Map.empty ]
-introVarsPosVal = point "IntroVars" 2 3 4
-introVarsEntry = IntroVars { introVarsMaps = introVarsMapsVal,
-                             introVarsPos = introVarsPosVal }
+-- | Generate an apply test from parameters
+applyTest :: Pos
+          -- ^ The position.
+          -> Term Symbol Symbol
+          -- ^ The proposition to apply.
+          -> [Term Symbol Symbol]
+          -- ^ The arguments to the proposition.
+          -> Test
+          -- ^ A test that "applyWith pos name" generates a proof
+          -- script containing an ApplyWith element with the right
+          -- data.
+applyTest pos prop args =
+  runTestCase ("apply " ++ show pos ++ " " ++ show prop ++ " " ++ show args)
+              (applyTestCase pos prop args)
 
-genIntroVars :: Monad m => ProofRecorderT Symbol m ()
-genIntroVars =
-  do
-    introVars introVarsPosVal introVarsMapsVal
-    return ()
+introVarsTestCase :: Monad m =>
+                     Pos
+                  -- ^ The position.
+                  -> [Map.Map Symbol Symbol]
+                  -- ^ The renaming maps.
+                  -> (ProofRecorderT Symbol m (), ProofScript Symbol)
+                  -- ^ A monad to execute, and the proof script that
+                  -- should result from it.
+introVarsTestCase pos maps =
+  let
+    doIntro :: Monad m => ProofRecorderT Symbol m ()
+    doIntro =
+      do
+        introVars pos maps
+        return ()
+  in
+    (doIntro, [IntroVars { introVarsMaps = maps, introVarsPos = pos }])
 
+introVarsTest :: Pos
+              -- ^ The position.
+              -> [Map.Map Symbol Symbol]
+              -- ^ The renaming maps.
+              -> Test
+              -- ^ A test that "introVars pos maps" generates a proof
+              -- script containing an IntroVars element with the right
+              -- data.
+introVarsTest pos maps =
+  runTestCase ("introvars " ++ show pos ++ " " ++ show maps)
+              (introVarsTestCase pos maps)
+
+{-
 genMulti :: Monad m => ProofRecorderT Symbol m ()
 genMulti =
   do
@@ -107,25 +214,23 @@ genMulti =
 
 multiEntries =
   [ applyEntry, introEntry, cutEntry, applyWithEntry, introVarsEntry ]
-
+-}
 tests =
   test [
-    "apply" ~: do
-      (_, entry) <- runProofRecorder genApply
-      return ([applyEntry] == entry),
-    "intro" ~: do
-      (_, entry) <- runProofRecorder genIntro
-      return ([introEntry] == entry),
-    "cut" ~: do
-      (_, entry) <- runProofRecorder genCut
-      return ([cutEntry] == entry),
-    "applyWith" ~: do
-      (_, entry) <- runProofRecorder genApplyWith
-      return ([applyWithEntry] == entry),
-    "introVars" ~: do
-      (_, entry) <- runProofRecorder genIntroVars
-      return ([introVarsEntry] == entry),
+    assumptionTest (point "Assumption" 1 2 3) 1,
+    introTest (point "Intro" 4 5 6) 2,
+    cutTest (point "Cut" 4 5 6) Var { varSym = 2, varPos = point "Cut" 1 2 3 },
+    applyTest (point "Apply" 1 2 3)
+              Var { varSym = 2, varPos = point "ApplyWith" 1 2 3 }
+              [ Var { varSym = 2, varPos = point "ApplyWith" 4 5 6 },
+                Var { varSym = 7, varPos = point "ApplyWith" 7 8 9 } ],
+    introVarsTest (point "IntroVars" 2 3 4)
+                  [ Map.fromList [ (1, 2), (3, 4) ],
+                    Map.fromList [ (5, 6), (7, 8), (9, 0) ],
+                    Map.empty ]
+{-
     "multi" ~: do
       (_, entries) <- runProofRecorder genMulti
       return (multiEntries == entries)
+-}
   ]
