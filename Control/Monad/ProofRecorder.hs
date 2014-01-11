@@ -62,8 +62,9 @@ runProofRecorder :: ProofRecorder sym a
                  -- ^ The result, and the recorded proof.
 runProofRecorder = runProofRecorderT
 
-apply' :: Monad m => Pos -> sym -> (WriterT (ProofScript sym) m) ()
-apply' p name = tell [Apply { applyName = name, applyPos = p }]
+assumption' :: Monad m => Pos -> sym -> (WriterT (ProofScript sym) m) ()
+assumption' p name = tell [Assumption { assumptionName = name,
+                                        assumptionPos = p }]
 
 intro' :: Monad m => Pos -> sym -> (WriterT (ProofScript sym) m) ()
 intro' p name = tell [Intro { introName = name, introPos = p }]
@@ -76,22 +77,21 @@ introVars' p namemaps =
 cut' :: Monad m => Pos -> Term sym sym -> (WriterT (ProofScript sym) m) ()
 cut' p prop = tell [Cut { cutProp = prop, cutPos = p }]
 
-applyWith' :: Monad m => Pos -> Term sym sym -> [Term sym sym] ->
+apply' :: Monad m => Pos -> Term sym sym -> [Term sym sym] ->
               (WriterT (ProofScript sym) m) ()
-applyWith' p prop args = tell [ApplyWith { applyWithProp = prop,
-                                           applyWithArgs = args,
-                                           applyWithPos = p }]
+apply' p prop args = tell [Apply { applyProp = prop, applyArgs = args,
+                                   applyPos = p }]
 
 instance Monad m => Monad (ProofRecorderT sym m) where
   return = ProofRecorderT . return
   (ProofRecorderT m) >>= f = ProofRecorderT $ m >>= unpackProofRecorderT . f
 
 instance Monad m => MonadProof sym (ProofRecorderT sym m) where
-  apply p = ProofRecorderT . apply' p
+  assumption p = ProofRecorderT . assumption' p
   intro p = ProofRecorderT . intro' p
   introVars p = ProofRecorderT . introVars' p
   cut p = ProofRecorderT . cut' p
-  applyWith p prop = ProofRecorderT . applyWith' p prop
+  apply p prop = ProofRecorderT . apply' p prop
 
 instance MonadIO m => MonadIO (ProofRecorderT sym m) where
   liftIO = ProofRecorderT . liftIO

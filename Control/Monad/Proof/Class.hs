@@ -61,12 +61,12 @@ class Monad m => MonadProof sym m where
   -- |
   --   -------------
   --    Env, P |- P
-  apply :: Pos
-        -- ^ The position from which this originates.
-        -> sym
-        -- ^ The name of the equivalent proposition in the truth
-        -- environment
-        -> m ()
+  assumption :: Pos
+             -- ^ The position from which this originates.
+             -> sym
+             -- ^ The name of the equivalent proposition in the truth
+             -- environment
+             -> m ()
 
   -- |   Env, P |- Q
   --   ---------------
@@ -89,13 +89,13 @@ class Monad m => MonadProof sym m where
   -- |  Env |- forall (pattern) : T. P   Env |- V : T
   --   -----------------------------------------------
   --                Env |- [V/(pattern)]P
-  applyWith :: Pos
-            -- ^ The position from which this originates.
-            -> Term sym sym
-            -- ^ The proposition to apply
-            -> [Term sym sym]
-            -- ^ The argument to the application
-            -> m ()
+  apply :: Pos
+        -- ^ The position from which this originates.
+        -> Term sym sym
+        -- ^ The proposition to apply
+        -> [Term sym sym]
+        -- ^ The argument to the application
+        -> m ()
 
   -- |  Env, x_1 : T_1 ... x_n : T_n |- P
   --   -----------------------------------
@@ -110,22 +110,22 @@ class Monad m => MonadProof sym m where
             -> m ()
 
 instance MonadProof sym m => MonadProof sym (ReaderT s m) where
-  apply p = lift . apply p
+  assumption p = lift . assumption p
   intro p = lift. intro p
   introVars p = lift . introVars p
   cut p = lift . cut p
-  applyWith p prop = lift . applyWith p prop
+  apply p prop = lift . apply p prop
 
 instance MonadProof sym m => MonadProof sym (StateT s m) where
-  apply p = lift . apply p
+  assumption p = lift . assumption p
   intro p = lift. intro p
   introVars p = lift . introVars p
   cut p = lift . cut p
-  applyWith p prop = lift . applyWith p prop
+  apply p prop = lift . apply p prop
 
 instance (Monoid s, MonadProof sym m) => MonadProof sym (WriterT s m) where
-  apply p = lift . apply p
+  assumption p = lift . assumption p
   intro p = lift. intro p
   introVars p = lift . introVars p
   cut p = lift . cut p
-  applyWith p prop = lift . applyWith p prop
+  apply p prop = lift . apply p prop

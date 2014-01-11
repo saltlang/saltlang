@@ -41,11 +41,11 @@ data ProofScriptElem sym =
   -- |
   --   -------------
   --    Env, P |- P
-    Apply {
+    Assumption {
       -- | The name of the proposition in the truth environment.
-      applyName :: !sym,
+      assumptionName :: !sym,
       -- | The position of this script element.
-      applyPos :: !Pos
+      assumptionPos :: !Pos
     }
   -- |   Env, P |- Q
   --   ---------------
@@ -79,41 +79,41 @@ data ProofScriptElem sym =
   -- |  Env |- forall (pattern) : T. P   Env |- V : T
   --   -----------------------------------------------
   --                 Env |- [V/(pattern)]P
-  | ApplyWith {
+  | Apply {
       -- | The proposition to apply.
-      applyWithProp :: Term sym sym,
+      applyProp :: Term sym sym,
       -- | The argument to the proposition.
-      applyWithArgs :: [Term sym sym],
+      applyArgs :: [Term sym sym],
       -- | The position of this script element.
-      applyWithPos :: !Pos
+      applyPos :: !Pos
     }
-  deriving (Ord, Eq)
+  deriving (Show, Ord, Eq)
 
 -- | Perform the action represented by a proof script element inside a
 -- proof monad.
 runScriptElem :: (Ord sym, MonadProof sym m) => ProofScriptElem sym -> m ()
-runScriptElem Apply { applyName = name, applyPos = p } = apply p name
+runScriptElem Assumption { assumptionName = name, assumptionPos = p } =
+  assumption p name
 runScriptElem Intro { introName = name, introPos = p } = intro p name
 runScriptElem IntroVars { introVarsMaps = namemaps, introVarsPos = p } =
     introVars p namemaps
 runScriptElem Cut { cutProp = prop, cutPos = p } = cut p prop
-runScriptElem ApplyWith { applyWithProp = prop, applyWithArgs = args,
-                          applyWithPos = p } =
-  applyWith p prop args
+runScriptElem Apply { applyProp = prop, applyArgs = args, applyPos = p } =
+  apply p prop args
 
 -- | Perform the actions represented by a proof script inside a proof monad.
 runScript :: (Ord sym, MonadProof sym m) => ProofScript sym -> m ()
 runScript = mapM_ runScriptElem
 
 instance Position (ProofScriptElem sym) where
-  pos Apply { applyPos = p } = p
+  pos Assumption { assumptionPos = p } = p
   pos Intro { introPos = p } = p
   pos IntroVars { introVarsPos = p } = p
   pos Cut { cutPos = p } = p
-  pos ApplyWith { applyWithPos = p } = p
+  pos Apply { applyPos = p } = p
 
 instance (Default sym, Hashable sym) => Hashable (ProofScriptElem sym) where
-  hashWithSalt s Apply { applyName = name, applyPos = p } =
+  hashWithSalt s Assumption { assumptionName = name, assumptionPos = p } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt` p
   hashWithSalt s Intro { introName = name, introPos = p } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` name `hashWithSalt` p
@@ -121,7 +121,6 @@ instance (Default sym, Hashable sym) => Hashable (ProofScriptElem sym) where
     s `hashWithSalt` (3 :: Int) `hashWithSalt` p
   hashWithSalt s Cut { cutProp = prop, cutPos = p } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt` prop `hashWithSalt` p
-  hashWithSalt s ApplyWith { applyWithProp = prop, applyWithArgs = args,
-                             applyWithPos = p } =
+  hashWithSalt s Apply { applyProp = prop, applyArgs = args, applyPos = p } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt`
     prop `hashWithSalt` args `hashWithSalt` p
