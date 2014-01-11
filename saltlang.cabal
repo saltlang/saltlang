@@ -89,7 +89,7 @@ Build-type:             Simple
 Cabal-version:          >= 1.9.2
 
 Executable RunHUnitTests
-    Main-Is:            HUnitTestMain.hs
+    Main-Is:            UnitTestMain.hs
     build-depends:      base, Cabal >= 1.9.2, HUnit, random, proglang-util,
                         containers, bound, prelude-extras, hashable-extras,
                         hashable, mtl, QuickCheck
@@ -101,14 +101,14 @@ Test-Suite unit-tests
                         containers, bound, prelude-extras, hashable-extras,
                         hashable, mtl, QuickCheck
     test-module:        UnitTest
-    other-modules:      Control.HUnitTests
-                        Control.Monad.HUnitTests
-                        Control.Monad.ProofRecorder
-                        Control.Monad.ProofRecorder.HUnitTests
+    other-modules:      Control.Monad.ProofRecorder
                         Distribution.TestSuite.HUnit
-                        HUnitTests
                         Language.Salt.Core.Proofs.ProofScript
                         Language.Salt.Core.Syntax
+                        Test.UnitTests
+                        Test.UnitTests.Control
+                        Test.UnitTests.Control.Monad
+                        Test.UnitTests.Control.Monad.ProofRecorder
 
 Library
   build-depends:        base, proglang-util, QuickCheck,

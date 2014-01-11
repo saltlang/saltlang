@@ -1,4 +1,4 @@
--- Copyright (c) 2013 Eric McCorkle.
+-- Copyright (c) 2014 Eric McCorkle.
 --
 -- This program is free software; you can redistribute it and/or
 -- modify it under the terms of the GNU General Public License as
@@ -15,6 +15,13 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-module Language.QuickCheckTests(tests) where
+module Test.UnitTests(
+       testsuite
+       ) where
 
-import Language.Salt.QuickCheckTests
+import Test.HUnit
+
+import qualified Test.UnitTests.Control as Control
+
+testsuite :: Test
+testsuite = TestList [Control.testsuite]

@@ -21,7 +21,7 @@ module UnitTest(
 
 import Distribution.TestSuite
 import Distribution.TestSuite.HUnit
-import HUnitTests
+import Test.UnitTests
 
 tests :: IO [Test]
 tests = return (convertTests testsuite)

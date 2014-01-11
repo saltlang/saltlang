@@ -1,4 +1,4 @@
--- Copyright (c) 2013 Eric McCorkle.
+-- Copyright (c) 2014 Eric McCorkle.
 --
 -- This program is free software; you can redistribute it and/or
 -- modify it under the terms of the GNU General Public License as
@@ -15,12 +15,17 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-module Language.Salt.QuickCheckTests(tests) where
+module Main where
 
-import Distribution.TestSuite
+import Test.UnitTests
+import System.Exit(exitFailure)
+import Test.HUnit
 
-import qualified Language.Salt.Core.QuickCheckTests as Core
---import qualified Language.Salt.Core.Surface as Surface
-
-tests :: [Test]
-tests = [testGroup "Core" (Core.tests {- ++ Surface.tests -})]
+main :: IO ()
+main =
+  do
+    (counts, shows) <- runTestText putTextToShowS testsuite
+    putStr (shows "")
+    if errors counts /= 0 || failures counts /= 0
+      then exitFailure
+      else return ()

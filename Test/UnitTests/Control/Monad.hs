@@ -15,9 +15,9 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-module Control.Monad.HUnitTests(testsuite) where
+module Test.UnitTests.Control.Monad(testsuite) where
 
 import Test.HUnit
-import qualified Control.Monad.ProofRecorder.HUnitTests as ProofRecorder
+import qualified Test.UnitTests.Control.Monad.ProofRecorder as ProofRecorder
 
 testsuite = TestLabel "Monad" (TestList [ ProofRecorder.testsuite ])

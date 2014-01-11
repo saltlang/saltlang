@@ -1,4 +1,4 @@
--- Copyright (c) 2013 Eric McCorkle.
+-- Copyright (c) 2014 Eric McCorkle.
 --
 -- This program is free software; you can redistribute it and/or
 -- modify it under the terms of the GNU General Public License as
@@ -15,10 +15,9 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 
-module QuickCheckTests(tests) where
+module Test.UnitTests.Control(testsuite) where
 
-import Distribution.TestSuite
-import qualified Language.QuickCheckTests as Language
+import Test.HUnit
+import qualified Test.UnitTests.Control.Monad as Monad
 
-tests :: IO [Test]
-tests = return Language.tests
+testsuite = TestLabel "Control" Monad.testsuite
