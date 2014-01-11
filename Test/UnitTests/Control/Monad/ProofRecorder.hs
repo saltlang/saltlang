@@ -25,11 +25,12 @@ import Data.Default
 import Language.Salt.Core.Proofs.ProofScript
 import Language.Salt.Core.Syntax
 import Test.HUnit
+import Test.Utils.ComboTests
 
 import qualified Data.Map as Map
 
 testsuite :: Test
-testsuite = TestLabel "ProofRecorder" tests
+testsuite = TestLabel "ProofRecorder" (TestList tests)
 
 type Symbol = Int
 
@@ -215,22 +216,45 @@ genMulti =
 multiEntries =
   [ applyEntry, introEntry, cutEntry, applyWithEntry, introVarsEntry ]
 -}
+
+-- Data for generating combo tests.  Add more cases here to expand coverage.
+symbols = [ 1, 2, 3 ]
+positions = [ point "point" 1 2 3, internal "internal",
+              range "range" 1 2 3 4 5 6 ]
+terms = [ Var { varSym = 1, varPos = internal "term" } ]
+args = [ [ Var { varSym = 1, varPos = internal "term" },
+           Var { varSym = 2, varPos = internal "term" },
+           Var { varSym = 3, varPos = internal "term" } ],
+         [ Var { varSym = 1, varPos = internal "term" },
+           Var { varSym = 2, varPos = internal "term" } ],
+         [ Var { varSym = 1, varPos = internal "term" } ],
+         [] ]
+maps = [ [ Map.fromList [ (1, 2), (3, 4), (5, 5), (4, 3) ],
+           Map.fromList [ (1, 2), (3, 4) ],
+           Map.fromList [ (1, 2) ],
+           Map.empty ],
+         [ Map.fromList [ (1, 2), (3, 4) ],
+           Map.fromList [ (1, 2) ],
+           Map.empty ],
+         [ Map.fromList [ (1, 2) ],
+           Map.empty ],
+         [ Map.empty ],
+         [] ]
+
+assumptionComboTest = comboTest2 assumptionTest positions symbols
+introComboTest = comboTest2 introTest positions symbols
+cutComboTest = comboTest2 cutTest positions terms
+applyComboTest = comboTest3 applyTest positions terms args
+introVarsComboTest = comboTest2 introVarsTest positions maps
+
 tests =
-  test [
-    assumptionTest (point "Assumption" 1 2 3) 1,
-    introTest (point "Intro" 4 5 6) 2,
-    cutTest (point "Cut" 4 5 6) Var { varSym = 2, varPos = point "Cut" 1 2 3 },
-    applyTest (point "Apply" 1 2 3)
-              Var { varSym = 2, varPos = point "ApplyWith" 1 2 3 }
-              [ Var { varSym = 2, varPos = point "ApplyWith" 4 5 6 },
-                Var { varSym = 7, varPos = point "ApplyWith" 7 8 9 } ],
-    introVarsTest (point "IntroVars" 2 3 4)
-                  [ Map.fromList [ (1, 2), (3, 4) ],
-                    Map.fromList [ (5, 6), (7, 8), (9, 0) ],
-                    Map.empty ]
+  assumptionComboTest ++
+  introComboTest ++
+  cutComboTest ++
+  applyComboTest ++
+  introVarsComboTest
 {-
     "multi" ~: do
       (_, entries) <- runProofRecorder genMulti
       return (multiEntries == entries)
 -}
-  ]
