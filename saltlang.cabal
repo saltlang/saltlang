@@ -109,6 +109,7 @@ Test-Suite unit-tests
                         Test.UnitTests.Control
                         Test.UnitTests.Control.Monad
                         Test.UnitTests.Control.Monad.ProofRecorder
+                        Test.Utils.ComboTests
 
 Library
   build-depends:        base, proglang-util, QuickCheck,
