@@ -21,7 +21,8 @@ module Test.Utils.ComboTests(
        combos3,
        combos4,
        combos5,
-       combos6
+       combos6,
+       allLists
        ) where
 
 import Test.HUnit
@@ -93,3 +94,15 @@ combos6 test args1 args2 args3 args4 args5 args6 =
                           tests args3)
                  tests args2)
         [] args1
+
+-- | Given a list of possibilities, build all possible lists up to
+-- length n.  The empty list is not included.
+allLists :: Int -> [a] -> [[a]]
+allLists n items
+  | n <= 1 =
+    map (\a -> [a]) items
+  | otherwise =
+    let
+      lists = allLists (n - 1) items
+    in
+      combos2 (:) items lists
