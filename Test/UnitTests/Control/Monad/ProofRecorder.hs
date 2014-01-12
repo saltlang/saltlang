@@ -788,9 +788,9 @@ ioInProofRecorderTest (beforename, before, beforescript)
       do
         dirname <- liftIO prepareScratchDir
         before
-        liftIO (writeFile (dirname ++ testfile) teststring)
+        liftIO (writeFile (dirname ++ "/" ++ testfile) teststring)
         after
-        liftIO (readFile (dirname ++ testfile))
+        liftIO (readFile (dirname ++ "/" ++ testfile))
 
     scriptexpected = beforescript ++ afterscript
     testname = "IO operations interleaved with " ++
