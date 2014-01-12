@@ -988,10 +988,3 @@ tests = (map runTestCase proofRecorderCases) ++
         getInProofRecorderComboTest ++
         putInProofRecorderComboTest ++
         ioInProofRecorderComboTest
-
---  assumptionInStateComboTest
-{-
-    "multi" ~: do
-      (_, entries) <- runProofRecorder genMulti
-      return (multiEntries == entries)
--}
