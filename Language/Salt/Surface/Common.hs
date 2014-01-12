@@ -25,7 +25,6 @@ module Language.Salt.Surface.Common(
        ) where
 
 import Data.Hashable
-import Test.QuickCheck
 import Text.Format
 
 -- | Scope classes.  These define the exact semantics of a scoped
@@ -139,15 +138,3 @@ instance Show Visibility where
 instance Format ScopeClass where format = text . show
 instance Format TruthClass where format = text . show
 instance Format Visibility where format = text . show
-
-instance Arbitrary ScopeClass where
-  arbitrary = elements [ Module, Signature, Class, Interface ]
-
-instance Arbitrary TruthClass where
-  arbitrary = elements [ Theorem, Invariant ]
-
-instance Arbitrary AliasClass where
-  arbitrary = elements [ Import, Open, Export ]
-
-instance Arbitrary Visibility where
-  arbitrary = elements [ Private, Protected, Public ]
