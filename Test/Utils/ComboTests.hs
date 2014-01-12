@@ -17,25 +17,26 @@
 
 -- | A module with utility code for constructing combinatorial tests.
 module Test.Utils.ComboTests(
-       comboTest2,
-       comboTest3,
-       comboTest4,
-       comboTest5
+       combos2,
+       combos3,
+       combos4,
+       combos5,
+       combos6
        ) where
 
 import Test.HUnit
 
 -- | Build a combo-test with two dimensions.
-comboTest2 :: (a -> b -> Test) -> [a] -> [b] -> [Test]
-comboTest2 test args1 args2 =
+combos2 :: (a -> b -> z) -> [a] -> [b] -> [z]
+combos2 test args1 args2 =
   foldr (\arg1 tests ->
            foldr (\arg2 tests -> test arg1 arg2 : tests)
                  tests args2)
         [] args1
 
 -- | Build a combo-test with three dimensions.
-comboTest3 :: (a -> b -> c -> Test) -> [a] -> [b] -> [c] -> [Test]
-comboTest3 test args1 args2 args3 =
+combos3 :: (a -> b -> c -> z) -> [a] -> [b] -> [c] -> [z]
+combos3 test args1 args2 args3 =
   foldr (\arg1 tests ->
            foldr (\arg2 tests ->
                     foldr (\arg3 tests -> test arg1 arg2 arg3 : tests)
@@ -44,8 +45,8 @@ comboTest3 test args1 args2 args3 =
         [] args1
 
 -- | Build a combo-test with four dimensions.
-comboTest4 :: (a -> b -> c -> d -> Test) -> [a] -> [b] -> [c] -> [d] -> [Test]
-comboTest4 test args1 args2 args3 args4 =
+combos4 :: (a -> b -> c -> d -> z) -> [a] -> [b] -> [c] -> [d] -> [z]
+combos4 test args1 args2 args3 args4 =
   foldr (\arg1 tests ->
            foldr (\arg2 tests ->
                     foldr (\arg3 tests ->
@@ -57,9 +58,9 @@ comboTest4 test args1 args2 args3 args4 =
         [] args1
 
 -- | Build a combo-test with five dimensions.
-comboTest5 :: (a -> b -> c -> d -> e -> Test) ->
-              [a] -> [b] -> [c] -> [d] -> [e] -> [Test]
-comboTest5 test args1 args2 args3 args4 args5 =
+combos5 :: (a -> b -> c -> d -> e -> z) ->
+           [a] -> [b] -> [c] -> [d] -> [e] -> [z]
+combos5 test args1 args2 args3 args4 args5 =
   foldr (\arg1 tests ->
            foldr (\arg2 tests ->
                     foldr (\arg3 tests ->
@@ -67,6 +68,26 @@ comboTest5 test args1 args2 args3 args4 args5 =
                                       foldr (\arg5 tests ->
                                                test arg1 arg2 arg3 arg4 arg5 :
                                                tests)
+                                            tests args5)
+                                   tests args4)
+                          tests args3)
+                 tests args2)
+        [] args1
+
+-- | Build a combo-test with five dimensions.
+combos6 :: (a -> b -> c -> d -> e -> f -> z) ->
+           [a] -> [b] -> [c] -> [d] -> [e] -> [f] -> [z]
+combos6 test args1 args2 args3 args4 args5 args6 =
+  foldr (\arg1 tests ->
+           foldr (\arg2 tests ->
+                    foldr (\arg3 tests ->
+                             foldr (\arg4 tests ->
+                                      foldr (\arg5 tests ->
+                                              foldr (\arg6 tests ->
+                                                      test arg1 arg2 arg3
+                                                           arg4 arg5 arg6:
+                                                      tests)
+                                                    tests args6)
                                             tests args5)
                                    tests args4)
                           tests args3)

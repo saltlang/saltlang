@@ -28,6 +28,7 @@ module Control.Monad.ProofRecorder(
        ) where
 
 import Control.Monad.Proof.Class
+import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Writer
 import Data.Map(Map)
@@ -102,3 +103,8 @@ instance MonadTrans (ProofRecorderT w) where
 instance MonadState s m => MonadState s (ProofRecorderT w m) where
   get = lift get
   put = lift . put
+{-
+instance MonadReader s m => MonadReader s (ProofRecorderT w m) where
+  ask = lift ask
+  local func (ProofRecorderT m) = ProofRecorderT ((lift (local func)) m)
+-}

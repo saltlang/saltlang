@@ -101,7 +101,8 @@ Test-Suite unit-tests
                         containers, bound, prelude-extras, hashable-extras,
                         hashable, mtl, QuickCheck
     test-module:        UnitTest
-    other-modules:      Control.Monad.ProofRecorder
+    other-modules:      Control.Monad.Proof.Class
+                        Control.Monad.ProofRecorder
                         Distribution.TestSuite.HUnit
                         Language.Salt.Core.Proofs.ProofScript
                         Language.Salt.Core.Syntax
