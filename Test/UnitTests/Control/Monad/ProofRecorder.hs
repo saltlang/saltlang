@@ -16,7 +16,8 @@
 -- 02110-1301 USA
 
 module Test.UnitTests.Control.Monad.ProofRecorder(
-       testsuite
+       testsuite,
+       proofRecorderCases
        ) where
 
 import Control.Monad.ProofRecorder
@@ -29,6 +30,7 @@ import Language.Salt.Core.Proofs.ProofScript
 import Language.Salt.Core.Syntax
 import Test.HUnit
 import Test.Utils.ComboTests
+import Test.Utils.ScratchDirs
 
 import qualified Data.Map as Map
 
@@ -709,20 +711,105 @@ introVarsInWriterTest (beforename, before, beforeval)
     runRecorderInWriterTestCase (testname, command, scriptexpected,
                                  beforeval ++ afterval)
 
-{-
-genMulti :: Monad m => ProofRecorderT Symbol m ()
-genMulti =
-  do
-    apply applyPosVal applyNameVal
-    intro introPosVal introNameVal
-    cut cutPosVal cutPropVal
-    applyWith applyWithPosVal applyWithPropVal applyWithArgsVals
-    introVars introVarsPosVal introVarsMapsVal
-    return ()
+getInProofRecorderTest :: Int
+                       -- ^ The initial state
+                       -> (String, ProofRecorderT Symbol (StateT Int IO) (),
+                           ProofScript Symbol)
+                       -- ^ The proof recorder to run before
+                       -> (String, ProofRecorderT Symbol (StateT Int IO) (),
+                           ProofScript Symbol)
+                       -- ^ The proof recorder to run after
+                       -> Test
+getInProofRecorderTest initial (beforename, before, beforescript)
+                       (aftername, after, afterscript) =
+  let
+    command :: ProofRecorderT Symbol (StateT Int IO) Int
+    command =
+      do
+        before
+        out <- get
+        after
+        return out
 
-multiEntries =
-  [ applyEntry, introEntry, cutEntry, applyWithEntry, introVarsEntry ]
--}
+    scriptexpected = beforescript ++ afterscript
+    testname = "get in between " ++ beforename ++ " and " ++ aftername
+  in
+    testname ~: do
+      ((resultactual, scriptactual), stateactual) <-
+        runStateT (runProofRecorderT command) initial
+      return (scriptexpected == scriptactual &&
+              initial == stateactual && initial == resultactual)
+
+putInProofRecorderTest :: Int
+                       -- ^ The initial state
+                       -> Int
+                       -- ^ The value to put
+                       -> (String, ProofRecorderT Symbol (StateT Int IO) (),
+                           ProofScript Symbol)
+                       -- ^ The proof recorder to run before
+                       -> (String, ProofRecorderT Symbol (StateT Int IO) (),
+                           ProofScript Symbol)
+                       -- ^ The proof recorder to run after
+                       -> Test
+putInProofRecorderTest initial putval (beforename, before, beforescript)
+                       (aftername, after, afterscript) =
+  let
+    command :: ProofRecorderT Symbol (StateT Int IO) ()
+    command =
+      do
+        before
+        put putval
+        after
+
+    scriptexpected = beforescript ++ afterscript
+    testname = "put " ++ show putval ++ " in between " ++
+               beforename ++ " and " ++ aftername
+  in
+    testname ~: do
+      (((), scriptactual), stateactual) <-
+        runStateT (runProofRecorderT command) initial
+      return (scriptexpected == scriptactual && putval == stateactual)
+
+ioInProofRecorderTest :: (String, ProofRecorderT Symbol IO (),
+                          ProofScript Symbol)
+                      -- ^ The proof recorder to run before
+                      -> (String, ProofRecorderT Symbol IO (),
+                          ProofScript Symbol)
+                      -- ^ The proof recorder to run after
+                      -> Test
+ioInProofRecorderTest (beforename, before, beforescript)
+                      (aftername, after, afterscript) =
+  let
+    teststring = "teststring"
+    testfile = "testfile"
+
+    command :: ProofRecorderT Symbol IO String
+    command =
+      do
+        dirname <- liftIO prepareScratchDir
+        before
+        liftIO (writeFile (dirname ++ testfile) teststring)
+        after
+        liftIO (readFile (dirname ++ testfile))
+
+    scriptexpected = beforescript ++ afterscript
+    testname = "IO operations interleaved with " ++
+               beforename ++ " and " ++ aftername
+  in
+    testname ~: do
+      (contents, scriptactual) <- runProofRecorderT command
+      return (scriptexpected == scriptactual && contents == teststring)
+
+combineCases :: Monad m =>
+                (String, ProofRecorderT Symbol m (), ProofScript Symbol)
+             -- ^ The first case.
+             -> (String, ProofRecorderT Symbol m (), ProofScript Symbol)
+             -- ^ The second case.
+             -> (String, ProofRecorderT Symbol m (), ProofScript Symbol)
+             -- ^ A combined case.
+combineCases (firstname, first, firstscript)
+             (secondname, second, secondscript) =
+  (firstname ++ secondname, first >> second, firstscript ++ secondscript)
 
 -- Data for generating combo tests.  Add more cases here to expand coverage.
 symbols = [ 1, 2, 3 ]
@@ -752,7 +839,7 @@ maps = [ [ Map.fromList [ (1, 2), (3, 4), (5, 5), (4, 3) ],
          [ Map.empty ],
          [] ]
 
-initials = [ 1, 2, 3 ]
+ints = [ 1, 2, 3 ]
 
 -- | Writer monads, and what we expect to get out of them.
 writerMonads :: Monad m => [(String, WriterT [Int] m (), [Int])]
@@ -771,48 +858,90 @@ stateMonads = [ ("get", get, id),
                 ("get >>= (\n -> put (n + 1)) >> get",
                  get >>= (\n -> put (n + 1)) >> get, (+ 1)) ]
 
+assumptionComboTest :: Monad m =>
+                       [(String, ProofRecorderT Symbol m (),
+                         ProofScript Symbol)]
 assumptionComboTest = combos2 assumptionTestCase positions symbols
+
+introComboTest :: Monad m =>
+                  [(String, ProofRecorderT Symbol m (), ProofScript Symbol)]
 introComboTest = combos2 introTestCase positions symbols
+
+cutComboTest :: Monad m =>
+                [(String, ProofRecorderT Symbol m (), ProofScript Symbol)]
 cutComboTest = combos2 cutTestCase positions terms
+
+applyComboTest :: Monad m =>
+                  [(String, ProofRecorderT Symbol m (), ProofScript Symbol)]
 applyComboTest = combos3 applyTestCase positions terms args
+
+introVarsComboTest :: Monad m =>
+                      [(String, ProofRecorderT Symbol m (), ProofScript Symbol)]
 introVarsComboTest = combos2 introVarsTestCase positions maps
 
-proofRecorderMonads =
+proofRecorderCases :: Monad m =>
+                      [(String, ProofRecorderT Symbol m (), ProofScript Symbol)]
+proofRecorderCases =
   assumptionComboTest ++
   introComboTest ++
   cutComboTest ++
   applyComboTest ++
   introVarsComboTest
 
-assumptionInStateComboTest = combos5 assumptionInStateTest initials stateMonads
+proofRecorderSimpleCases :: Monad m =>
+                            [(String, ProofRecorderT Symbol m (),
+                              ProofScript Symbol)]
+proofRecorderSimpleCases =
+  [ assumptionTestCase (internal "internal") 1,
+    introTestCase (internal "internal") 1,
+    cutTestCase (internal "internal")
+                Var { varSym = 1, varPos = internal "term" },
+    applyTestCase (internal "internal")
+                  Var { varSym = 1, varPos = internal "term" }
+                  [ Var { varSym = 1, varPos = internal "term" },
+                    Var { varSym = 2, varPos = internal "term" },
+                    Var { varSym = 3, varPos = internal "term" } ],
+    introVarsTestCase (internal "internal")
+                      [ Map.fromList [ (1, 2), (3, 4), (5, 5), (4, 3) ],
+                        Map.fromList [ (1, 2), (3, 4) ],
+                        Map.fromList [ (1, 2) ],
+                        Map.empty ] ]
+  
+proofRecorderMultiCases :: Monad m =>
+                           [(String, ProofRecorderT Symbol m (),
+                             ProofScript Symbol)]
+proofRecorderMultiCases =
+  map (foldr1 combineCases) (allLists 4 proofRecorderSimpleCases)
+
+assumptionInStateComboTest = combos5 assumptionInStateTest ints stateMonads
                                      stateMonads positions symbols
 
-introInStateComboTest = combos5 introInStateTest initials stateMonads
+introInStateComboTest = combos5 introInStateTest ints stateMonads
                                 stateMonads positions symbols
 
-cutInStateComboTest = combos5 cutInStateTest initials stateMonads
+cutInStateComboTest = combos5 cutInStateTest ints stateMonads
                               stateMonads positions terms
 
-applyInStateComboTest = combos6 applyInStateTest initials stateMonads
+applyInStateComboTest = combos6 applyInStateTest ints stateMonads
                                 stateMonads positions terms args
 
-introVarsInStateComboTest = combos5 introVarsInStateTest initials stateMonads
+introVarsInStateComboTest = combos5 introVarsInStateTest ints stateMonads
                                     stateMonads positions maps
 
 assumptionInReaderComboTest =
-  combos5 assumptionInReaderTest initials readerMonads
+  combos5 assumptionInReaderTest ints readerMonads
           readerMonads positions symbols
 
-introInReaderComboTest = combos5 introInReaderTest initials readerMonads
+introInReaderComboTest = combos5 introInReaderTest ints readerMonads
                                  readerMonads positions symbols
 
-cutInReaderComboTest = combos5 cutInReaderTest initials readerMonads
+cutInReaderComboTest = combos5 cutInReaderTest ints readerMonads
                                readerMonads positions terms
 
-applyInReaderComboTest = combos6 applyInReaderTest initials readerMonads
+applyInReaderComboTest = combos6 applyInReaderTest ints readerMonads
                                  readerMonads positions terms args
 
-introVarsInReaderComboTest = combos5 introVarsInReaderTest initials readerMonads
+introVarsInReaderComboTest = combos5 introVarsInReaderTest ints readerMonads
                                      readerMonads positions maps
 
 assumptionInWriterComboTest =
@@ -830,7 +959,17 @@ applyInWriterComboTest =
 introVarsInWriterComboTest =
   combos4 introVarsInWriterTest writerMonads writerMonads positions maps
 
-tests = (map runTestCase proofRecorderMonads) ++
+getInProofRecorderComboTest =
+  combos3 getInProofRecorderTest ints proofRecorderCases proofRecorderCases
+
+putInProofRecorderComboTest =
+  combos4 putInProofRecorderTest ints ints proofRecorderCases proofRecorderCases
+
+ioInProofRecorderComboTest =
+  combos2 ioInProofRecorderTest proofRecorderCases proofRecorderCases
+
+tests = (map runTestCase proofRecorderCases) ++
+        (map runTestCase proofRecorderMultiCases) ++
         assumptionInStateComboTest ++
         introInStateComboTest ++
         cutInStateComboTest ++
@@ -845,7 +984,10 @@ tests = (map runTestCase proofRecorderMonads) ++
         introInWriterComboTest ++
         cutInWriterComboTest ++
         applyInWriterComboTest ++
-        introVarsInWriterComboTest
+        introVarsInWriterComboTest ++
+        getInProofRecorderComboTest ++
+        putInProofRecorderComboTest ++
+        ioInProofRecorderComboTest
 
 --  assumptionInStateComboTest
 {-
