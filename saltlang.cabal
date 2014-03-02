@@ -90,15 +90,15 @@ Cabal-version:          >= 1.9.2
 
 Executable RunHUnitTests
     Main-Is:            UnitTestMain.hs
-    build-depends:      base, Cabal >= 1.9.2, HUnit, random, proglang-util,
-                        containers, bound, prelude-extras, hashable-extras,
+    build-depends:      base, Cabal, HUnit, proglang-util, containers,
+                        bound, prelude-extras, hashable-extras,
                         hashable, mtl, directory
     ghc-options:        -fhpc
 
 Test-Suite unit-tests
     type:               detailed-0.9
-    build-depends:      base, Cabal >= 1.9.2, HUnit, random, proglang-util,
-                        containers, bound, prelude-extras, hashable-extras,
+    build-depends:      base, Cabal, HUnit, proglang-util, containers,
+                        bound, prelude-extras, hashable-extras,
                         hashable, mtl, directory
     test-module:        UnitTest
     other-modules:      Control.Monad.Proof.Class
