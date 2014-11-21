@@ -3,12 +3,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module Language.Salt.Surface.Lexer(
-       SaltLexer,
+       Lexer,
        lexer,
        lex
        ) where
 
-import Control.Monad.Lexer hiding (startComment)
+import Control.Monad.Genpos
 import Control.Monad.Keywords
 import Control.Monad.Messages
 import Control.Monad.SourceBuffer hiding (linebreak)
@@ -25,6 +25,7 @@ import System.IO
 import Text.Escapes.ByteString.Lazy
 
 import qualified Control.Monad.CommentBuffer as CommentBuffer
+import qualified Control.Monad.Lexer as Lexer
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
 import qualified Data.ByteString.Lazy as Lazy hiding (uncons)
 import qualified Data.ByteString.UTF8 as Strict
@@ -180,19 +181,19 @@ tokens :-
 
 {
 
-hexLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+hexLiteral :: Lazy.ByteString -> Position -> Lexer Token
 hexLiteral bstr = return . Num (Numbers.hexLiteral bstr)
 
-decLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+decLiteral :: Lazy.ByteString -> Position -> Lexer Token
 decLiteral bstr = return . Num (Numbers.decLiteral bstr)
 
-octLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+octLiteral :: Lazy.ByteString -> Position -> Lexer Token
 octLiteral bstr = return . Num (Numbers.octLiteral bstr)
 
-binLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+binLiteral :: Lazy.ByteString -> Position -> Lexer Token
 binLiteral bstr = return . Num (Numbers.binLiteral bstr)
 
-singleChar :: Lazy.ByteString -> Position -> SaltLexer Token
+singleChar :: Lazy.ByteString -> Position -> Lexer Token
 singleChar bstr =
   case Lazy.toString bstr of
     "(" -> return . LParen
@@ -210,7 +211,7 @@ singleChar bstr =
     str -> error $! "Unexpected single character " ++ str
 
 -- | Produce a character literal from an unescaped character
-unescapedChar :: Lazy.ByteString -> Position -> SaltLexer Token
+unescapedChar :: Lazy.ByteString -> Position -> Lexer Token
 unescapedChar bstr =
   case Lazy.uncons bstr of
     Just (chr, rest)
@@ -219,25 +220,25 @@ unescapedChar bstr =
     Nothing -> error $! "Couldn't decode string " ++ show bstr
 
 -- | Produce a character literal from an escaped character
-escapedChar :: Lazy.ByteString -> Position -> SaltLexer Token
+escapedChar :: Lazy.ByteString -> Position -> Lexer Token
 escapedChar bstr = return . Character (fromEscape bstr)
 
 -- | Start a string literal
-startString :: Position -> SaltLexer ()
+startString :: Position -> Lexer ()
 startString pos =
   do
     us <- alexGetUserState
     alexSetUserState us { userStringBuf = [], userStartPos = pos }
 
 -- | Add to the string literal buffer
-stringContent :: Lazy.ByteString -> SaltLexer ()
+stringContent :: Lazy.ByteString -> Lexer ()
 stringContent str =
   do
     us @ UserState { userStringBuf = buf } <- alexGetUserState
     alexSetUserState us { userStringBuf = str : buf }
 
 -- | Add an escaped character to the string literal buffer
-escapedStringContent :: Lazy.ByteString -> SaltLexer ()
+escapedStringContent :: Lazy.ByteString -> Lexer ()
 escapedStringContent str =
   do
     us @ UserState { userStringBuf = buf } <- alexGetUserState
@@ -245,7 +246,7 @@ escapedStringContent str =
                             Lazy.fromString [fromEscape str] : buf }
 
 -- | Terminate a string literal and return a token.
-bufferedString :: Position -> SaltLexer Token
+bufferedString :: Position -> Lexer Token
 bufferedString endpos =
   do
     UserState { userStartPos = startpos,
@@ -254,7 +255,7 @@ bufferedString endpos =
     return (String (Lazy.toStrict (Lazy.concat (reverse buf))) pos)
 
 -- | Start a new comment
-startComment :: Lazy.ByteString -> Position -> SaltLexer ()
+startComment :: Lazy.ByteString -> Position -> Lexer ()
 startComment bstr pos =
   do
     us <- alexGetUserState
@@ -263,11 +264,11 @@ startComment bstr pos =
     CommentBuffer.appendComment bstr
 
 -- | Append comment text to the current comment
-commentText :: Lazy.ByteString -> SaltLexer ()
+commentText :: Lazy.ByteString -> Lexer ()
 commentText = CommentBuffer.appendComment
 
 -- | Record an nested opening comment
-enterComment :: Lazy.ByteString -> SaltLexer ()
+enterComment :: Lazy.ByteString -> Lexer ()
 enterComment bstr =
   do
     us @ UserState { userCommentDepth = depth } <- alexGetUserState
@@ -275,7 +276,7 @@ enterComment bstr =
     CommentBuffer.appendComment bstr
 
 -- | Record a possibly nested close comment
-leaveComment :: Lazy.ByteString -> SaltLexer ()
+leaveComment :: Lazy.ByteString -> Lexer ()
 leaveComment bstr =
   do
     CommentBuffer.appendComment bstr
@@ -289,17 +290,18 @@ leaveComment bstr =
         return ()
 
 -- | Add a full comment to the previous comments buffer
-fullComment :: Lazy.ByteString -> SaltLexer ()
+fullComment :: Lazy.ByteString -> Lexer ()
 fullComment = CommentBuffer.addComment
 
 -- | Save previous comments at the given position and clear the
 -- comment buffer (this is used in conjuction with @report@,
 -- ie. @report bufferedComments@)
-bufferedComments :: Position -> SaltLexer ()
+bufferedComments :: Position -> Lexer ()
 bufferedComments pos = CommentBuffer.saveCommentsAsPreceeding pos >>
 		       CommentBuffer.clearComments
 
-type SaltLexer = AlexT UserState (MessagesT [Message] Message (Lexer Token))
+type Lexer = AlexT UserState (MessagesT [Message] Message
+                                        (Lexer.Lexer Token))
 
 data UserState =
   UserState {
@@ -315,12 +317,12 @@ initUserState :: UserState
 initUserState = UserState { userStringBuf = [], userStartPos = undefined,
                             userCommentDepth = 0 }
 
-type AlexAction = AlexMonadAction SaltLexer Token
+type AlexAction = AlexMonadAction Lexer Token
 
 type AlexState = AlexInternalState UserState
 
-scanWrapper :: AlexResultHandlers SaltLexer Token ->
-               AlexInput -> Int -> SaltLexer Token
+scanWrapper :: AlexResultHandlers Lexer Token ->
+               AlexInput -> Int -> Lexer Token
 scanWrapper handlers inp sc =
   case alexScan inp sc of
     AlexEOF -> handleEOF handlers
@@ -328,7 +330,7 @@ scanWrapper handlers inp sc =
     AlexSkip inp' len -> handleSkip handlers inp' len
     AlexToken inp' len action -> handleToken handlers inp' len action
 
-alexEOF :: SaltLexer Token
+alexEOF :: Lexer Token
 alexEOF =
   do
     startcode <- alexGetStartCode
@@ -343,7 +345,7 @@ alexEOF =
       else return ()
     return EOF
 
-alexMonadScan :: SaltLexer Token
+alexMonadScan :: Lexer Token
 
 skip :: AlexAction
 
@@ -354,17 +356,17 @@ AlexActions { actAlexMonadScan = alexMonadScan, actSkip = skip,
   mkAlexActions scanWrapper badChars alexEOF
 
 -- | Lexer function required by Happy threaded lexers.
-lexer :: (Token -> SaltLexer a)
+lexer :: (Token -> Lexer a)
       -- ^ A continuation that will receieve the next token.
-      -> SaltLexer a
+      -> Lexer a
 lexer = (alexMonadScan >>=)
 
 -- | Run the lexer completely.  Expects to be wrapped in 'startFile'
 -- and 'finishFile' appropriately.
-lex :: SaltLexer [Token]
+lex :: Lexer [Token]
 lex =
   let
-    cont :: [Token] -> Token -> SaltLexer [Token]
+    cont :: [Token] -> Token -> Lexer [Token]
     cont accum EOF = return (reverse (EOF : accum))
     cont accum tok = lexer (cont (tok : accum))
   in
