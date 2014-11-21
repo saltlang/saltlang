@@ -1,356 +1,372 @@
 {
 {-# OPTIONS_GHC -funbox-strict-fields #-}
+{-# LANGUAGE FlexibleContexts #-}
 
-module Lexer(lexer) where
+module Language.Salt.Surface.Lexer(
+       SaltLexer,
+       lexer,
+       lex
+       ) where
 
-import Data.Array
-import Data.Bits
-import Data.Char
+import Control.Monad.Lexer hiding (startComment)
+import Control.Monad.Keywords
+import Control.Monad.Messages
+import Control.Monad.SourceBuffer hiding (linebreak)
+import Control.Monad.Symbols
+import Control.Monad.State
+import Control.Monad.Trans
+import Data.LexicalError
+import Data.Position
+import Data.Symbol
+import Language.Salt.Surface.Token
+import Language.Salt.Message
+import Prelude hiding (log, span, lex)
+import System.IO
+import Text.Escapes.ByteString.Lazy
+
+import qualified Control.Monad.CommentBuffer as CommentBuffer
+import qualified Data.ByteString.Lazy.UTF8 as Lazy
+import qualified Data.ByteString.Lazy as Lazy hiding (uncons)
+import qualified Data.ByteString.UTF8 as Strict
+import qualified Text.Numbers.ByteString.Lazy as Numbers
+
+import Text.AlexWrapper
 
 }
-
-%wrapper "monadUserState"
 
 @opchars = [\!\#\%\^\&\+\?\<\>\:\|\~\-\=\:]
 @escape_chars = [^0-9]
 
 tokens :-
 
-<0>        $white+
+-- Record linebreaks at newlines
+<0>       \r?\n
+        { linebreak `andThen` skip }
+
+-- Newlines preceeded by whitespace emit a warning
+<0>       [\ ]+\r?\n
+        { linebreak `andThen` report trailingWhitespace `andThen` skip }
+
+-- Hard tabs emit a warning
+<0>       \t+
+        { report hardTabs `andThen` skip }
+
+-- Skip plain whitespace; we don't allow \f or \v at all
+<0>       [\ ]+
         { skip }
-<0>        [_a-zA-Z][_a-zA-Z0-9]*[']*
-        { makeToken Ident }
-<0>        @opchars*(\/|\*+|@opchars)(@opchars+(\/|\*+)?)*
-        { makeToken Operator }
-<0>        [\.\(\)\[\]\{\}\,\;\`]
-        { singleChar }
-<0>       [\-\+]?[1-9][0-9]*(\.[0-9]+)?(e[\-\+]?[0-9]+)?
-        { makeToken DecLit }
-<0>       [\-\+]?0[0-7]+(\.[0-7]+)?(e[\-\+]?[0-7]+)?
-        { makeToken OctLit }
-<0>       [\-\+]?0[xX][0-9a-fA-F]+(\.[0-9a-fA-F]+)?(e[\-\+]?[0-9a-fA-F]+)?
-        { makeToken HexLit }
-<0>       [\-\+]?0[bB][01]+(\.[01]+)?(e[\-\+]?[01]+)?
-        { makeToken BinLit }
-<0>       \/\/[^\n]*
-        { makeToken Comment }
+
+-- Text, beginning with an alphabetic character, possibly ending with a quote
+<0>       [_a-zA-Z][_a-zA-Z0-9]*[']*
+        { report bufferedComments `andThen` produce (keywordOrToken Id) }
+
+-- Operators, cannot contain a /* or a */ anywhere, otherwise all
+-- sequences are valid
+<0>       @opchars*(\/|\*+|@opchars)(@opchars+(\/|\*+)?)*
+        { report bufferedComments `andThen` produce (keywordOrToken Id) }
+
+-- Single-character punctuation
+<0>       [\.\(\)\[\]\{\}\,\;\:]
+        { report bufferedComments `andThen` produce singleChar }
+
+-- Ellipsis
 <0>       \.\.\.
-        { makeToken (const Ellipsis) }
+        { report bufferedComments `andThen` token (return . Ellipsis) }
+
+-- Decimal literals
+<0>       [\-\+]?[1-9][0-9]*(\.[0-9]+)?(e[\-\+]?[0-9]+)?
+        { report bufferedComments `andThen` produce decLiteral }
+
+-- Octal literals
+<0>       [\-\+]?0[0-7]+(\.[0-7]+)?(e[\-\+]?[0-7]+)?
+        { report bufferedComments `andThen` produce octLiteral }
+
+-- Hex literals
+<0>       [\-\+]?0[xX][0-9a-fA-F]+(\.[0-9a-fA-F]+)?(e[\-\+]?[0-9a-fA-F]+)?
+        { report bufferedComments `andThen` produce hexLiteral }
+
+-- Binary literals
+<0>       [\-\+]?0[bB][01]+(\.[01]+)?(e[\-\+]?[01]+)?
+        { report bufferedComments `andThen` produce binLiteral }
+
+-- Line comments, skip the rest of the line, add it to the comment buffer
+<0>       \/\/[^\n]*
+        { record fullComment `andThen` skip }
+
+-- Unescaped character literal
 <0>       '[^\\\n\r\t\b]'
-        { unescapedChar }
+        { report bufferedComments `andThen` produce unescapedChar }
+
+-- Escaped character literal
 <0>       '\\(@escape_chars)'
-        { escapedChar }
+        { report bufferedComments `andThen` produce escapedChar }
+
+-- Comment begin
 <0>       \/\*
-        { appendComment `andBegin` comment }
-<0>       \*\/
-        { makeToken (const CommentEnd) }
+        { log startComment `andThen` begin comment }
+
+-- String literal begin
 <0>       \"
-        { begin string }
+        { report bufferedComments `andThen`
+	  report startString `andThen` begin string  }
 
-<string>  [^\\\"]+
-        { appendString }
+-- Warn about hard tabs, but record them in the string buffer
+<string>  \t+
+        { report hardTabs `andThen` record stringContent `andThen` skip }
+
+-- Unescaped newlines in strings are an error, but keep going
+<string>  \r?\n
+        { linebreak `andThen` report newlineInString `andThen` skip }
+
+-- Newlines can be escaped
+<string>  \\\r?\n
+        { linebreak `andThen` skip }
+
+-- Unescaped characters in the string
+<string>  [^\t\r\n\\\"]+
+        { record stringContent `andThen` skip }
+
+-- An escape sequence
 <string>  \\@escape_chars
-        { appendEscapeChar }
-<string>  \\[xX][0-9a-fA-F]+
-        { appendHexEscape }
-<string>  \\[0-9][0-9]*
-        { appendDecEscape }
-<string>  \\0[0-7]+
-        { appendOctEscape }
-<string>  \\[bB][01]+
-        { appendBinEscape }
-<string>  \"
-	{ closeString `andBegin` 0 }
+        { record escapedStringContent `andThen` skip }
 
+-- A hex unicode escape
+<string>  \\[xX][0-9a-fA-F]+
+        { record escapedStringContent `andThen` skip }
+
+-- A decimal unicode escape
+<string>  \\[1-9][0-9]*
+        { record escapedStringContent `andThen` skip }
+
+-- An octal unicode escape
+<string>  \\0[0-7]+
+        { record escapedStringContent `andThen` skip }
+
+-- A binary unicode escpae
+<string>  \\[bB][01]+
+        { record escapedStringContent `andThen` skip }
+
+-- Close-quote, close out the string, convert it to a token, leave string mode
+<string>  \"
+	{ token bufferedString `andBegin` 0 }
+
+-- Record linebreaks for comments, append them to the comment buffer
+<comment> \r?\n
+        { linebreak `andThen` record commentText `andThen` skip }
+
+-- Warn about trailing whitespace, even in comments
+<comment> [\ ]+\r?\n
+        { linebreak `andThen` record commentText `andThen`
+	  report trailingWhitespace `andThen` skip }
+
+-- Nest comments one level deeper
 <comment> \/\*
-        { enterComment }
+        { record enterComment `andThen` skip }
+
+-- Decrement level of comment nesting, possibly close the comment
 <comment> \*\/
-        { leaveComment }
-<comment> [^\/\*]+
-        { appendComment }
+        { record leaveComment `andThen` skip }
+
+-- Warn about hard tabs, even in comments, but append them anyway
+<comment> \t+
+        { report hardTabs `andThen` record commentText `andThen` skip }
+
+-- Record and skip everything else
+<comment> [^\t\/\*]+
+        { record commentText `andThen` skip }
+
+-- Allow individual stars and slashes that don't form a /* or a */
 <comment> [\*\/]
-        { appendComment }
+        { record commentText `andThen` skip }
+
 {
 
-data AlexUserState =
-  AlexUserState {
-    lexerCommentDepth :: !Int,
-    lexerStringBuffer :: ![String],
-    lexerCommentBuffer :: ![String]
+hexLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+hexLiteral bstr = return . Num (Numbers.hexLiteral bstr)
+
+decLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+decLiteral bstr = return . Num (Numbers.decLiteral bstr)
+
+octLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+octLiteral bstr = return . Num (Numbers.octLiteral bstr)
+
+binLiteral :: Lazy.ByteString -> Position -> SaltLexer Token
+binLiteral bstr = return . Num (Numbers.binLiteral bstr)
+
+singleChar :: Lazy.ByteString -> Position -> SaltLexer Token
+singleChar bstr =
+  case Lazy.toString bstr of
+    "(" -> return . LParen
+    ")" -> return . RParen
+    "[" -> return . LBrack
+    "]" -> return . RBrack
+    "{" -> return . LBrace
+    "}" -> return . RBrace
+    "." -> return . Dot
+    "," -> return . Comma
+    ";" -> return . Semicolon
+    ":" -> return . Colon
+    "\2200" -> return . Forall
+    "\2203" -> return . Exists
+    str -> error $! "Unexpected single character " ++ str
+
+-- | Produce a character literal from an unescaped character
+unescapedChar :: Lazy.ByteString -> Position -> SaltLexer Token
+unescapedChar bstr =
+  case Lazy.uncons bstr of
+    Just (chr, rest)
+      | Lazy.null rest -> return . (Character chr)
+      | otherwise -> error $! "Extra content in string " ++ show rest
+    Nothing -> error $! "Couldn't decode string " ++ show bstr
+
+-- | Produce a character literal from an escaped character
+escapedChar :: Lazy.ByteString -> Position -> SaltLexer Token
+escapedChar bstr = return . Character (fromEscape bstr)
+
+-- | Start a string literal
+startString :: Position -> SaltLexer ()
+startString pos =
+  do
+    us <- alexGetUserState
+    alexSetUserState us { userStringBuf = [], userStartPos = pos }
+
+-- | Add to the string literal buffer
+stringContent :: Lazy.ByteString -> SaltLexer ()
+stringContent str =
+  do
+    us @ UserState { userStringBuf = buf } <- alexGetUserState
+    alexSetUserState us { userStringBuf = str : buf }
+
+-- | Add an escaped character to the string literal buffer
+escapedStringContent :: Lazy.ByteString -> SaltLexer ()
+escapedStringContent str =
+  do
+    us @ UserState { userStringBuf = buf } <- alexGetUserState
+    alexSetUserState us { userStringBuf =
+                            Lazy.fromString [fromEscape str] : buf }
+
+-- | Terminate a string literal and return a token.
+bufferedString :: Position -> SaltLexer Token
+bufferedString endpos =
+  do
+    UserState { userStartPos = startpos,
+                userStringBuf = buf } <- alexGetUserState
+    pos <- span startpos endpos
+    return (String (Lazy.toStrict (Lazy.concat (reverse buf))) pos)
+
+-- | Start a new comment
+startComment :: Lazy.ByteString -> Position -> SaltLexer ()
+startComment bstr pos =
+  do
+    us <- alexGetUserState
+    alexSetUserState us { userCommentDepth = 0, userStartPos = pos }
+    CommentBuffer.startComment
+    CommentBuffer.appendComment bstr
+
+-- | Append comment text to the current comment
+commentText :: Lazy.ByteString -> SaltLexer ()
+commentText = CommentBuffer.appendComment
+
+-- | Record an nested opening comment
+enterComment :: Lazy.ByteString -> SaltLexer ()
+enterComment bstr =
+  do
+    us @ UserState { userCommentDepth = depth } <- alexGetUserState
+    alexSetUserState us { userCommentDepth = depth + 1 }
+    CommentBuffer.appendComment bstr
+
+-- | Record a possibly nested close comment
+leaveComment :: Lazy.ByteString -> SaltLexer ()
+leaveComment bstr =
+  do
+    CommentBuffer.appendComment bstr
+    us @ UserState { userCommentDepth = depth } <- alexGetUserState
+    alexSetUserState us { userCommentDepth = depth - 1 }
+    if depth == 1
+      then do
+        CommentBuffer.finishComment
+	alexSetStartCode 0
+      else
+        return ()
+
+-- | Add a full comment to the previous comments buffer
+fullComment :: Lazy.ByteString -> SaltLexer ()
+fullComment = CommentBuffer.addComment
+
+-- | Save previous comments at the given position and clear the
+-- comment buffer (this is used in conjuction with @report@,
+-- ie. @report bufferedComments@)
+bufferedComments :: Position -> SaltLexer ()
+bufferedComments pos = CommentBuffer.saveCommentsAsPreceeding pos >>
+		       CommentBuffer.clearComments
+
+type SaltLexer = AlexT UserState (MessagesT [Message] Message (Lexer Token))
+
+data UserState =
+  UserState {
+    -- | Buffer for accumulating string constants.
+    userStringBuf :: ![Lazy.ByteString],
+    -- | Position at which comments or string constants began.  Used
+    -- for reporting unterminated constants.
+    userStartPos :: Position,
+    userCommentDepth :: !Word
   }
 
-alexInitUserState = AlexUserState { lexerCommentDepth = 0,
-		    		    lexerStringBuffer = [],
-				    lexerCommentBuffer = [] }
+initUserState :: UserState
+initUserState = UserState { userStringBuf = [], userStartPos = undefined,
+                            userCommentDepth = 0 }
 
-enterComment :: AlexInput -> Int -> Alex Token
-enterComment input @ (_, _, _, s) len =
-  let
-    str = take len s
-  in do
-    state @ AlexUserState { lexerCommentBuffer = combuf,
-                            lexerCommentDepth = depth } <- alexGetUserState
-    alexSetUserState state { lexerCommentBuffer = str : combuf,
-    		     	     lexerCommentDepth = depth + 1 }
-    skip input len
+type AlexAction = AlexMonadAction SaltLexer Token
 
-closeString :: AlexInput -> Int -> Alex Token
-closeString _ _ =
+type AlexState = AlexInternalState UserState
+
+scanWrapper :: AlexResultHandlers SaltLexer Token ->
+               AlexInput -> Int -> SaltLexer Token
+scanWrapper handlers inp sc =
+  case alexScan inp sc of
+    AlexEOF -> handleEOF handlers
+    AlexError inp' -> handleError handlers inp'
+    AlexSkip inp' len -> handleSkip handlers inp' len
+    AlexToken inp' len action -> handleToken handlers inp' len action
+
+alexEOF :: SaltLexer Token
+alexEOF =
   do
-    state @ AlexUserState { lexerStringBuffer = strbuf } <- alexGetUserState
-    alexSetUserState state { lexerStringBuffer = [] }
-    return (StringLit (concat (reverse strbuf)))
-
-appendString :: AlexInput -> Int -> Alex Token
-appendString input @ (_, _, _, s) len =
-  let
-    str = take len s
-  in do
-    state @ AlexUserState { lexerStringBuffer = strbuf } <- alexGetUserState
-    alexSetUserState state { lexerStringBuffer = str : strbuf }
-    skip input len
-
-leaveComment :: AlexInput -> Int -> Alex Token
-leaveComment input @ (_, _, _, s) len =
-  let
-    str = take len s
-  in do
-    state @ AlexUserState { lexerCommentBuffer = combuf,
-    	    		    lexerCommentDepth = depth } <- alexGetUserState
-    if depth == 0
+    startcode <- alexGetStartCode
+    if startcode /= 0
       then do
-        alexSetUserState state { lexerCommentBuffer = [] }
-        alexSetStartCode 0
-        return (Comment (concat (reverse (str : combuf))))
-      else do
-        alexSetUserState state { lexerCommentBuffer = str : combuf,
-                                 lexerCommentDepth = depth - 1 }
-        skip input len
+        UserState { userStartPos = pos } <- alexGetUserState
+        if startcode == comment
+          then untermComment pos
+          else if startcode == string
+            then untermString pos
+            else error $! "Unknown start code " ++ show startcode
+      else return ()
+    return EOF
 
-appendComment :: AlexInput -> Int -> Alex Token
-appendComment input @ (_, _, _, s) len =
+alexMonadScan :: SaltLexer Token
+
+skip :: AlexAction
+
+begin :: Int -> AlexAction
+
+AlexActions { actAlexMonadScan = alexMonadScan, actSkip = skip,
+              actBegin = begin } =
+  mkAlexActions scanWrapper badChars alexEOF
+
+-- | Lexer function required by Happy threaded lexers.
+lexer :: (Token -> SaltLexer a)
+      -- ^ A continuation that will receieve the next token.
+      -> SaltLexer a
+lexer = (alexMonadScan >>=)
+
+-- | Run the lexer completely.  Expects to be wrapped in 'startFile'
+-- and 'finishFile' appropriately.
+lex :: SaltLexer [Token]
+lex =
   let
-    str = take len s
-  in do
-    state @ AlexUserState { lexerCommentBuffer = combuf } <- alexGetUserState
-    alexSetUserState state { lexerCommentBuffer = str : combuf }
-    skip input len
-
-data Token =
-    Ident String
-  | DecLit String
-  | HexLit String
-  | OctLit String
-  | BinLit String
-  | StringLit String
-  | Comment String
-  | Ellipsis
-  | LParen
-  | RParen
-  | LBrack
-  | RBrack
-  | LBrace
-  | RBrace
-  | Dot
-  | Comma
-  | Semicolon
-  | Backquote
-  | CharLit Char
-  | CommentEnd
-  | Operator String
-  | EOF
-  deriving Show
-
-singleChar (_, _, _, char : _) 1 =
-  case char of
-    '(' -> return LParen
-    ')' -> return RParen
-    '[' -> return LBrack
-    ']' -> return RBrack
-    '{' -> return LBrace
-    '}' -> return RBrace
-    '.' -> return Dot
-    ',' -> return Comma
-    ';' -> return Semicolon
-    '`' -> return Backquote
-
-parseHexStr :: String -> Integer
-parseHexStr =
-  let
-    hexValue :: Char -> Integer
-    hexValue '0' = 0x0
-    hexValue '1' = 0x1
-    hexValue '2' = 0x2
-    hexValue '3' = 0x3
-    hexValue '4' = 0x4
-    hexValue '5' = 0x5
-    hexValue '6' = 0x6
-    hexValue '7' = 0x7
-    hexValue '8' = 0x8
-    hexValue '9' = 0x9
-    hexValue 'a' = 0xa
-    hexValue 'A' = 0xa
-    hexValue 'b' = 0xb
-    hexValue 'B' = 0xb
-    hexValue 'c' = 0xc
-    hexValue 'C' = 0xc
-    hexValue 'd' = 0xd
-    hexValue 'D' = 0xd
-    hexValue 'e' = 0xe
-    hexValue 'E' = 0xe
-    hexValue 'f' = 0xf
-    hexValue 'F' = 0xf
-    hexValue c = error $! ("Unexpected hex character " ++ (c : []))
-
-    parseHex :: Integer -> String -> Integer
-    parseHex accum [] = accum
-    parseHex accum (first : rest) =
-      parseHex ((accum `shiftL` 4) .|. hexValue first) rest
+    cont :: [Token] -> Token -> SaltLexer [Token]
+    cont accum EOF = return (reverse (EOF : accum))
+    cont accum tok = lexer (cont (tok : accum))
   in
-    parseHex 0
-
-parseDecStr :: String -> Integer
-parseDecStr =
-  let
-    decValue :: Char -> Integer
-    decValue '0' = 0x0
-    decValue '1' = 0x1
-    decValue '2' = 0x2
-    decValue '3' = 0x3
-    decValue '4' = 0x4
-    decValue '5' = 0x5
-    decValue '6' = 0x6
-    decValue '7' = 0x7
-    decValue '8' = 0x8
-    decValue '9' = 0x9
-    decValue c = error $! ("Unexpected decimal character " ++ (c : []))
-
-    parseDec :: Integer -> String -> Integer
-    parseDec accum [] = accum
-    parseDec accum (first : rest) =
-      parseDec ((accum * 10) + decValue first) rest
-  in
-    parseDec 0
-
-parseOctStr :: String -> Integer
-parseOctStr =
-  let
-    octValue :: Char -> Integer
-    octValue '0' = 0x0
-    octValue '1' = 0x1
-    octValue '2' = 0x2
-    octValue '3' = 0x3
-    octValue '4' = 0x4
-    octValue '5' = 0x5
-    octValue '6' = 0x6
-    octValue '7' = 0x7
-    octValue c = error $! ("Unexpected octal character " ++ (c : []))
-
-    parseOct :: Integer -> String -> Integer
-    parseOct accum [] = accum
-    parseOct accum (first : rest) =
-      parseOct ((accum `shiftL` 3) .|. octValue first) rest
-  in
-    parseOct 0
-
-parseBinStr :: String -> Integer
-parseBinStr =
-  let
-    binValue :: Char -> Integer
-    binValue '0' = 0x0
-    binValue '1' = 0x1
-    binValue c = error $! ("Unexpected binary character " ++ (c : []))
-
-    parseBin :: Integer -> String -> Integer
-    parseBin accum [] = accum
-    parseBin accum (first : rest) =
-      parseBin ((accum `shiftL` 1) .|. binValue first) rest
-  in
-    parseBin 0
-
-fromEscapeChar :: Char -> Char
-fromEscapeChar 'a' = '\a'
-fromEscapeChar 'b' = '\b'
-fromEscapeChar 'f' = '\f'
-fromEscapeChar 'n' = '\n'
-fromEscapeChar 'r' = '\r'
-fromEscapeChar 't' = '\t'
-fromEscapeChar 'v' = '\v'
-fromEscapeChar '\\' = '\\'
-fromEscapeChar '\'' = '\''
-fromEscapeChar '\"' = '\"'
-fromEscapeChar '?' = '?'
-fromEscapeChar c = error ("Unrecognized escape sequence \\" ++ (c : []))
-
-appendEscapeChar :: AlexInput -> Int -> Alex Token
-appendEscapeChar input @ (_, _, _, '\\' : char : _) 2 =
-  let
-    str = fromEscapeChar char : []
-  in do
-    state @ AlexUserState { lexerStringBuffer = strbuf } <- alexGetUserState
-    alexSetUserState state { lexerStringBuffer = str : strbuf }
-    skip input 2
-
-appendHexEscape :: AlexInput -> Int -> Alex Token
-appendHexEscape input @ (_, _, _, s) len =
-  let
-    '\\' : 'x' : hexstr = take len s
-    str = chr (fromInteger (parseHexStr hexstr)) : []
-  in do
-    state @ AlexUserState { lexerStringBuffer = strbuf } <- alexGetUserState
-    alexSetUserState state { lexerStringBuffer = str : strbuf }
-    skip input 2
-
-appendDecEscape :: AlexInput -> Int -> Alex Token
-appendDecEscape input @ (_, _, _, s) len =
-  let
-    '\\' : decstr = take len s
-    str = chr (fromInteger (parseDecStr decstr)) : []
-  in do
-    state @ AlexUserState { lexerStringBuffer = strbuf } <- alexGetUserState
-    alexSetUserState state { lexerStringBuffer = str : strbuf }
-    skip input 2
-
-appendOctEscape :: AlexInput -> Int -> Alex Token
-appendOctEscape input @ (_, _, _, s) len =
-  let
-    '\\' : '0' : octstr = take len s
-    str = chr (fromInteger (parseOctStr octstr)) : []
-  in do
-    state @ AlexUserState { lexerStringBuffer = strbuf } <- alexGetUserState
-    alexSetUserState state { lexerStringBuffer = str : strbuf }
-    skip input 2
-
-appendBinEscape :: AlexInput -> Int -> Alex Token
-appendBinEscape input @ (_, _, _, s) len =
-  let
-    '\\' : 'b' : binstr = take len s
-    str = chr (fromInteger (parseBinStr binstr)) : []
-  in do
-    state @ AlexUserState { lexerStringBuffer = strbuf } <- alexGetUserState
-    alexSetUserState state { lexerStringBuffer = str : strbuf }
-    skip input 2
-
-unescapedChar :: AlexInput -> Int -> Alex Token
-unescapedChar (_, _, _, '\'' : char : '\'' : _) 3 = return (CharLit char)
-
-escapedChar :: AlexInput -> Int -> Alex Token
-escapedChar (_, _, _, '\'' : '\\' : char : '\'' : _) 4 =
-  return (CharLit (fromEscapeChar char))
-
-makeToken f (_, _, _, s) len = return (f (take len s))
-
-alexEOF = return EOF
-
-lexer :: String -> Either String [Token]
-lexer str =
-  let
-    getInput accum =
-      do
-        input <- alexMonadScan
-        case input of
-          EOF -> return (reverse (EOF : accum))
-          _ -> getInput (input : accum)
-  in do
-    runAlex str (getInput [])
+    lexer (cont [])
 }
