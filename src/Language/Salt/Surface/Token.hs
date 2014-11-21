@@ -40,8 +40,14 @@ data Token =
     Id Symbol !Position
   -- | A number literal
   | Num !Rational !Position
+  -- | A string literal
+  | String !Strict.ByteString !Position
+  -- | A character literal
+  | Character !Char !Position
   -- | The text '='
   | Equal !Position
+  -- | The text '...'
+  | Ellipsis !Position
   -- | The text '->'
   | Arrow !Position
   -- | The text '.'
@@ -97,6 +103,7 @@ keywords = [
     (Strict.fromString "exists", Exists),
     (Strict.fromString "module", Module),
     (Strict.fromString "signature", Signature),
+    (Strict.fromString "class", Class),
     (Strict.fromString "with", With),
     (Strict.fromString "where", Where)
   ]
@@ -131,6 +138,37 @@ numPickler =
                                   (xpAttr (gxFromString "denominator") xpPrim)
                                   xpickle))
 
+strPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Token
+strPickler =
+  let
+    revfunc (String str pos) = (((), pos), gxFromByteString str)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(((), pos), str) -> String (gxToByteString str) pos, revfunc)
+           (xpElem (gxFromString "token")
+                   (xpPair (xpAttrFixed (gxFromString "kind")
+                                        (gxFromString "String"))
+                           xpickle)
+                   (xpElemNodes (gxFromString "value")
+                                (xpContent xpText0)))
+
+charPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Token
+charPickler =
+  let
+    revfunc (Character chr pos) = ((), chr, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((), chr, pos) -> Character chr pos, revfunc)
+           (xpElemAttrs (gxFromString "token")
+                        (xpTriple (xpAttrFixed (gxFromString "kind")
+                                               (gxFromString "Character"))
+                                  (xpAttr (gxFromString "value") xpPrim)
+                                  xpickle))
+
 equalPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Token
@@ -143,6 +181,20 @@ equalPickler =
            (xpElemAttrs (gxFromString "token")
                         (xpPair (xpAttrFixed (gxFromString "kind")
                                              (gxFromString "Equal"))
+                                xpickle))
+
+ellipsisPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+ellipsisPickler =
+  let
+    revfunc (Ellipsis pos) = ((), pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((), pos) -> Ellipsis pos, revfunc)
+           (xpElemAttrs (gxFromString "token")
+                        (xpPair (xpAttrFixed (gxFromString "kind")
+                                             (gxFromString "Ellipsis"))
                                 xpickle))
 
 arrowPickler :: (GenericXMLString tag, Show tag,
@@ -426,34 +478,37 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker EOF = 0
       picker (Id _ _) = 1
       picker (Num _ _) = 2
-      picker (Equal _) = 3
-      picker (Arrow _) = 4
-      picker (Dot _) = 5
-      picker (Colon _) = 6
-      picker (ColonColon _) = 7
-      picker (Comma _) = 8
-      picker (Semicolon _) = 9
-      picker (LParen _) = 10
-      picker (RParen _) = 11
-      picker (LBrack _) = 12
-      picker (RBrack _) = 13
-      picker (LBrace _) = 14
-      picker (RBrace _) = 15
-      picker (Forall _) = 16
-      picker (Exists _) = 17
-      picker (Module _) = 18
-      picker (Signature _) = 19
-      picker (Class _) = 20
-      picker (With _) = 21
-      picker (Where _) = 22
+      picker (String _ _) = 3
+      picker (Character _ _) = 4
+      picker (Equal _) = 5
+      picker (Ellipsis _) = 6
+      picker (Arrow _) = 7
+      picker (Dot _) = 8
+      picker (Colon _) = 9
+      picker (ColonColon _) = 10
+      picker (Comma _) = 11
+      picker (Semicolon _) = 12
+      picker (LParen _) = 13
+      picker (RParen _) = 14
+      picker (LBrack _) = 15
+      picker (RBrack _) = 16
+      picker (LBrace _) = 17
+      picker (RBrace _) = 18
+      picker (Forall _) = 19
+      picker (Exists _) = 20
+      picker (Module _) = 21
+      picker (Signature _) = 22
+      picker (Class _) = 23
+      picker (With _) = 24
+      picker (Where _) = 25
     in
-      xpAlt picker [eofPickler, idPickler, numPickler, equalPickler,
-                    arrowPickler, dotPickler, colonPickler,
-                    colonColonPickler, commaPickler, semicolonPickler,
-                    lparenPickler, rparenPickler, lbrackPickler, rbrackPickler,
-                    lbracePickler, rbracePickler, forallPickler, existsPickler,
-                    modulePickler, signaturePickler, classPickler,
-                    withPickler, wherePickler ]
+      xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
+                    charPickler,equalPickler, ellipsisPickler, arrowPickler,
+                    dotPickler, colonPickler, colonColonPickler, commaPickler,
+                    semicolonPickler, lparenPickler, rparenPickler,
+                    lbrackPickler, rbrackPickler, lbracePickler, rbracePickler,
+                    forallPickler, existsPickler, modulePickler,
+                    signaturePickler, classPickler, withPickler, wherePickler ]
 
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos doc =
@@ -466,25 +521,30 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (Id sym pos) =
     do
       symname <- name sym
-      addPosition pos (bytestring symname)
+      addPosition pos (string "identifier" <> dquoted (bytestring symname))
   formatM (Num n pos) =
     if denominator n == 1
       then addPosition pos (format (numerator n))
       else addPosition pos (format (numerator n) <> char '/' <>
                             format (denominator n))
-  formatM (Equal pos) = addPosition pos (string "character \'=\'")
-  formatM (Arrow pos) = addPosition pos (string "character \'->\'")
-  formatM (Dot pos) = addPosition pos (string "character \'.\'")
-  formatM (Colon pos) = addPosition pos (string "character \':\'")
-  formatM (ColonColon pos) = addPosition pos (string "character \'::\'")
-  formatM (Comma pos) = addPosition pos (string "character \',\'")
-  formatM (Semicolon pos) = addPosition pos (string "character \';\'")
-  formatM (LParen pos) = addPosition pos (string "character \'(\'")
-  formatM (RParen pos) = addPosition pos (string "character \')\'")
-  formatM (LBrack pos) = addPosition pos (string "character \'[\'")
-  formatM (RBrack pos) = addPosition pos (string "character \']\'")
-  formatM (LBrace pos) = addPosition pos (string "character \'{\'")
-  formatM (RBrace pos) = addPosition pos (string "character \'}\'")
+  formatM (String str pos) =
+    addPosition pos (string "string" <+> dquoted (bytestring str))
+  formatM (Character chr pos) =
+    addPosition pos (string "character" <+> squoted (char chr))
+  formatM (Equal pos) = addPosition pos (string "punctuation \'=\'")
+  formatM (Ellipsis pos) = addPosition pos (string "punctuation \'...\'")
+  formatM (Arrow pos) = addPosition pos (string "operator \'->\'")
+  formatM (Dot pos) = addPosition pos (string "punctuation \'.\'")
+  formatM (Colon pos) = addPosition pos (string "punctuation \':\'")
+  formatM (ColonColon pos) = addPosition pos (string "punctuation \'::\'")
+  formatM (Comma pos) = addPosition pos (string "punctuation \',\'")
+  formatM (Semicolon pos) = addPosition pos (string "punctuation \';\'")
+  formatM (LParen pos) = addPosition pos (string "punctuation \'(\'")
+  formatM (RParen pos) = addPosition pos (string "punctuation \')\'")
+  formatM (LBrack pos) = addPosition pos (string "punctuation \'[\'")
+  formatM (RBrack pos) = addPosition pos (string "punctuation \']\'")
+  formatM (LBrace pos) = addPosition pos (string "punctuation \'{\'")
+  formatM (RBrace pos) = addPosition pos (string "punctuation \'}\'")
   formatM (Forall pos) = addPosition pos (string "keyword \"forall\"")
   formatM (Exists pos) = addPosition pos (string "keyword \"exists\"")
   formatM (Module pos) = addPosition pos (string "keyword \"module\"")
