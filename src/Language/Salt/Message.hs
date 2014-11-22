@@ -144,7 +144,7 @@ instance Msg.Message Message where
   severity UntermComment {} = Msg.Error
   severity UntermString {} = Msg.Error
   severity HardTabs {} = Msg.Warning
-  severity TrailingWhitespace {} = Msg.Remark
+  severity TrailingWhitespace {} = Msg.Warning
   severity NewlineInString {} = Msg.Warning
 
   position BadChars { badCharsPos = pos } = Just pos
@@ -168,6 +168,11 @@ instance Msg.Message Message where
   details HardTabs {} = Lazy.empty
   details TrailingWhitespace {} = Lazy.empty
   details NewlineInString {} = Lazy.empty
+
+  highlighting HardTabs {} = Msg.Background
+  highlighting TrailingWhitespace {} = Msg.Background
+  highlighting NewlineInString {} = Msg.Background
+  highlighting _ = Msg.Foreground
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
