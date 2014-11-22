@@ -517,16 +517,19 @@ addPosition pos doc =
     return (doc <+> string "at" <+> format pinfo)
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
-  formatM EOF = return (string "EOF")
+  formatM EOF = return (string "end of input")
   formatM (Id sym pos) =
     do
       symname <- name sym
-      addPosition pos (string "identifier" <> dquoted (bytestring symname))
+      addPosition pos (string "identifier" <+> dquoted (bytestring symname))
   formatM (Num n pos) =
-    if denominator n == 1
-      then addPosition pos (format (numerator n))
-      else addPosition pos (format (numerator n) <> char '/' <>
-                            format (denominator n))
+    let
+      numdoc =
+        if denominator n == 1
+          then format (numerator n)
+          else format (numerator n) <> char '/' <> format (denominator n)
+    in
+      addPosition pos (string "number" <+> numdoc)
   formatM (String str pos) =
     addPosition pos (string "string" <+> dquoted (bytestring str))
   formatM (Character chr pos) =
