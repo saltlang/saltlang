@@ -1,8 +1,25 @@
+-- Copyright (c) 2014 Eric McCorkle.
+--
+-- This program is free software; you can redistribute it and/or
+-- modify it under the terms of the GNU General Public License as
+-- published by the Free Software Foundation; either version 2 of the
+-- License, or (at your option) any later version.
+--
+-- This program is distributed in the hope that it will be useful, but
+-- WITHOUT ANY WARRANTY; without even the implied warranty of
+-- MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+-- General Public License for more details.
+--
+-- You should have received a copy of the GNU General Public License
+-- along with this program; if not, write to the Free Software
+-- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+-- 02110-1301 USA
 {
 {-# OPTIONS_GHC -funbox-strict-fields #-}
 {-# LANGUAGE FlexibleContexts #-}
 
 module Language.Salt.Surface.Lexer(
+       Frontend,
        Lexer,
        lexer,
        lex
@@ -25,7 +42,7 @@ import System.IO
 import Text.Escapes.ByteString.Lazy
 
 import qualified Control.Monad.CommentBuffer as CommentBuffer
-import qualified Control.Monad.Lexer as Lexer
+import qualified Control.Monad.Frontend as Frontend
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
 import qualified Data.ByteString.Lazy as Lazy hiding (uncons)
 import qualified Data.ByteString.UTF8 as Strict
@@ -45,8 +62,8 @@ tokens :-
         { linebreak `andThen` skip }
 
 -- Newlines preceeded by whitespace emit a warning
-<0>       [\ ]+\r?\n
-        { linebreak `andThen` report trailingWhitespace `andThen` skip }
+<0>       [\ ]+$
+        { report trailingWhitespace `andThen` skip }
 
 -- Hard tabs emit a warning
 <0>       \t+
@@ -281,13 +298,12 @@ leaveComment bstr =
   do
     CommentBuffer.appendComment bstr
     us @ UserState { userCommentDepth = depth } <- alexGetUserState
-    alexSetUserState us { userCommentDepth = depth - 1 }
-    if depth == 1
+    if depth == 0
       then do
         CommentBuffer.finishComment
 	alexSetStartCode 0
       else
-        return ()
+        alexSetUserState us { userCommentDepth = depth - 1 }
 
 -- | Add a full comment to the previous comments buffer
 fullComment :: Lazy.ByteString -> Lexer ()
@@ -300,8 +316,9 @@ bufferedComments :: Position -> Lexer ()
 bufferedComments pos = CommentBuffer.saveCommentsAsPreceeding pos >>
 		       CommentBuffer.clearComments
 
-type Lexer = AlexT UserState (MessagesT [Message] Message
-                                        (Lexer.Lexer Token))
+type Frontend = MessagesT [Message] Message (Frontend.Frontend Token)
+
+type Lexer = AlexT UserState Frontend
 
 data UserState =
   UserState {
@@ -363,12 +380,19 @@ lexer = (alexMonadScan >>=)
 
 -- | Run the lexer completely.  Expects to be wrapped in 'startFile'
 -- and 'finishFile' appropriately.
-lex :: Lexer [Token]
-lex =
+lex :: Strict.ByteString -> Lazy.ByteString -> Frontend [Token]
+lex name input =
   let
     cont :: [Token] -> Token -> Lexer [Token]
     cont accum EOF = return (reverse (EOF : accum))
     cont accum tok = lexer (cont (tok : accum))
+
+    run =
+      do
+        startFile name input
+        out <- lexer (cont [])
+	finishFile
+	return out
   in
-    lexer (cont [])
+    runAlexT run input name initUserState
 }
