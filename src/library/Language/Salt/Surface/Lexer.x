@@ -44,7 +44,7 @@ import Text.Escapes.ByteString.Lazy
 import qualified Control.Monad.CommentBuffer as CommentBuffer
 import qualified Control.Monad.Frontend as Frontend
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
-import qualified Data.ByteString.Lazy as Lazy hiding (uncons)
+import qualified Data.ByteString.Lazy as Lazy hiding (uncons, drop)
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Text.Numbers.ByteString.Lazy as Numbers
 
@@ -53,7 +53,7 @@ import Text.AlexWrapper
 }
 
 @opchars = [\!\#\%\^\&\+\?\<\>\:\|\~\-\=\:]
-@escape_chars = [^0-9]
+@escape_chars = [abfnrtv\\'\"\?]
 
 tokens :-
 
@@ -91,32 +91,69 @@ tokens :-
         { report bufferedComments `andThen` token (return . Ellipsis) }
 
 -- Decimal literals
-<0>       [\-\+]?[1-9][0-9]*(\.[0-9]+)?(e[\-\+]?[0-9]+)?
+<0>       [\-\+]?[1-9][0-9]*(\.[0-9]+)?([ep][\-\+]?[0-9]+)?
         { report bufferedComments `andThen` produce decLiteral }
 
 -- Octal literals
-<0>       [\-\+]?0[0-7]+(\.[0-7]+)?(e[\-\+]?[0-7]+)?
+<0>       [\-\+]?0[0-7]+(\.[0-7]+)?([ep][\-\+]?[0-7]+)?
         { report bufferedComments `andThen` produce octLiteral }
 
 -- Hex literals
-<0>       [\-\+]?0[xX][0-9a-fA-F]+(\.[0-9a-fA-F]+)?(e[\-\+]?[0-9a-fA-F]+)?
+<0>       [\-\+]?0[xX][0-9a-fA-F]+(\.[0-9a-fA-F]+)?(p[\-\+]?[0-9a-fA-F]+)?
         { report bufferedComments `andThen` produce hexLiteral }
 
 -- Binary literals
-<0>       [\-\+]?0[bB][01]+(\.[01]+)?(e[\-\+]?[01]+)?
+<0>       [\-\+]?0[bB][01]+(\.[01]+)?([ep][\-\+]?[01]+)?
         { report bufferedComments `andThen` produce binLiteral }
 
 -- Line comments, skip the rest of the line, add it to the comment buffer
 <0>       \/\/[^\n]*
         { record fullComment `andThen` skip }
 
+-- Empty character literal
+<0>       ''
+        { report emptyCharLiteral `andThen` skip }
+
 -- Unescaped character literal
-<0>       '[^\\\n\r\t\b]'
+<0>       '[^\n\t]'
         { report bufferedComments `andThen` produce unescapedChar }
 
--- Escaped character literal
-<0>       '\\(@escape_chars)'
+-- Valid escaped character literal
+<0>       '\\[abfnrtv\\\'\"\?]'
         { report bufferedComments `andThen` produce escapedChar }
+
+-- A hex unicode escaped character
+<0>  '\\[xX][0-9a-fA-F]+'
+        { report bufferedComments `andThen` produce escapedChar }
+
+-- A decimal unicode escaped character
+<0>  '\\[1-9][0-9]*'
+        { report bufferedComments `andThen` produce escapedChar }
+
+-- An octal unicode escaped character
+<0>  '\\0[0-7]+'
+        { report bufferedComments `andThen` produce escapedChar }
+
+-- A binary unicode escaped character
+<0>  '\\[bB][01]+'
+        { report bufferedComments `andThen` produce escapedChar }
+
+-- Invalid escaped character literal
+<0>       '\\[^\'\n]+'
+        { log badEscape `andThen` skip }
+
+-- Newline in character literal
+<0>       '\r?\n'
+        { linebreakAtOffset 1 `andThen`
+	  report newlineCharLiteral `andThen` skip }
+
+-- Hard tab in character literal
+<0>       '\t'
+        { report tabCharLiteral `andThen` skip }
+
+-- Unescaped character literal
+<0>       '[^\n\']{2,}'
+        { log longCharLiteral `andThen` skip }
 
 -- Comment begin
 <0>       \/\*
@@ -129,7 +166,8 @@ tokens :-
 
 -- Warn about hard tabs, but record them in the string buffer
 <string>  \t+
-        { report hardTabs `andThen` record stringContent `andThen` skip }
+        { report tabInStringLiteral `andThen`
+	  record stringContent `andThen` skip }
 
 -- Unescaped newlines in strings are an error, but keep going
 <string>  \r?\n
@@ -143,9 +181,13 @@ tokens :-
 <string>  [^\t\r\n\\\"]+
         { record stringContent `andThen` skip }
 
--- An escape sequence
-<string>  \\@escape_chars
+-- A valid escape sequence
+<string>  \\[abfnrtv\\'\"\?]
         { record escapedStringContent `andThen` skip }
+
+-- A bad escape sequence
+<string>  \\[^abfnrtv\\'\"\?]
+        { log badEscape `andThen` skip }
 
 -- A hex unicode escape
 <string>  \\[xX][0-9a-fA-F]+
@@ -172,8 +214,8 @@ tokens :-
         { linebreak `andThen` record commentText `andThen` skip }
 
 -- Warn about trailing whitespace, even in comments
-<comment> [\ ]+\r?\n
-        { linebreak `andThen` record commentText `andThen`
+<comment> [\ ]+$
+        { record commentText `andThen`
 	  report trailingWhitespace `andThen` skip }
 
 -- Nest comments one level deeper
@@ -189,7 +231,7 @@ tokens :-
         { report hardTabs `andThen` record commentText `andThen` skip }
 
 -- Record and skip everything else
-<comment> [^\t\/\*]+
+<comment> [^\t\n\/\*]+
         { record commentText `andThen` skip }
 
 -- Allow individual stars and slashes that don't form a /* or a */
@@ -199,16 +241,16 @@ tokens :-
 {
 
 hexLiteral :: Lazy.ByteString -> Position -> Lexer Token
-hexLiteral bstr = return . Num (Numbers.hexLiteral bstr)
+hexLiteral bstr = return . Num (Numbers.hexLiteral (Lazy.drop 2 bstr))
 
 decLiteral :: Lazy.ByteString -> Position -> Lexer Token
 decLiteral bstr = return . Num (Numbers.decLiteral bstr)
 
 octLiteral :: Lazy.ByteString -> Position -> Lexer Token
-octLiteral bstr = return . Num (Numbers.octLiteral bstr)
+octLiteral bstr = return . Num (Numbers.octLiteral (Lazy.drop 1 bstr))
 
 binLiteral :: Lazy.ByteString -> Position -> Lexer Token
-binLiteral bstr = return . Num (Numbers.binLiteral bstr)
+binLiteral bstr = return . Num (Numbers.binLiteral (Lazy.drop 2 bstr))
 
 singleChar :: Lazy.ByteString -> Position -> Lexer Token
 singleChar bstr =
@@ -230,15 +272,13 @@ singleChar bstr =
 -- | Produce a character literal from an unescaped character
 unescapedChar :: Lazy.ByteString -> Position -> Lexer Token
 unescapedChar bstr =
-  case Lazy.uncons bstr of
-    Just (chr, rest)
-      | Lazy.null rest -> return . (Character chr)
-      | otherwise -> error $! "Extra content in string " ++ show rest
-    Nothing -> error $! "Couldn't decode string " ++ show bstr
+  case Lazy.toString bstr of
+    ['\'', chr, '\''] -> return . (Character chr)
+    _ -> error $! "Extra content in character literal " ++ show bstr
 
 -- | Produce a character literal from an escaped character
 escapedChar :: Lazy.ByteString -> Position -> Lexer Token
-escapedChar bstr = return . Character (fromEscape bstr)
+escapedChar bstr = return . Character (fromEscape (Lazy.tail (Lazy.init bstr)))
 
 -- | Start a string literal
 startString :: Position -> Lexer ()
