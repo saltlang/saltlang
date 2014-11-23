@@ -22,8 +22,14 @@
 module Language.Salt.Message(
        Message,
        badChars,
+       badEscape,
+       newlineCharLiteral,
+       tabCharLiteral,
+       longCharLiteral,
+       emptyCharLiteral,
        untermComment,
        untermString,
+       tabInStringLiteral,
        hardTabs,
        trailingWhitespace,
        newlineInString
@@ -36,7 +42,7 @@ import Data.Position
 --import Language.Salt.Core.Syntax
 
 import qualified Data.ByteString.Lazy as Lazy
-import qualified Data.ByteString.Lazy.UTF8 as Lazy
+import qualified Data.ByteString.Lazy.UTF8 as Lazy.UTF8
 --import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.Message as Msg
 
@@ -50,9 +56,43 @@ data Message =
       -- | The position of the bad characters.
       badCharsPos :: !Position
     }
+    -- | Bad characters in lexical input.
+  | BadEscape {
+      -- | The bad characters from input (error).
+      badEscContent :: !Lazy.ByteString,
+      -- | The position of the bad characters.
+      badEscPos :: !Position
+    }
+    -- | An empty character literal.
+  | EmptyCharLiteral {
+      -- | The position of the bad character literal.
+      emptyCharPos :: !Position
+    }
+    -- | A long character literal.
+  | LongCharLiteral {
+      -- | The bad characters from input (error).
+      longCharContent :: !Lazy.ByteString,
+      -- | The position of the bad character literal.
+      longCharPos :: !Position
+    }
+    -- | A newline in a character literal.
+  | NewlineCharLiteral {
+      -- | The position of the bad character literal.
+      newlineCharPos :: !Position
+    }
+    -- | A hard tab in a character literal.
+  | TabCharLiteral {
+      -- | The position of the bad character literal.
+      tabCharPos :: !Position
+    }
     -- | Unterminated comment (error).
   | UntermComment {
       untermCommentPos :: !Position
+    }
+    -- | A hard tab in a string literal.
+  | TabStringLiteral {
+      -- | The position of the bad character literal.
+      tabStringPos :: !Position
     }
     -- | Unterminated string literal (error).
   | UntermString {
@@ -128,42 +168,85 @@ data Message =
 instance Hashable Message where
   hashWithSalt s BadChars { badCharsContent = str, badCharsPos = pos } =
     s `hashWithSalt` (0 :: Int) `hashWithSalt` str `hashWithSalt` pos
-  hashWithSalt s UntermComment { untermCommentPos = pos } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` pos
-  hashWithSalt s UntermString { untermStringPos = pos } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` pos
-  hashWithSalt s HardTabs { hardTabsPos = pos } =
+  hashWithSalt s BadEscape { badEscContent = str, badEscPos = pos } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` str `hashWithSalt` pos
+  hashWithSalt s LongCharLiteral { longCharContent = str, longCharPos = pos } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` str `hashWithSalt` pos
+  hashWithSalt s NewlineCharLiteral { newlineCharPos = pos } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt` pos
-  hashWithSalt s TrailingWhitespace { trailingWhitespacePos = pos } =
+  hashWithSalt s TabCharLiteral { tabCharPos = pos } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt` pos
-  hashWithSalt s NewlineInString { newlineInStringPos = pos } =
+  hashWithSalt s EmptyCharLiteral { emptyCharPos = pos } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt` pos
+  hashWithSalt s UntermComment { untermCommentPos = pos } =
+    s `hashWithSalt` (6 :: Int) `hashWithSalt` pos
+  hashWithSalt s TabStringLiteral { tabStringPos = pos } =
+    s `hashWithSalt` (7 :: Int) `hashWithSalt` pos
+  hashWithSalt s UntermString { untermStringPos = pos } =
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` pos
+  hashWithSalt s HardTabs { hardTabsPos = pos } =
+    s `hashWithSalt` (9 :: Int) `hashWithSalt` pos
+  hashWithSalt s TrailingWhitespace { trailingWhitespacePos = pos } =
+    s `hashWithSalt` (10 :: Int) `hashWithSalt` pos
+  hashWithSalt s NewlineInString { newlineInStringPos = pos } =
+    s `hashWithSalt` (11 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
+  severity BadEscape {} = Msg.Error
+  severity LongCharLiteral {} = Msg.Error
+  severity NewlineCharLiteral {} = Msg.Error
+  severity TabCharLiteral {} = Msg.Error
+  severity EmptyCharLiteral {} = Msg.Error
   severity UntermComment {} = Msg.Error
+  severity TabStringLiteral {} = Msg.Error
   severity UntermString {} = Msg.Error
   severity HardTabs {} = Msg.Warning
   severity TrailingWhitespace {} = Msg.Warning
-  severity NewlineInString {} = Msg.Warning
+  severity NewlineInString {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
+  position BadEscape { badEscPos = pos } = Just pos
+  position NewlineCharLiteral { newlineCharPos = pos } = Just pos
+  position TabCharLiteral { tabCharPos = pos } = Just pos
+  position LongCharLiteral { longCharPos = pos } = Just pos
+  position EmptyCharLiteral { emptyCharPos = pos } = Just pos
   position UntermComment { untermCommentPos = pos } = Just pos
+  position TabStringLiteral { tabStringPos = pos } = Just pos
   position UntermString { untermStringPos = pos } = Just pos
   position HardTabs { hardTabsPos = pos } = Just pos
   position TrailingWhitespace { trailingWhitespacePos = pos } = Just pos
   position NewlineInString { newlineInStringPos = pos } = Just pos
 
-  brief BadChars {} = Lazy.fromString "Invalid characters in input"
-  brief UntermComment {} = Lazy.fromString "Unterminated comment"
-  brief UntermString {} = Lazy.fromString "Unterminated string literal"
-  brief HardTabs {} = Lazy.fromString "Hard tabs are discouraged"
-  brief TrailingWhitespace {} = Lazy.fromString "Trailing whitespace"
+  brief BadChars { badCharsContent = chrs }
+    | Lazy.length chrs == 1 = Lazy.UTF8.fromString "Invalid character"
+    | otherwise = Lazy.UTF8.fromString "Invalid characters"
+  brief BadEscape {} = Lazy.UTF8.fromString "Invalid escape sequence"
+  brief EmptyCharLiteral {} = Lazy.UTF8.fromString "Empty character literal"
+  brief NewlineCharLiteral {} =
+    Lazy.UTF8.fromString "Unescaped newline in character literal"
+  brief TabCharLiteral {} =
+    Lazy.UTF8.fromString "Unescaped hard tab in character literal"
+  brief LongCharLiteral {} =
+    Lazy.UTF8.fromString "Multiple characters in character literal"
+  brief UntermComment {} = Lazy.UTF8.fromString "Unterminated comment"
+  brief TabStringLiteral {} =
+    Lazy.UTF8.fromString "Unescaped hard tab in string literal"
+  brief UntermString {} = Lazy.UTF8.fromString "Unterminated string literal"
+  brief HardTabs {} = Lazy.UTF8.fromString "Hard tabs are discouraged"
+  brief TrailingWhitespace {} = Lazy.UTF8.fromString "Trailing whitespace"
   brief NewlineInString {} =
-    Lazy.fromString "Unescaped newline in string literal"
+    Lazy.UTF8.fromString "Unescaped newline in string literal"
 
   details BadChars {} = Lazy.empty
+  details BadEscape {} = Lazy.empty
+  details NewlineCharLiteral {} = Lazy.empty
+  details TabCharLiteral {} = Lazy.empty
+  details LongCharLiteral {} =
+    Lazy.UTF8.fromString "Use a string literal to represent multiple characters"
+  details EmptyCharLiteral {} = Lazy.empty
   details UntermComment {} = Lazy.empty
+  details TabStringLiteral {} = Lazy.empty
   details UntermString {} = Lazy.empty
   details HardTabs {} = Lazy.empty
   details TrailingWhitespace {} = Lazy.empty
@@ -171,7 +254,7 @@ instance Msg.Message Message where
 
   highlighting HardTabs {} = Msg.Background
   highlighting TrailingWhitespace {} = Msg.Background
-  highlighting NewlineInString {} = Msg.Background
+  highlighting TabStringLiteral {} = Msg.Background
   highlighting _ = Msg.Foreground
 
 -- | Report bad characters in lexer input.
@@ -183,12 +266,63 @@ badChars :: MonadMessages Message m =>
          -> m ()
 badChars str pos = message BadChars { badCharsContent = str, badCharsPos = pos }
 
+-- | Report a bad escape sequence.
+badEscape :: MonadMessages Message m =>
+             Lazy.ByteString
+          -- ^ The bad characters.
+          -> Position
+          -- ^ The position at which the bad characters occur.
+          -> m ()
+badEscape str pos = message BadEscape { badEscContent = str, badEscPos = pos }
+
+-- | Report an empty character literal.
+emptyCharLiteral :: MonadMessages Message m =>
+                    Position
+                 -- ^ The position at which the bad characters occur.
+                 -> m ()
+emptyCharLiteral pos =
+  message EmptyCharLiteral { emptyCharPos = pos }
+
+-- | Report an empty character literal.
+longCharLiteral :: MonadMessages Message m =>
+                   Lazy.ByteString
+                -- ^ The character literal.
+                -> Position
+                -- ^ The position at which the bad characters occur.
+                -> m ()
+longCharLiteral str pos =
+  message LongCharLiteral { longCharPos = pos, longCharContent = str }
+
+-- | Report an unescaped newline in a character literal.
+newlineCharLiteral :: MonadMessages Message m =>
+                      Position
+                   -- ^ The position at which the bad characters occur.
+                   -> m ()
+newlineCharLiteral pos =
+  message NewlineCharLiteral { newlineCharPos = pos }
+
+-- | Report an unescaped tab in a character literal.
+tabCharLiteral :: MonadMessages Message m =>
+                  Position
+               -- ^ The position at which the bad characters occur.
+               -> m ()
+tabCharLiteral pos =
+  message TabCharLiteral { tabCharPos = pos }
+
 -- | Report an unterminated comment in lexer input.
 untermComment :: MonadMessages Message m =>
             Position
          -- ^ The position at which the hard tabs occur.
          -> m ()
 untermComment pos = message UntermComment { untermCommentPos = pos }
+
+-- | Report an unescaped tab in a string literal.
+tabInStringLiteral :: MonadMessages Message m =>
+                      Position
+                   -- ^ The position at which the bad characters occur.
+                   -> m ()
+tabInStringLiteral pos =
+  message TabStringLiteral { tabStringPos = pos }
 
 -- | Report an unterminated comment in lexer input.
 untermString :: MonadMessages Message m =>
