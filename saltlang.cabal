@@ -1,5 +1,5 @@
 Name:                   saltlang
-Version:                0.0.0.0
+Version:                0.0.0
 Synopsis:               The Salt programming language.
 Description:
   Salt is split into a surface syntax, which focuses on usability,
@@ -86,8 +86,14 @@ Maintainer:             eric@metricspace.net
 Stability:              Development
 Category:               Languages
 Build-type:             Simple
-Cabal-version:          >= 1.9.2
+Cabal-version:          >= 1.16
 
+Source-Repository head
+  Type: git
+  Location: git@github.com:emc2/arith-encode.git
+
+
+{-
 Test-Suite unit-tests
     type:               exitcode-stdio-1.0
     build-depends:      base, Cabal, HUnit-Plus, proglang-util, containers,
@@ -107,26 +113,42 @@ Test-Suite unit-tests
                         Test.UnitTests.Control.Monad.ProofRecorder
                         Test.Utils.ComboTests
                         Test.Utils.ScratchDirs
+-}
+
+Executable saltc
+  default-language:     Haskell2010
+  build-depends:        base, compiler-misc, bound, containers, prelude-extras,
+                        mtl, hashable, hashable-extras, bytestring, utf8-string,
+                        hexpat, hexpat-pickle, array, saltlang
+  build-tools:          alex
+  hs-source-dirs:       src/saltc
+  main-is:              Language/Salt/Compiler/Main.hs
 
 Library
-  build-depends:        base, proglang-util, bound, containers, prelude-extras,
-                        mtl, hashable, hashable-extras
-  hs-source-dirs:       src
-  exposed-modules:      Language.Salt.Core,
+  default-language:     Haskell2010
+  build-depends:        base, compiler-misc, bound, containers, prelude-extras,
+                        mtl, hashable, hashable-extras, bytestring, utf8-string,
+                        hexpat, hexpat-pickle, array
+  build-tools:          alex
+  hs-source-dirs:       src/library
+  exposed-modules:
+--      Language.Salt.Core,
 --                        Language.Salt.Core.Patterns,
-                        Language.Salt.Core.Syntax,
-                        Language.Salt.Core.TypeCheck,
-                        Language.Salt.Surface.AST
-  other-modules:        Control.Monad.Proof.Class,
---                        Control.Monad.ProofChecker,
-                        Control.Monad.ProofErrors.Class,
-                        Control.Monad.ProofNames.Class,
-                        Control.Monad.ProofObligations.Class,
-                        Control.Monad.ProofRecorder,
-                        Control.Monad.TypeErrors.Class,
-                        Control.Monad.TypeCheck.Class,
-                        Language.Salt.Core.Proofs.ProofScript,
-                        Language.Salt.Core.Proofs.ProofState,
-                        Language.Salt.Diagnostics.ProofError,
-                        Language.Salt.Surface.Common,
+--                        Language.Salt.Core.Syntax,
+--                        Language.Salt.Core.TypeCheck,
+--                        Language.Salt.Surface.AST
+                        Language.Salt.Message,
                         Language.Salt.Surface.Token
+                        Language.Salt.Surface.Lexer
+--  other-modules:        Control.Monad.Proof.Class,
+--                        Control.Monad.ProofChecker,
+--                        Control.Monad.ProofErrors.Class,
+--                        Control.Monad.ProofNames.Class,
+--                        Control.Monad.ProofObligations.Class,
+--                        Control.Monad.ProofRecorder,
+--                        Control.Monad.TypeErrors.Class,
+--                        Control.Monad.TypeCheck.Class,
+--                        Language.Salt.Core.Proofs.ProofScript,
+--                        Language.Salt.Core.Proofs.ProofState,
+--                        Language.Salt.Surface.Common,
+
