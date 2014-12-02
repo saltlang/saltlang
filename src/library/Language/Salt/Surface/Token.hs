@@ -20,6 +20,7 @@
 -- | Defines the type of tokens produced by the lexer.  These
 module Language.Salt.Surface.Token(
        Token(..),
+       position,
        keywords,
        ) where
 
@@ -48,14 +49,10 @@ data Token =
   | Equal !Position
   -- | The text '...'
   | Ellipsis !Position
-  -- | The text '->'
-  | Arrow !Position
   -- | The text '.'
   | Dot !Position
   -- | The text ':'
   | Colon !Position
-  -- | The text '::'
-  | ColonColon !Position
   -- | The text ','
   | Comma !Position
   -- | The text ';'
@@ -86,17 +83,43 @@ data Token =
   | With !Position
   -- | The text 'where'
   | Where !Position
+  -- | The text 'at'
+  | As !Position
   -- | The end-of-file token
   | EOF
     deriving (Ord, Eq)
 
+position :: Token -> Position
+position (Id _ pos) = pos
+position (Num _ pos) = pos
+position (String _ pos) = pos
+position (Character _ pos) = pos
+position (Equal pos) = pos
+position (Ellipsis pos) = pos
+position (Dot pos) = pos
+position (Colon pos) = pos
+position (Comma pos) = pos
+position (Semicolon pos) = pos
+position (LParen pos) = pos
+position (RParen pos) = pos
+position (LBrack pos) = pos
+position (RBrack pos) = pos
+position (LBrace pos) = pos
+position (RBrace pos) = pos
+position (Forall pos) = pos
+position (Exists pos) = pos
+position (Module pos) = pos
+position (Signature pos) = pos
+position (Class pos) = pos
+position (With pos) = pos
+position (Where pos) = pos
+position (As pos) = pos
+position EOF = error "Can't take position of EOF"
+
 keywords :: [(Strict.ByteString, Position -> Token)]
 keywords = [
     (Strict.fromString "=", Equal),
-    (Strict.fromString "->", Arrow),
-    (Strict.fromString "\x2192", Arrow),
     (Strict.fromString ":", Colon),
-    (Strict.fromString "::", ColonColon),
     (Strict.fromString "\x2200", Forall),
     (Strict.fromString "forall", Forall),
     (Strict.fromString "\x2203", Exists),
@@ -105,7 +128,8 @@ keywords = [
     (Strict.fromString "signature", Signature),
     (Strict.fromString "class", Class),
     (Strict.fromString "with", With),
-    (Strict.fromString "where", Where)
+    (Strict.fromString "where", Where),
+    (Strict.fromString "as", As)
   ]
 
 idPickler :: (GenericXMLString tag, Show tag,
@@ -113,28 +137,23 @@ idPickler :: (GenericXMLString tag, Show tag,
              PU [NodeG [] tag text] Token
 idPickler =
   let
-    revfunc (Id sym pos) = ((), sym, pos)
+    revfunc (Id sym pos) = (sym, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), sym, pos) -> Id sym pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpTriple (xpAttrFixed (gxFromString "kind")
-                                               (gxFromString "Id"))
-                                  xpickle xpickle))
+    xpWrap (uncurry Id, revfunc) (xpElemAttrs (gxFromString "Id")
+                                              (xpPair xpickle xpickle))
 
 numPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Token
 numPickler =
   let
-    revfunc (Num num pos) = ((), numerator num, denominator num, pos)
+    revfunc (Num num pos) = (numerator num, denominator num, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), numer, denom, pos) -> Num (numer % denom) pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xp4Tuple (xpAttrFixed (gxFromString "kind")
-                                               (gxFromString "Num"))
-                                  (xpAttr (gxFromString "numerator") xpPrim)
+    xpWrap (\(numer, denom, pos) -> Num (numer % denom) pos, revfunc)
+           (xpElemAttrs (gxFromString "Num")
+                        (xpTriple (xpAttr (gxFromString "numerator") xpPrim)
                                   (xpAttr (gxFromString "denominator") xpPrim)
                                   xpickle))
 
@@ -143,14 +162,11 @@ strPickler :: (GenericXMLString tag, Show tag,
               PU [NodeG [] tag text] Token
 strPickler =
   let
-    revfunc (String str pos) = (((), pos), gxFromByteString str)
+    revfunc (String str pos) = (pos, gxFromByteString str)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(((), pos), str) -> String (gxToByteString str) pos, revfunc)
-           (xpElem (gxFromString "token")
-                   (xpPair (xpAttrFixed (gxFromString "kind")
-                                        (gxFromString "String"))
-                           xpickle)
+    xpWrap (\(pos, str) -> String (gxToByteString str) pos, revfunc)
+           (xpElem (gxFromString "String") xpickle
                    (xpElemNodes (gxFromString "value")
                                 (xpContent xpText0)))
 
@@ -159,317 +175,218 @@ charPickler :: (GenericXMLString tag, Show tag,
                PU [NodeG [] tag text] Token
 charPickler =
   let
-    revfunc (Character chr pos) = ((), chr, pos)
+    revfunc (Character chr pos) = (chr, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), chr, pos) -> Character chr pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpTriple (xpAttrFixed (gxFromString "kind")
-                                               (gxFromString "Character"))
-                                  (xpAttr (gxFromString "value") xpPrim)
-                                  xpickle))
+    xpWrap (uncurry Character, revfunc)
+           (xpElemAttrs (gxFromString "Character")
+                        (xpPair (xpAttr (gxFromString "value") xpPrim) xpickle))
 
 equalPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Token
 equalPickler =
   let
-    revfunc (Equal pos) = ((), pos)
+    revfunc (Equal pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Equal pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Equal"))
-                                xpickle))
+    xpWrap (Equal, revfunc) (xpElemAttrs (gxFromString "Equal") xpickle)
 
 ellipsisPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Token
 ellipsisPickler =
   let
-    revfunc (Ellipsis pos) = ((), pos)
+    revfunc (Ellipsis pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Ellipsis pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Ellipsis"))
-                                xpickle))
-
-arrowPickler :: (GenericXMLString tag, Show tag,
-                 GenericXMLString text, Show text) =>
-                PU [NodeG [] tag text] Token
-arrowPickler =
-  let
-    revfunc (Arrow pos) = ((), pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\((), pos) -> Arrow pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Arrow"))
-                                xpickle))
+    xpWrap (Ellipsis, revfunc) (xpElemAttrs (gxFromString "Ellipsis") xpickle)
 
 dotPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Token
 dotPickler =
   let
-    revfunc (Dot pos) = ((), pos)
+    revfunc (Dot pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Dot pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Dot"))
-                                xpickle))
+    xpWrap (Dot, revfunc) (xpElemAttrs (gxFromString "Dot") xpickle)
 
 colonPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Token
 colonPickler =
   let
-    revfunc (Colon pos) = ((), pos)
+    revfunc (Colon pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Colon pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Colon"))
-                                xpickle))
+    xpWrap (Colon, revfunc) (xpElemAttrs (gxFromString "Colon") xpickle)
 
 commaPickler :: (GenericXMLString tag, Show tag,
               GenericXMLString text, Show text) =>
              PU [NodeG [] tag text] Token
 commaPickler =
   let
-    revfunc (Comma pos) = ((), pos)
+    revfunc (Comma pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Comma pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Comma"))
-                                xpickle))
+    xpWrap (Comma, revfunc) (xpElemAttrs (gxFromString "Comma") xpickle)
 
 semicolonPickler :: (GenericXMLString tag, Show tag,
                      GenericXMLString text, Show text) =>
                     PU [NodeG [] tag text] Token
 semicolonPickler =
   let
-    revfunc (Semicolon pos) = ((), pos)
+    revfunc (Semicolon pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Semicolon pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Semicolon"))
-                                xpickle))
-
-colonColonPickler :: (GenericXMLString tag, Show tag,
-                      GenericXMLString text, Show text) =>
-                     PU [NodeG [] tag text] Token
-colonColonPickler =
-  let
-    revfunc (ColonColon pos) = ((), pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\((), pos) -> ColonColon pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "ColonColon"))
-                                xpickle))
+    xpWrap (Semicolon, revfunc) (xpElemAttrs (gxFromString "Semicolon") xpickle)
 
 lparenPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 lparenPickler =
   let
-    revfunc (LParen pos) = ((), pos)
+    revfunc (LParen pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> LParen pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "LParen"))
-                                xpickle))
+    xpWrap (LParen, revfunc) (xpElemAttrs (gxFromString "LParen") xpickle)
 
 rparenPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 rparenPickler =
   let
-    revfunc (RParen pos) = ((), pos)
+    revfunc (RParen pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> RParen pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "RParen"))
-                                xpickle))
+    xpWrap (RParen, revfunc) (xpElemAttrs (gxFromString "RParen") xpickle)
 
 lbrackPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 lbrackPickler =
   let
-    revfunc (LBrack pos) = ((), pos)
+    revfunc (LBrack pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> LBrack pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "LBrack"))
-                                xpickle))
+    xpWrap (LBrack, revfunc) (xpElemAttrs (gxFromString "LBrack") xpickle)
 
 rbrackPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 rbrackPickler =
   let
-    revfunc (RBrack pos) = ((), pos)
+    revfunc (RBrack pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> RBrack pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "RBrack"))
-                                xpickle))
+    xpWrap (RBrack, revfunc) (xpElemAttrs (gxFromString "RBrack") xpickle)
 
 lbracePickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 lbracePickler =
   let
-    revfunc (LBrace pos) = ((), pos)
+    revfunc (LBrace pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> LBrace pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "LBrace"))
-                                xpickle))
+    xpWrap (LBrace, revfunc) (xpElemAttrs (gxFromString "LBrace") xpickle)
 
 rbracePickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 rbracePickler =
   let
-    revfunc (RBrace pos) = ((), pos)
+    revfunc (RBrace pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> RBrace pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "RBrace"))
-                                xpickle))
+    xpWrap (RBrace, revfunc) (xpElemAttrs (gxFromString "RBrace") xpickle)
 
 forallPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 forallPickler =
   let
-    revfunc (Forall pos) = ((), pos)
+    revfunc (Forall pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Forall pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Forall"))
-                                xpickle))
+    xpWrap (Forall, revfunc) (xpElemAttrs (gxFromString "Forall") xpickle)
 
 existsPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 existsPickler =
   let
-    revfunc (Exists pos) = ((), pos)
+    revfunc (Exists pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Exists pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Exists"))
-                                xpickle))
+    xpWrap (Exists, revfunc) (xpElemAttrs (gxFromString "Exists") xpickle)
 
 modulePickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
 modulePickler =
   let
-    revfunc (Module pos) = ((), pos)
+    revfunc (Module pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Module pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Module"))
-                                xpickle))
+    xpWrap (Module, revfunc) (xpElemAttrs (gxFromString "Module") xpickle)
 
 signaturePickler :: (GenericXMLString tag, Show tag,
                      GenericXMLString text, Show text) =>
                     PU [NodeG [] tag text] Token
 signaturePickler =
   let
-    revfunc (Signature pos) = ((), pos)
+    revfunc (Signature pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Signature pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Signature"))
-                                xpickle))
+    xpWrap (Signature, revfunc) (xpElemAttrs (gxFromString "Signature") xpickle)
 
 classPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Token
 classPickler =
   let
-    revfunc (Class pos) = ((), pos)
+    revfunc (Class pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Class pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Class"))
-                                xpickle))
+    xpWrap (Class, revfunc) (xpElemAttrs (gxFromString "Class") xpickle)
 
 withPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
                PU [NodeG [] tag text] Token
 withPickler =
   let
-    revfunc (With pos) = ((), pos)
+    revfunc (With pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> With pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "With"))
-                                xpickle))
+    xpWrap (With, revfunc) (xpElemAttrs (gxFromString "With") xpickle)
 
 wherePickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Token
 wherePickler =
   let
-    revfunc (Where pos) = ((), pos)
+    revfunc (Where pos) = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((), pos) -> Where pos, revfunc)
-           (xpElemAttrs (gxFromString "token")
-                        (xpPair (xpAttrFixed (gxFromString "kind")
-                                             (gxFromString "Where"))
-                                xpickle))
+    xpWrap (Where, revfunc) (xpElemAttrs (gxFromString "Where") xpickle)
+
+asPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+asPickler =
+  let
+    revfunc (As pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (As, revfunc) (xpElemAttrs (gxFromString "As") xpickle)
 
 eofPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Token
 eofPickler =
-  xpWrap (const EOF, const ()) (xpElemAttrs (gxFromString "token")
-                                            (xpAttrFixed (gxFromString "kind")
-                                                         (gxFromString "EOF")))
+  xpWrap (const EOF, const ()) (xpElemAttrs (gxFromString "EOF") xpUnit)
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Token where
@@ -482,10 +399,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Character _ _) = 4
       picker (Equal _) = 5
       picker (Ellipsis _) = 6
-      picker (Arrow _) = 7
       picker (Dot _) = 8
       picker (Colon _) = 9
-      picker (ColonColon _) = 10
       picker (Comma _) = 11
       picker (Semicolon _) = 12
       picker (LParen _) = 13
@@ -501,14 +416,15 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Class _) = 23
       picker (With _) = 24
       picker (Where _) = 25
+      picker (As _) = 26
     in
       xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
-                    charPickler,equalPickler, ellipsisPickler, arrowPickler,
-                    dotPickler, colonPickler, colonColonPickler, commaPickler,
-                    semicolonPickler, lparenPickler, rparenPickler,
-                    lbrackPickler, rbrackPickler, lbracePickler, rbracePickler,
-                    forallPickler, existsPickler, modulePickler,
-                    signaturePickler, classPickler, withPickler, wherePickler ]
+                    charPickler,equalPickler, ellipsisPickler, dotPickler,
+                    colonPickler, commaPickler, semicolonPickler,
+                    lparenPickler, rparenPickler, lbrackPickler, rbrackPickler,
+                    lbracePickler, rbracePickler, forallPickler, existsPickler,
+                    modulePickler, signaturePickler, classPickler,
+                    withPickler, wherePickler, asPickler ]
 
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos doc =
@@ -536,10 +452,8 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
     addPosition pos (string "character" <+> squoted (char chr))
   formatM (Equal pos) = addPosition pos (string "punctuation \'=\'")
   formatM (Ellipsis pos) = addPosition pos (string "punctuation \'...\'")
-  formatM (Arrow pos) = addPosition pos (string "operator \'->\'")
   formatM (Dot pos) = addPosition pos (string "punctuation \'.\'")
   formatM (Colon pos) = addPosition pos (string "punctuation \':\'")
-  formatM (ColonColon pos) = addPosition pos (string "punctuation \'::\'")
   formatM (Comma pos) = addPosition pos (string "punctuation \',\'")
   formatM (Semicolon pos) = addPosition pos (string "punctuation \';\'")
   formatM (LParen pos) = addPosition pos (string "punctuation \'(\'")
@@ -555,3 +469,4 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (Class pos) = addPosition pos (string "keyword \"class\"")
   formatM (With pos) = addPosition pos (string "keyword \"with\"")
   formatM (Where pos) = addPosition pos (string "keyword \"where\"")
+  formatM (As pos) = addPosition pos (string "keyword \"as\"")
