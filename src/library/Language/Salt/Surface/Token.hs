@@ -49,6 +49,8 @@ data Token =
   | Equal !Position
   -- | The text '...'
   | Ellipsis !Position
+  -- | The text '|'
+  | Bar !Position
   -- | The text '.'
   | Dot !Position
   -- | The text ':'
@@ -69,6 +71,7 @@ data Token =
   | LBrace !Position
   -- | The text '}'
   | RBrace !Position
+  | Lambda !Position
   -- | The text 'forall'
   | Forall !Position
   -- | The text 'exists'
@@ -79,12 +82,32 @@ data Token =
   | Signature !Position
   -- | The text 'class'
   | Class !Position
+  -- | The text 'typeclass'
+  | Typeclass !Position
+  -- | The text 'theorem'
+  | Theorem !Position
+  -- | The text 'invariant'
+  | Invariant !Position
+  -- | The text 'proof'
+  | Proof !Position
   -- | The text 'with'
   | With !Position
   -- | The text 'where'
   | Where !Position
   -- | The text 'at'
   | As !Position
+  -- | The text 'private'
+  | Private !Position
+  -- | The text 'protected'
+  | Protected !Position
+  -- | The text 'public'
+  | Public !Position
+  -- | The text 'match'
+  | Match !Position
+  -- | The text 'let'
+  | Let !Position
+  -- | The text 'fun'
+  | Fun ! Position
   -- | The end-of-file token
   | EOF
     deriving (Ord, Eq)
@@ -96,6 +119,7 @@ position (String _ pos) = pos
 position (Character _ pos) = pos
 position (Equal pos) = pos
 position (Ellipsis pos) = pos
+position (Bar pos) = pos
 position (Dot pos) = pos
 position (Colon pos) = pos
 position (Comma pos) = pos
@@ -106,20 +130,32 @@ position (LBrack pos) = pos
 position (RBrack pos) = pos
 position (LBrace pos) = pos
 position (RBrace pos) = pos
+position (Lambda pos) = pos
 position (Forall pos) = pos
 position (Exists pos) = pos
 position (Module pos) = pos
 position (Signature pos) = pos
 position (Class pos) = pos
+position (Typeclass pos) = pos
+position (Theorem pos) = pos
+position (Invariant pos) = pos
+position (Proof pos) = pos
 position (With pos) = pos
 position (Where pos) = pos
 position (As pos) = pos
+position (Private pos) = pos
+position (Protected pos) = pos
+position (Public pos) = pos
+position (Match pos) = pos
+position (Let pos) = pos
+position (Fun pos) = pos
 position EOF = error "Can't take position of EOF"
 
 keywords :: [(Strict.ByteString, Position -> Token)]
 keywords = [
     (Strict.fromString "=", Equal),
     (Strict.fromString ":", Colon),
+    (Strict.fromString "|", Bar),
     (Strict.fromString "\x2200", Forall),
     (Strict.fromString "forall", Forall),
     (Strict.fromString "\x2203", Exists),
@@ -127,9 +163,19 @@ keywords = [
     (Strict.fromString "module", Module),
     (Strict.fromString "signature", Signature),
     (Strict.fromString "class", Class),
+    (Strict.fromString "typeclass", Typeclass),
+    (Strict.fromString "theorem", Theorem),
+    (Strict.fromString "invariant", Invariant),
+    (Strict.fromString "Proof", Proof),
     (Strict.fromString "with", With),
     (Strict.fromString "where", Where),
-    (Strict.fromString "as", As)
+    (Strict.fromString "as", As),
+    (Strict.fromString "private", Private),
+    (Strict.fromString "protected", Protected),
+    (Strict.fromString "public", Public),
+    (Strict.fromString "match", Match),
+    (Strict.fromString "let", Let),
+    (Strict.fromString "fun", Fun)
   ]
 
 idPickler :: (GenericXMLString tag, Show tag,
@@ -201,6 +247,16 @@ ellipsisPickler =
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Ellipsis, revfunc) (xpElemAttrs (gxFromString "Ellipsis") xpickle)
+
+barPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Token
+barPickler =
+  let
+    revfunc (Bar pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Bar, revfunc) (xpElemAttrs (gxFromString "Bar") xpickle)
 
 dotPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -302,6 +358,16 @@ rbracePickler =
   in
     xpWrap (RBrace, revfunc) (xpElemAttrs (gxFromString "RBrace") xpickle)
 
+lambdaPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text) =>
+                 PU [NodeG [] tag text] Token
+lambdaPickler =
+  let
+    revfunc (Lambda pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Lambda, revfunc) (xpElemAttrs (gxFromString "Lambda") xpickle)
+
 forallPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
                  PU [NodeG [] tag text] Token
@@ -352,6 +418,46 @@ classPickler =
   in
     xpWrap (Class, revfunc) (xpElemAttrs (gxFromString "Class") xpickle)
 
+typeclassPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+typeclassPickler =
+  let
+    revfunc (Typeclass pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Typeclass, revfunc) (xpElemAttrs (gxFromString "Typeclass") xpickle)
+
+theoremPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+theoremPickler =
+  let
+    revfunc (Theorem pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Theorem, revfunc) (xpElemAttrs (gxFromString "Theorem") xpickle)
+
+invariantPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+invariantPickler =
+  let
+    revfunc (Invariant pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Invariant, revfunc) (xpElemAttrs (gxFromString "Invariant") xpickle)
+
+proofPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+proofPickler =
+  let
+    revfunc (Proof pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Proof, revfunc) (xpElemAttrs (gxFromString "Proof") xpickle)
+
 withPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
                PU [NodeG [] tag text] Token
@@ -373,14 +479,74 @@ wherePickler =
     xpWrap (Where, revfunc) (xpElemAttrs (gxFromString "Where") xpickle)
 
 asPickler :: (GenericXMLString tag, Show tag,
-                 GenericXMLString text, Show text) =>
-                PU [NodeG [] tag text] Token
+              GenericXMLString text, Show text) =>
+             PU [NodeG [] tag text] Token
 asPickler =
   let
     revfunc (As pos) = pos
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (As, revfunc) (xpElemAttrs (gxFromString "As") xpickle)
+
+privatePickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+privatePickler =
+  let
+    revfunc (Private pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Private, revfunc) (xpElemAttrs (gxFromString "Private") xpickle)
+
+protectedPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+protectedPickler =
+  let
+    revfunc (Protected pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Protected, revfunc) (xpElemAttrs (gxFromString "Protected") xpickle)
+
+publicPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+publicPickler =
+  let
+    revfunc (Public pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Public, revfunc) (xpElemAttrs (gxFromString "Public") xpickle)
+
+matchPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+matchPickler =
+  let
+    revfunc (Match pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Match, revfunc) (xpElemAttrs (gxFromString "Match") xpickle)
+
+letPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Token
+letPickler =
+  let
+    revfunc (Let pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Let, revfunc) (xpElemAttrs (gxFromString "Let") xpickle)
+
+funPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Token
+funPickler =
+  let
+    revfunc (Fun pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Fun, revfunc) (xpElemAttrs (gxFromString "Fun") xpickle)
 
 eofPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -399,6 +565,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Character _ _) = 4
       picker (Equal _) = 5
       picker (Ellipsis _) = 6
+      picker (Bar _) = 7
       picker (Dot _) = 8
       picker (Colon _) = 9
       picker (Comma _) = 11
@@ -409,22 +576,36 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (RBrack _) = 16
       picker (LBrace _) = 17
       picker (RBrace _) = 18
-      picker (Forall _) = 19
-      picker (Exists _) = 20
-      picker (Module _) = 21
-      picker (Signature _) = 22
-      picker (Class _) = 23
-      picker (With _) = 24
-      picker (Where _) = 25
-      picker (As _) = 26
+      picker (Lambda _) = 19
+      picker (Forall _) = 20
+      picker (Exists _) = 21
+      picker (Module _) = 22
+      picker (Signature _) = 23
+      picker (Class _) = 24
+      picker (Typeclass _) = 25
+      picker (Theorem _) = 26
+      picker (Invariant _) = 27
+      picker (Proof _) = 28
+      picker (With _) = 29
+      picker (Where _) = 30
+      picker (As _) = 31
+      picker (Private _) = 32
+      picker (Protected _) = 33
+      picker (Public _) = 34
+      picker (Match _) = 35
+      picker (Let _) = 36
+      picker (Fun _) = 37
     in
       xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
-                    charPickler,equalPickler, ellipsisPickler, dotPickler,
-                    colonPickler, commaPickler, semicolonPickler,
+                    charPickler,equalPickler, ellipsisPickler, barPickler,
+                    dotPickler, colonPickler, commaPickler, semicolonPickler,
                     lparenPickler, rparenPickler, lbrackPickler, rbrackPickler,
-                    lbracePickler, rbracePickler, forallPickler, existsPickler,
-                    modulePickler, signaturePickler, classPickler,
-                    withPickler, wherePickler, asPickler ]
+                    lbracePickler, rbracePickler, lambdaPickler, forallPickler,
+                    existsPickler, modulePickler, signaturePickler,
+                    classPickler, typeclassPickler, theoremPickler,
+                    invariantPickler, proofPickler, withPickler, wherePickler,
+                    asPickler, privatePickler, protectedPickler, publicPickler,
+                    matchPickler, letPickler, funPickler ]
 
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos doc =
@@ -452,6 +633,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
     addPosition pos (string "character" <+> squoted (char chr))
   formatM (Equal pos) = addPosition pos (string "punctuation \'=\'")
   formatM (Ellipsis pos) = addPosition pos (string "punctuation \'...\'")
+  formatM (Bar pos) = addPosition pos (string "punctuation \'|\'")
   formatM (Dot pos) = addPosition pos (string "punctuation \'.\'")
   formatM (Colon pos) = addPosition pos (string "punctuation \':\'")
   formatM (Comma pos) = addPosition pos (string "punctuation \',\'")
@@ -462,11 +644,22 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (RBrack pos) = addPosition pos (string "punctuation \']\'")
   formatM (LBrace pos) = addPosition pos (string "punctuation \'{\'")
   formatM (RBrace pos) = addPosition pos (string "punctuation \'}\'")
+  formatM (Lambda pos) = addPosition pos (string "lambda")
   formatM (Forall pos) = addPosition pos (string "keyword \"forall\"")
   formatM (Exists pos) = addPosition pos (string "keyword \"exists\"")
   formatM (Module pos) = addPosition pos (string "keyword \"module\"")
   formatM (Signature pos) = addPosition pos (string "keyword \"signature\"")
   formatM (Class pos) = addPosition pos (string "keyword \"class\"")
+  formatM (Typeclass pos) = addPosition pos (string "keyword \"typeclass\"")
+  formatM (Theorem pos) = addPosition pos (string "keyword \"theorem\"")
+  formatM (Invariant pos) = addPosition pos (string "keyword \"invariant\"")
+  formatM (Proof pos) = addPosition pos (string "keyword \"proof\"")
   formatM (With pos) = addPosition pos (string "keyword \"with\"")
   formatM (Where pos) = addPosition pos (string "keyword \"where\"")
   formatM (As pos) = addPosition pos (string "keyword \"as\"")
+  formatM (Private pos) = addPosition pos (string "keyword \"private\"")
+  formatM (Protected pos) = addPosition pos (string "keyword \"protected\"")
+  formatM (Public pos) = addPosition pos (string "keyword \"public\"")
+  formatM (Match pos) = addPosition pos (string "keyword \"match\"")
+  formatM (Let pos) = addPosition pos (string "keyword \"let\"")
+  formatM (Fun pos) = addPosition pos (string "keyword \"fun\"")
