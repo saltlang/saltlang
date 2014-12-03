@@ -80,7 +80,7 @@ data Content con =
   | Value !Exp
 
 -- | Type of a scope.
-type Scope = [Element]
+type Scope = [Group]
 
 -- | Scope elements.  These represent declarations, imports, and truth
 -- statements inside a scope.  Note: some of these can be built from
