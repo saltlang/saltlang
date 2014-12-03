@@ -27,7 +27,6 @@ import Control.Monad.Symbols
 import Control.Monad.Trans
 import Language.Salt.Surface.Token
 import Language.Salt.Surface.Lexer
-import Prelude hiding (lex)
 import System.IO
 import Text.Format
 
@@ -51,7 +50,7 @@ lexOnly fname =
   in do
     input <- liftIO (Lazy.readFile fname)
     output <- liftIO (openFile (fname ++ ".tokens") WriteMode)
-    lexresult <- lex fnamebstr input
+    lexresult <- lexFile fnamebstr input
     printTokens output fnamebstr lexresult
     liftIO (hClose output)
 
@@ -61,5 +60,5 @@ lexOnlyStdin =
     stdinname = Strict.fromString "stdin"
   in do
     input <- liftIO Lazy.getContents
-    lexresult <- lex stdinname input
+    lexresult <- lexFile stdinname input
     printTokens stdout stdinname lexresult

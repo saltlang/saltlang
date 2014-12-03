@@ -22,8 +22,9 @@ module Language.Salt.Surface.Lexer(
        Frontend,
        Lexer,
        runLexer,
-       lexer,
-       lex
+       lex,
+       lexAll,
+       lexFile
        ) where
 
 import Control.Monad.Genpos
@@ -414,24 +415,32 @@ AlexActions { actAlexMonadScan = alexMonadScan, actSkip = skip,
   mkAlexActions scanWrapper badChars alexEOF
 
 -- | Lexer function required by Happy threaded lexers.
-lexer :: (Token -> Lexer a)
-      -- ^ A continuation that will receieve the next token.
-      -> Lexer a
-lexer = (alexMonadScan >>=)
+lex :: Lexer Token
+lex = alexMonadScan
+
+-- | Lex all remaining tokens
+lexAll :: Lexer [Token]
+lexAll =
+  let
+    lexAll' :: [Token] -> Lexer [Token]
+    lexAll' accum =
+      do
+        tok <- lex
+        case tok of
+          EOF -> return (reverse $! EOF : accum)
+          _ -> lexAll' (tok : accum)
+  in
+    lexAll' []
 
 -- | Run the lexer completely.  Expects to be wrapped in 'startFile'
 -- and 'finishFile' appropriately.
-lex :: Strict.ByteString -> Lazy.ByteString -> Frontend [Token]
-lex name input =
+lexFile :: Strict.ByteString -> Lazy.ByteString -> Frontend [Token]
+lexFile name input =
   let
-    cont :: [Token] -> Token -> Lexer [Token]
-    cont accum EOF = return (reverse (EOF : accum))
-    cont accum tok = lexer (cont (tok : accum))
-
     run =
       do
         startFile name input
-        out <- lexer (cont [])
+        out <- lexAll
 	finishFile
 	return out
   in
