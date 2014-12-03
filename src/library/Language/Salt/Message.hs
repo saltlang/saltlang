@@ -32,12 +32,14 @@ module Language.Salt.Message(
        tabInStringLiteral,
        hardTabs,
        trailingWhitespace,
-       newlineInString
+       newlineInString,
+       parseError
        ) where
 
 import Control.Monad.Messages
 import Data.Hashable
 import Data.Position
+import Language.Salt.Surface.Token
 --import Data.Symbol
 --import Language.Salt.Core.Syntax
 
@@ -107,6 +109,9 @@ data Message =
     }
   | NewlineInString {
       newlineInStringPos :: !Position
+    }
+  | ParseError {
+      parseErrorToken :: !Token
     }
 {-
   -- | An error message representing an undefined proposition in the
@@ -190,6 +195,8 @@ instance Hashable Message where
     s `hashWithSalt` (10 :: Int) `hashWithSalt` pos
   hashWithSalt s NewlineInString { newlineInStringPos = pos } =
     s `hashWithSalt` (11 :: Int) `hashWithSalt` pos
+  hashWithSalt s ParseError { parseErrorToken = tok } =
+    s `hashWithSalt` (12 :: Int) `hashWithSalt` position tok
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -204,6 +211,7 @@ instance Msg.Message Message where
   severity HardTabs {} = Msg.Warning
   severity TrailingWhitespace {} = Msg.Warning
   severity NewlineInString {} = Msg.Error
+  severity ParseError {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
   position BadEscape { badEscPos = pos } = Just pos
@@ -217,6 +225,7 @@ instance Msg.Message Message where
   position HardTabs { hardTabsPos = pos } = Just pos
   position TrailingWhitespace { trailingWhitespacePos = pos } = Just pos
   position NewlineInString { newlineInStringPos = pos } = Just pos
+  position ParseError { parseErrorToken = tok } = Just (position tok)
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = Lazy.UTF8.fromString "Invalid character"
@@ -237,6 +246,8 @@ instance Msg.Message Message where
   brief TrailingWhitespace {} = Lazy.UTF8.fromString "Trailing whitespace"
   brief NewlineInString {} =
     Lazy.UTF8.fromString "Unescaped newline in string literal"
+  brief ParseError {} =
+    Lazy.UTF8.fromString "Syntax error"
 
   details BadChars {} = Lazy.empty
   details BadEscape {} = Lazy.empty
@@ -251,6 +262,7 @@ instance Msg.Message Message where
   details HardTabs {} = Lazy.empty
   details TrailingWhitespace {} = Lazy.empty
   details NewlineInString {} = Lazy.empty
+  details ParseError {} = Lazy.empty
 
   highlighting HardTabs {} = Msg.Background
   highlighting TrailingWhitespace {} = Msg.Background
@@ -311,9 +323,9 @@ tabCharLiteral pos =
 
 -- | Report an unterminated comment in lexer input.
 untermComment :: MonadMessages Message m =>
-            Position
-         -- ^ The position at which the hard tabs occur.
-         -> m ()
+                 Position
+              -- ^ The position at which the hard tabs occur.
+              -> m ()
 untermComment pos = message UntermComment { untermCommentPos = pos }
 
 -- | Report an unescaped tab in a string literal.
@@ -326,9 +338,9 @@ tabInStringLiteral pos =
 
 -- | Report an unterminated comment in lexer input.
 untermString :: MonadMessages Message m =>
-            Position
-         -- ^ The position at which the hard tabs occur.
-         -> m ()
+                Position
+             -- ^ The position at which the hard tabs occur.
+             -> m ()
 untermString pos = message UntermString { untermStringPos = pos }
 
 -- | Report hard tabs in lexer input.
@@ -340,15 +352,22 @@ hardTabs pos = message HardTabs { hardTabsPos = pos }
 
 -- | Report trailing whitespace in lexer input.
 trailingWhitespace :: MonadMessages Message m =>
-            Position
-         -- ^ The position at which the hard tabs occur.
-         -> m ()
+                      Position
+                   -- ^ The position at which the hard tabs occur.
+                   -> m ()
 trailingWhitespace pos =
   message TrailingWhitespace { trailingWhitespacePos = pos }
 
 -- | Report hard tabs in lexer input.
 newlineInString :: MonadMessages Message m =>
-            Position
-         -- ^ The position at which the hard tabs occur.
-         -> m ()
+                   Position
+                -- ^ The position at which the hard tabs occur.
+                -> m ()
 newlineInString pos = message NewlineInString { newlineInStringPos = pos }
+
+-- | Report a parse error.
+parseError :: MonadMessages Message m =>
+              Token
+           -- ^ The position at which the hard tabs occur.
+           -> m ()
+parseError tok = message ParseError { parseErrorToken = tok }
