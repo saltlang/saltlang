@@ -193,3 +193,23 @@ instance Show Visibility where
   show Public = "public"
 
 instance Format Visibility where format = string . show
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler (Attributes tag text) AbstractionKind where
+  xpickle = xpAlt fromEnum
+                  [xpWrap (const Lambda, const ())
+                          (xpAttrFixed (gxFromString "kind")
+                                       (gxFromString "Lambda")),
+                   xpWrap (const Forall, const ())
+                          (xpAttrFixed (gxFromString "kind")
+                                       (gxFromString "Forall")),
+                   xpWrap (const Exists, const ())
+                          (xpAttrFixed (gxFromString "kind")
+                                       (gxFromString "Exists"))]
+
+instance Show AbstractionKind where
+  show Lambda = "lambda"
+  show Forall = "forall"
+  show Exists = "exists"
+
+instance Format AbstractionKind where format = string . show
