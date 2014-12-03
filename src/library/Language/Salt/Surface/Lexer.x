@@ -21,6 +21,7 @@
 module Language.Salt.Surface.Lexer(
        Frontend,
        Lexer,
+       runLexer,
        lexer,
        lex
        ) where
@@ -434,5 +435,8 @@ lex name input =
 	finishFile
 	return out
   in
-    runAlexT run input name initUserState
+    runLexer run name input
+
+runLexer :: Lexer a -> Strict.ByteString -> Lazy.ByteString -> Frontend a
+runLexer l name input = runAlexT l input name initUserState
 }
