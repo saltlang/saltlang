@@ -38,12 +38,16 @@ module Language.Salt.Surface.AST(
        Field(..),
        Entry(..),
        Case(..),
-       elementPosition
+       elementPosition,
+       patternPosition,
+       compoundPosition,
+       literalPosition,
+       expPosition,
+       casePosition
        ) where
 
 import Data.ByteString(ByteString)
 import Data.Hashable
---import Data.Monoid hiding ((<>))
 import Data.Position
 import Data.Ratio
 import Data.Symbol
@@ -412,6 +416,43 @@ elementPosition Def { defPos = pos } = pos
 elementPosition Fun { funPos = pos } = pos
 elementPosition Truth { truthPos = pos } = pos
 elementPosition Proof { proofPos = pos } = pos
+
+patternPosition :: Pattern -> Position
+patternPosition Option { optionPos = pos } = pos
+patternPosition Deconstruct { deconstructPos = pos } = pos
+patternPosition Split { splitPos = pos } = pos
+patternPosition Typed { typedPos = pos } = pos
+patternPosition As { asPos = pos } = pos
+patternPosition Name { namePos = pos } = pos
+patternPosition (Exact l) = literalPosition l
+
+compoundPosition :: Compound -> Position
+compoundPosition (Exp e) = expPosition e
+compoundPosition (Element e) = elementPosition e
+
+literalPosition :: Literal -> Position
+literalPosition Num { numPos = pos } = pos
+literalPosition Str { strPos = pos } = pos
+literalPosition Char { charPos = pos } = pos
+literalPosition Unit { unitPos = pos } = pos
+
+expPosition :: Exp -> Position
+expPosition Compound { compoundPos = pos } = pos
+expPosition Abs { absPos = pos } = pos
+expPosition Match { matchPos = pos } = pos
+expPosition Ascribe { ascribePos = pos } = pos
+expPosition Seq { seqPos = pos } = pos
+expPosition Record { recordPos = pos } = pos
+expPosition Tuple { tuplePos = pos } = pos
+expPosition Project { projectPos = pos } = pos
+expPosition Sym { symPos = pos } = pos
+expPosition With { withPos = pos } = pos
+expPosition Where { wherePos = pos } = pos
+expPosition Anon { anonPos = pos } = pos
+expPosition (Literal l) = literalPosition l
+
+casePosition :: Case -> Position
+casePosition Case { casePos = pos } = pos
 
 instance Eq Group where
   Group { groupVisibility = vis1, groupElements = elems1 } ==
