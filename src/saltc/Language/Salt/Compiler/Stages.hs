@@ -18,10 +18,13 @@
 
 module Language.Salt.Compiler.Stages(
        lexOnly,
+       parse
        ) where
 
 import Control.Monad.Trans
+import Language.Salt.Surface.AST
 import Language.Salt.Surface.Lexer
+import Language.Salt.Surface.Parser
 
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy as Lazy
@@ -41,3 +44,21 @@ lexOnly savetext savexml =
         runLexer lexRemaining textpath xmlpath fnamebstr input
   in
     mapM_ lexOnlyFile
+
+parse :: Bool -> Bool -> Bool -> Bool -> [FilePath] -> Frontend ()
+parse toktxt tokxml asttxt astxml =
+  let
+    parseFile :: FilePath -> Frontend (Maybe [Element])
+    parseFile fname =
+      let
+        fnamebstr = Strict.fromString fname
+
+        toktxtpath = if toktxt then Just $! fname ++ ".tokens" else Nothing
+        tokxmlpath = if tokxml then Just $! fname ++ ".tokens.xml" else Nothing
+        asttxtpath = if asttxt then Just $! fname ++ ".ast" else Nothing
+        astxmlpath = if astxml then Just $! fname ++ ".ast.xml" else Nothing
+      in do
+        input <- liftIO (Lazy.readFile fname)
+        parser fnamebstr input toktxtpath tokxmlpath asttxtpath astxmlpath
+  in
+    mapM_ parseFile

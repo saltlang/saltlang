@@ -46,5 +46,13 @@ run Options { optInputFiles = inputs, optStages = stages } =
       in do
         _ <- runFrontendT front keywords
         return ()
-    (Lexer, Parser) -> error "Parser not integrated yet"
+    (Lexer, Parser) ->
+      let
+        Save { saveText = lexerText, saveXML = lexerXML } = stages ! Lexer
+        Save { saveText = parserText, saveXML = parserXML } = stages ! Parser
+        msgs = parse lexerText lexerXML parserText parserXML inputs
+        front = putMessagesT stderr Error msgs
+      in do
+        _ <- runFrontendT front keywords
+        return ()
     (_, _) -> error "Stages array does not begin with Lexer"

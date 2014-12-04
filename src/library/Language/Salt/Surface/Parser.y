@@ -32,7 +32,11 @@ import Language.Salt.Surface.Common
 import Language.Salt.Surface.Lexer hiding (lexer)
 import Language.Salt.Surface.Token(Token)
 import Prelude hiding (span, lex)
+import System.IO
+import Text.XML.Expat.Format
+import Text.XML.Expat.Pickle
 
+import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Language.Salt.Surface.Token as Token
@@ -629,26 +633,53 @@ str :: Token -> Strict.ByteString
 str (Token.String str _) = str
 str _ = error "Cannot get str of token"
 
-parser :: Strict.ByteString -> Lazy.ByteString ->
-          Maybe FilePath -> Maybe FilePath ->
-          Frontend (Maybe [Element])
-parser name input tokentxt tokenxml =
+printXMLAST :: (MonadIO m) => Handle -> Strict.ByteString -> [Element] -> m ()
+printXMLAST handle fname ast =
   let
-    run :: Parser [Element]
-    run =
-      do
-        startFile name input
-        out <- parse
-	finishFile
-	return out
+    pickler = xpRoot (xpElem (Strict.fromString "AST")
+                             (xpAttrFixed (Strict.fromString "filename")
+                                          (fname))
+                             (xpList xpickle))
+    xmltree = indent 2 (pickleTree pickler ((), ast))
+  in
+    liftIO (Lazy.hPutStr handle (format xmltree))
 
+-- | Run the parser
+parser :: Strict.ByteString
+       -- ^ Name of the file being parsed.
+       -> Lazy.ByteString
+       -- ^ Content of the file being parsed
+       -> Maybe FilePath
+       -- ^ File to which to save text tokens, or 'Nothing'.
+       -> Maybe FilePath
+       -- ^ File to which to save XML tokens, or 'Nothing'.
+       -> Maybe FilePath
+       -- ^ File to which to save text AST, or 'Nothing'.
+       -> Maybe FilePath
+       -- ^ File to which to save XML AST, or 'Nothing'.
+       -> Frontend (Maybe [Element])
+parser name input tokentxt tokenxml asttxt astxml =
+  let
     lexer :: Lexer (Maybe [Element])
     lexer =
       do
-        res <- runErrorT run
+        res <- runErrorT parse
         case res of
-          Left () -> return Nothing
-          Right out -> return $! Just out
+          Left () ->
+            do
+              lexRemaining
+              return Nothing
+          Right ast ->
+            let
+              out = reverse ast
+            in do
+              case astxml of
+                Just path -> do
+                  output <- liftIO (openFile path WriteMode)
+                  printXMLAST output name out
+                  liftIO (hClose output)
+                Nothing -> return ()
+              return $! Just out
   in
     runLexer lexer tokentxt tokenxml name input
 
