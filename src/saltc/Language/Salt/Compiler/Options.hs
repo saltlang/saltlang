@@ -38,6 +38,7 @@ data Options =
     -- | An array of all stages to run, and which structures to save.
     optStages :: !(Array Stage Save)
   }
+  deriving Show
 
 -- | What to save at a given stage.
 data Save =
@@ -47,13 +48,13 @@ data Save =
     -- | Save an XML representation.
     saveXML :: !Bool
   }
-  deriving Eq
+  deriving (Eq, Show)
 
 -- | Datatype representing compiler stages.
 data Stage =
     Lexer
   | Parser
-    deriving (Eq, Ord, Enum, Ix)
+    deriving (Eq, Ord, Enum, Ix, Show)
 
 firstStage :: Stage
 firstStage = Lexer
@@ -127,10 +128,24 @@ keepText Nothing = mempty { argTokensSave = setSaveText,
 keepText (Just "all") =
   mempty { argTokensSave = setSaveText, argASTSave = setSaveText }
 keepText (Just "tokens") =
-  mempty { argTokensSave = setSaveText, argASTSave = setSaveText }
+  mempty { argTokensSave = setSaveText }
 keepText (Just "ast") =
   mempty { argASTSave = setSaveText }
 keepText (Just txt) = Error ["no compiler structure named " ++ txt ++ "\n"]
+
+setSaveXML :: Save
+setSaveXML = mempty { saveXML = True }
+
+keepXML :: Maybe String -> Args
+keepXML Nothing = mempty { argTokensSave = setSaveXML,
+                            argASTSave = setSaveXML }
+keepXML (Just "all") =
+  mempty { argTokensSave = setSaveXML, argASTSave = setSaveXML }
+keepXML (Just "tokens") =
+  mempty { argTokensSave = setSaveXML }
+keepXML (Just "ast") =
+  mempty { argASTSave = setSaveXML }
+keepXML (Just txt) = Error ["no compiler structure named " ++ txt ++ "\n"]
 
 stopAfter :: String -> Args
 stopAfter "lexer" = mempty { argLastStage = Stage Lexer }
@@ -142,6 +157,8 @@ optionsDesc = [
     Option ['V'] ["version"] (NoArg Version)
       "display version number",
     Option ['k'] ["keep"] (OptArg keepText "STAGE")
+      "save intermediate structures as text",
+    Option ['K'] ["keep-xml"] (OptArg keepXML "STAGE")
       "save intermediate structures as text",
     Option ['s'] ["stop-after"] (ReqArg stopAfter "STAGE")
       "stop after compiler stage"
