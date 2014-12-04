@@ -629,8 +629,10 @@ str :: Token -> Strict.ByteString
 str (Token.String str _) = str
 str _ = error "Cannot get str of token"
 
-parser :: Strict.ByteString -> Lazy.ByteString -> Frontend (Maybe [Element])
-parser name input =
+parser :: Strict.ByteString -> Lazy.ByteString ->
+          Maybe FilePath -> Maybe FilePath ->
+          Frontend (Maybe [Element])
+parser name input tokentxt tokenxml =
   let
     run :: Parser [Element]
     run =
@@ -648,6 +650,6 @@ parser name input =
           Left () -> return Nothing
           Right out -> return $! Just out
   in
-    runLexer lexer name input
+    runLexer lexer tokentxt tokenxml name input
 
 }

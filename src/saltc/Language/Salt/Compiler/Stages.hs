@@ -17,51 +17,27 @@
 {-# OPTIONS_GHC -Wall -Werror #-}
 
 module Language.Salt.Compiler.Stages(
-       printTokens,
        lexOnly,
-       lexOnlyStdin
        ) where
 
-import Control.Monad.Positions
-import Control.Monad.Symbols
 import Control.Monad.Trans
-import Language.Salt.Surface.Token
 import Language.Salt.Surface.Lexer
-import System.IO
-import Text.Format
 
-import qualified Data.ByteString as Strict
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy as Lazy
 
--- | Print out all tokens as text to the given handle
-printTokens :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
-               Handle -> Strict.ByteString -> [Token] -> m ()
-printTokens handle fname tokens =
-  do
-    tokdocs <- mapM formatM tokens
-    liftIO (putFast handle (vcat (string "Tokens for" <+> bytestring fname <>
-                                  colon : tokdocs) <> line))
-
-lexOnly :: [FilePath] -> Frontend ()
-lexOnly = mapM_ lexOnlyFile
-
-lexOnlyFile :: FilePath -> Frontend ()
-lexOnlyFile fname =
+lexOnly :: Bool -> Bool -> [FilePath] -> Frontend ()
+lexOnly savetext savexml =
   let
-    fnamebstr = Strict.fromString fname
-  in do
-    input <- liftIO (Lazy.readFile fname)
-    output <- liftIO (openFile (fname ++ ".tokens") WriteMode)
-    lexresult <- lexFile fnamebstr input
-    printTokens output fnamebstr lexresult
-    liftIO (hClose output)
+    lexOnlyFile :: FilePath -> Frontend ()
+    lexOnlyFile fname  =
+      let
+        fnamebstr = Strict.fromString fname
 
-lexOnlyStdin :: Frontend ()
-lexOnlyStdin =
-  let
-    stdinname = Strict.fromString "stdin"
-  in do
-    input <- liftIO Lazy.getContents
-    lexresult <- lexFile stdinname input
-    printTokens stdout stdinname lexresult
+        textpath = if savetext then Just $! fname ++ ".tokens" else Nothing
+        xmlpath = if savexml then Just $! fname ++ ".tokens.xml" else Nothing
+      in do
+        input <- liftIO (Lazy.readFile fname)
+        runLexer lexRemaining textpath xmlpath fnamebstr input
+  in
+    mapM_ lexOnlyFile

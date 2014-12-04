@@ -41,7 +41,8 @@ run Options { optInputFiles = inputs, optStages = stages } =
   case bounds stages of
     (Lexer, Lexer) ->
       let
-        front = putMessagesT stderr Error (lexOnly inputs)
+        Save { saveText = lexerText, saveXML = lexerXML } = stages ! Lexer
+        front = putMessagesT stderr Error (lexOnly lexerText lexerXML inputs)
       in do
         _ <- runFrontendT front keywords
         return ()
