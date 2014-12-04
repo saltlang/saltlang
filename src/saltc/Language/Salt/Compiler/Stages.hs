@@ -43,8 +43,11 @@ printTokens handle fname tokens =
     liftIO (putFast handle (vcat (string "Tokens for" <+> bytestring fname <>
                                   colon : tokdocs) <> line))
 
-lexOnly :: FilePath -> Frontend ()
-lexOnly fname =
+lexOnly :: [FilePath] -> Frontend ()
+lexOnly = mapM_ lexOnlyFile
+
+lexOnlyFile :: FilePath -> Frontend ()
+lexOnlyFile fname =
   let
     fnamebstr = Strict.fromString fname
   in do
