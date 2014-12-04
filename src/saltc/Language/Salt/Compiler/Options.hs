@@ -34,7 +34,7 @@ version = "saltc compiler, development version\n"
 data Options =
   Options {
     -- | Input files.
-    optInputFiles :: ![String],
+    optInputFiles :: ![FilePath],
     -- | An array of all stages to run, and which structures to save.
     optStages :: !(Array Stage Save)
   }
