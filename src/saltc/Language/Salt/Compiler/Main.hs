@@ -20,32 +20,15 @@ module Main(
        main
        ) where
 
-import Control.Monad.Frontend
-import Control.Monad.Messages
-import Data.Message
-import Language.Salt.Compiler.Stages
-import Language.Salt.Surface.Token
+import Language.Salt.Compiler.Options
+import Language.Salt.Compiler.Driver
 import System.Environment
 import System.IO
-
-frontend :: [String] -> IO ()
-frontend [] =
-  let
-    front = putMessagesT stderr Error lexOnlyStdin
-  in do
-    _ <- runFrontendT front keywords
-    return ()
-
-frontend args =
-  let
-    run = mapM_ lexOnly args
-    front = putMessagesT stderr Error run
-  in do
-    _ <- runFrontendT front keywords
-    return ()
 
 main :: IO ()
 main =
   do
     args <- getArgs
-    frontend args
+    case options args of
+      Left output -> mapM_ (hPutStr stderr) output
+      Right opts -> run opts
