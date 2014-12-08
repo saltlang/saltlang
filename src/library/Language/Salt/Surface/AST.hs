@@ -24,6 +24,7 @@
 -- Note that this structure isn't meant to be processed in any truly
 -- meaningful way.
 module Language.Salt.Surface.AST(
+       AST,
        BuilderKind(..),
        TruthKind(..),
        Visibility(..),
@@ -43,17 +44,23 @@ module Language.Salt.Surface.AST(
        compoundPosition,
        literalPosition,
        expPosition,
-       casePosition
+       casePosition,
+--       astDot
        ) where
 
+import Control.Monad
+import Control.Monad.Positions
+--import Control.Monad.State
+import Control.Monad.Symbols
 import Data.ByteString(ByteString)
 import Data.Hashable
 import Data.Position
 import Data.Ratio
 import Data.Symbol
+--import Data.Word
 import Language.Salt.Surface.Common
 import Prelude hiding (sequence, init, exp)
---import Text.Format hiding ((<$>))
+import Text.FormatM
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
@@ -82,6 +89,8 @@ data Content con =
 -- | Type of a scope.
 type Scope = [Group]
 
+type AST = [Element]
+
 -- | Scope elements.  These represent declarations, imports, and truth
 -- statements inside a scope.  Note: some of these can be built from
 -- others.
@@ -94,24 +103,14 @@ data Element =
       builderName :: !Symbol,
       -- | The type of entity the builder represents.
       builderKind :: !BuilderKind,
-      -- | The declared supertypes for this builder entity.
-      builderSuperTypes :: ![Exp],
       -- | The parameters of the builder entity.
       builderParams :: ![Field],
+      -- | The declared supertypes for this builder entity.
+      builderSuperTypes :: ![Exp],
       -- | The entities declared by the builder.
       builderContent :: !(Content Scope),
       -- | The position in source from which this arises.
       builderPos :: !Position
-    }
-    -- | Declaration.  Declares the type of a symbol, but does not
-    -- give an initializer.
-  | Decl {
-      -- | Name of the value being declared.
-      declName :: !Symbol,
-      -- | The type of the value being declared.
-      declType :: !Exp,
-      -- | The position in source from which this arises.
-      declPos :: !Position
     }
     -- | Value definitions.  These are declarations coupled with
     -- values.  These include function declarations.
@@ -119,7 +118,7 @@ data Element =
       -- | The pattern for the definition
       defPattern :: !Pattern,
       -- | The value's initializer.
-      defInit :: !Exp,
+      defInit :: !(Maybe Exp),
       -- | The position in source from which this arises.
       defPos :: !Position
     }
@@ -411,7 +410,6 @@ data Case =
 
 elementPosition :: Element -> Position
 elementPosition Builder { builderPos = pos } = pos
-elementPosition Decl { declPos = pos } = pos
 elementPosition Def { defPos = pos } = pos
 elementPosition Fun { funPos = pos } = pos
 elementPosition Truth { truthPos = pos } = pos
@@ -471,9 +469,6 @@ instance Eq Element where
             builderSuperTypes = supers2, builderContent = body2 } =
     name1 == name2 && cls1 == cls2 && params1 == params2 &&
     supers1 == supers2 && body1 == body2
-  Decl { declName = name1, declType = ty1 } ==
-    Decl { declName = name2, declType = ty2 } =
-      name1 == name2 && ty1 == ty2
   Def { defPattern = pat1, defInit = init1 } ==
     Def { defPattern = pat2, defInit = init2 } =
       pat1 == pat2 && init1 == init2
@@ -606,13 +601,6 @@ instance Ord Element where
       out -> out
   compare Builder {} _ = GT
   compare _ Builder {} = LT
-  compare Decl { declName = name1, declType = ty1 }
-          Decl { declName = name2, declType = ty2 } =
-    case compare name1 name2 of
-      EQ -> compare ty1 ty2
-      out -> out
-  compare Decl {} _ = GT
-  compare _ Decl {} = LT
   compare Def { defPattern = pat1, defInit = init1 }
           Def { defPattern = pat2, defInit = init2 } =
     case compare pat1 pat2 of
@@ -815,23 +803,21 @@ instance Hashable con => Hashable (Content con) where
   hashWithSalt s (Value v) = s `hashWithSalt` (2 :: Int) `hashWithSalt` v
 
 instance Hashable Element where
-  hashWithSalt s Builder { builderName = name, builderKind = cls,
+  hashWithSalt s Builder { builderName = sym, builderKind = cls,
                            builderParams = params, builderSuperTypes = supers,
                            builderContent = body } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt`
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` sym `hashWithSalt`
     cls `hashWithSalt` params `hashWithSalt` supers `hashWithSalt` body
-  hashWithSalt s Decl { declName = name, declType = ty } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` name `hashWithSalt` ty
   hashWithSalt s Def { defPattern = pat, defInit = init } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt` pat `hashWithSalt` init
-  hashWithSalt s Fun { funName = name, funCases = cases } =
-    s `hashWithSalt` (4 :: Int) `hashWithSalt` name `hashWithSalt` cases
-  hashWithSalt s Truth { truthName = name, truthKind = kind,
+  hashWithSalt s Fun { funName = sym, funCases = cases } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` sym `hashWithSalt` cases
+  hashWithSalt s Truth { truthName = sym, truthKind = kind,
                          truthContent = prop } =
-    s `hashWithSalt` (5 :: Int) `hashWithSalt` name `hashWithSalt`
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` sym `hashWithSalt`
     kind `hashWithSalt` prop
-  hashWithSalt s Proof { proofName = name, proofBody = body } =
-    s `hashWithSalt` (6 :: Int) `hashWithSalt` name `hashWithSalt` body
+  hashWithSalt s Proof { proofName = sym, proofBody = body } =
+    s `hashWithSalt` (6 :: Int) `hashWithSalt` sym `hashWithSalt` body
 
 instance Hashable Compound where
   hashWithSalt s (Element e) = s `hashWithSalt` (1 :: Int) `hashWithSalt` e
@@ -840,16 +826,16 @@ instance Hashable Compound where
 instance Hashable Pattern where
   hashWithSalt s Option { optionPats = pats } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` pats
-  hashWithSalt s Deconstruct { deconstructName = name, deconstructPat = pat } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` name `hashWithSalt` pat
+  hashWithSalt s Deconstruct { deconstructName = sym, deconstructPat = pat } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` sym `hashWithSalt` pat
   hashWithSalt s Split { splitFields = fields, splitStrict = strict } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt` fields `hashWithSalt` strict
   hashWithSalt s Typed { typedPat = pat, typedType = ty } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt` pat `hashWithSalt` ty
-  hashWithSalt s As { asName = name, asPat = pat } =
-    s `hashWithSalt` (5 :: Int) `hashWithSalt` name `hashWithSalt` pat
-  hashWithSalt s Name { nameSym = name } =
-    s `hashWithSalt` (6 :: Int) `hashWithSalt` name
+  hashWithSalt s As { asName = sym, asPat = pat } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` sym `hashWithSalt` pat
+  hashWithSalt s Name { nameSym = sym } =
+    s `hashWithSalt` (6 :: Int) `hashWithSalt` sym
   hashWithSalt s (Exact e) = s `hashWithSalt` (7 :: Int) `hashWithSalt` e
 
 instance Hashable Literal where
@@ -876,10 +862,10 @@ instance Hashable  Exp where
     s `hashWithSalt` (6 :: Int) `hashWithSalt` ty `hashWithSalt` fields
   hashWithSalt s Tuple { tupleFields = fields } =
     s `hashWithSalt` (7 :: Int) `hashWithSalt` fields
-  hashWithSalt s Project { projectVal = val, projectName = name } =
-    s `hashWithSalt` (8 :: Int) `hashWithSalt` name `hashWithSalt` val
-  hashWithSalt s Sym { symName = name } =
-    s `hashWithSalt` (9 :: Int) `hashWithSalt` name
+  hashWithSalt s Project { projectVal = val, projectName = sym } =
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` sym `hashWithSalt` val
+  hashWithSalt s Sym { symName = sym } =
+    s `hashWithSalt` (9 :: Int) `hashWithSalt` sym
   hashWithSalt s With { withVal = val, withArgs = args } =
     s `hashWithSalt` (10 :: Int) `hashWithSalt` val `hashWithSalt` args
   hashWithSalt s Where { whereVal = val, whereProp = prop } =
@@ -892,117 +878,559 @@ instance Hashable  Exp where
     s `hashWithSalt` (13 :: Int) `hashWithSalt` lit
 
 instance Hashable Field where
-  hashWithSalt s Field { fieldName = name, fieldVal = val } =
-    s `hashWithSalt` name `hashWithSalt` val
+  hashWithSalt s Field { fieldName = sym, fieldVal = val } =
+    s `hashWithSalt` sym `hashWithSalt` val
 
 instance Hashable Case where
   hashWithSalt s Case { casePat = pat, caseBody = body } =
     s `hashWithSalt` pat `hashWithSalt` body
 
 instance Hashable Entry where
-  hashWithSalt s Named { namedSym = name, namedVal = val } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` name `hashWithSalt` val
+  hashWithSalt s Named { namedSym = sym, namedVal = val } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` sym `hashWithSalt` val
   hashWithSalt s (Unnamed e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
-
 {-
-instance Format sym => Format (Element sym) where
-  format Builder { builderName = name, builderKind = cls,
-                 builderSuperTypes = supers, builderParams = params,
-                 builderBody = body } =
-    let
-      header = show cls <+> name
-      withparams = case params of
-        [] -> header
-        params' -> parenList header params'
-      withsupers = case supers of
-        [] -> withparams
-        supers' -> withparams <+> colon <+>
-          (nest 2 (sep (punctuate comma supers')))
-    in
-      braceBlock withsupers body
-  format Def { defName = name, defMutable = True,
-               defType = Just ty, defInit = val } =
-    name <+> colon <+> nest 2 (sep [format "mutable", format ty,
-                                    equals, format val])
-  format Def { defName = name, defMutable = False,
-               defType = Just ty, defInit = val } =
-    name <+> colon <+> nest 2 (sep [format ty, equals, format val])
-  format Def { defName = name, defMutable = True,
-               defType = Nothing, defInit = val } =
-    name <+> colon <+> nest 2 (sep [format "mutable", equals, format val])
-  format Def { defName = name, defMutable = False,
-               defType = Nothing, defInit = val } =
-    name <+> equals <+> nest 2 val
-  format Truth { truthKind = cls, truthName = name, truthProp = prop } =
-    hang (format cls <+> name <+> equals) 2 prop
-  format Alias { aliasClass = Import, aliasName = Just name, aliasSrc = src } =
-    "import" <+> src <+> "as" <+> name <> semi
-  format Alias { aliasClass = Import, aliasName = Nothing, aliasSrc = src } =
-    "import" <+> src <> semi
-  format Alias { aliasClass = Export, aliasName = Just name, aliasSrc = src } =
-    "export" <+> src <+> "as" <+> name <> semi
-  format Alias { aliasClass = Export, aliasName = Nothing, aliasSrc = src } =
-    "export" <+> src <> semi
-  format Alias { aliasClass = Open, aliasSrc = src } =
-    "import" <+> src <+> ".*;"
+astDot :: MonadSymbols m => AST -> m Doc
+astDot elems =
+  let
+    astedge (_, nodename) = dquoted (string "ast:bottom") <>
+                            string "-> " <> string nodename
+    astnode = string "\"ast\" [ label = \"AST | <bottom>\" shape = \"record\" ]"
+  in do
+    (contents, _) <- runStateT (mapM elementDot elems) 0
+    return (string "digraph g " <>
+            braces (line <>
+                    vcat (map fst contents) <$> astnode <$>
+                    vcat (map astedge contents) <> line))
 
-instance Format sym => Format (Compound sym) where
-  format (Decl d) = format d
-  format (Exp e) = format e
+getNodeID :: MonadSymbols m => StateT Word m String
+getNodeID =
+  do
+    nodeid <- get
+    put $! nodeid + 1
+    return ("node" ++ show nodeid)
 
-instance Format sym => Format (Exp sym) where
-  format Compound { compoundBody = body } =
-    block 2 (lbrace) (sep body) rbrace
-  format Func { funcCases = cases } = (sep (punctuate (format "|") cases))
-  format Match { matchVal = val, matchCases = cases } =
-    hang (format "match" <+> val) 2 (sep (punctuate (format "|") cases))
-  format Ascribe { ascribeVal = val, ascribeType = ty } =
-    hang (val <+> colon) 2 ty
-  format Seq { seqVals = vals } = nest 2 (sep vals)
-  format Record { recFields = fields } =
-    lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
-  format Project { projectVal = val, projectName = name } = val <> "." <> name
-  format Sym { symName = name } = format name
+groupDot :: MonadSymbols m => Group -> StateT Word m (Doc, String)
+groupDot Group { groupVisibility = vis, groupElements = elems } =
+  let
+    elemEdge nodeid (_, elemname) =
+      dquoted (string nodeid <> string ":elements") <>
+      string " -> " <> string elemname
+  in do
+    nodeid <- getNodeID
+    bodyContents <-mapM elementDot elems
+    return (vcat (map fst bodyContents) <$>
+            dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Group | " <>
+                               string (show vis) <>
+                               string " | <elements> elements\"") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> vcat (map (elemEdge nodeid) bodyContents), nodeid)
 
-instance Format sym => Format (Pattern sym) where
-  format Project { projectFields = fields, projectStrict = True } =
-    lparen <> (nest 2 (sep (punctuate comma fields))) <> rparen
-  format Project { projectFields = fields, projectStrict = False } =
-    let
-      withdots = (map format fields) ++ [format "..."]
-    in
-    lparen <> (nest 2 (sep (punctuate comma withdots))) <> rparen
-  format Construct { constructName = name, constructArgs = args,
-                     constructStrict = True } = parenList name args
-  format Construct { constructName = name, constructArgs = args,
-                     constructStrict = False } =
-    parenList name ((map format args) ++ [format "..."])
-  format Typed { typedPat = pat, typedType = ty } =
-    hang (pat <+> colon) 2 ty
-  format As { asName = name, asPat = pat } =
-    format pat <+> format "as" <+> format name
-  format Name { nameSym = name } = format name
+builderBodyDot :: MonadSymbols m =>
+                  Content Scope -> StateT Word m (Doc, String)
+builderBodyDot (Body elems) =
+  let
+    groupEdge nodeid (_, groupname) =
+      dquoted (string nodeid <> string ":groups") <>
+      string " -> " <> string groupname
+  in do
+    nodeid <- getNodeID
+    bodyContents <-mapM groupDot elems
+    return (vcat (map fst bodyContents) <$>
+            dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Body | " <>
+                               string "<groups> groups\"") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> vcat (map (groupEdge nodeid) bodyContents), nodeid)
+builderBodyDot (Value elems) =
+  do
+    nodeid <- getNodeID
+    (valuenode, valuename) <-expDot elems
+    return (valuenode <$>
+            dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Value | " <>
+                               string "<value> value\"") <$>
+                      string "shape = \"record\"") <>
+            dquoted (string nodeid <> string ":value") <>
+            string " -> " <> string valuename, nodeid)
 
-instance Format sym => Format (Field sym) where
-  format Field { fieldName = name, fieldType = ty } =
-    hang (name <+> colon) 2 ty
+elementDot :: MonadSymbols m => Element -> StateT Word m (Doc, String)
+elementDot Builder { builderName = sym, builderKind = cls,
+                     builderParams = params, builderSuperTypes = supers,
+                     builderContent = body } =
+  let
+    paramEdge nodeid (_, paramname) =
+      dquoted (string nodeid <> string ":params") <>
+      string " -> " <> string paramname
 
-instance Format sym => Format (Case sym) where
-  format Case { casePat = pat, caseBody = body } =
-    hang (pat <+> equals) 2 body
+    supersEdge nodeid (_, supername) =
+      dquoted (string nodeid <> string ":supers") <>
+      string " -> " <> string supername
+  in do
+    nodeid <- getNodeID
+    namestr <- name sym
+    paramContents <- mapM fieldDot params
+    supersContents <- mapM expDot supers
+    (bodynode, bodyname) <- builderBodyDot body
+    return (vcat (map fst paramContents) <$> vcat (map fst supersContents) <$>
+            bodynode <$> dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Builder | " <>
+                              dquoted (bytestring namestr) <>
+                              string " | " <> string (show cls) <>
+                              string (" | <params> params" ++
+                                      " | <supers> supers | <body> body\"")) <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> vcat (map (paramEdge nodeid) paramContents) <$>
+            vcat (map (supersEdge nodeid) supersContents) <$>
+            dquoted (string nodeid <> string ":body") <>
+            string " -> " <> string bodyname, nodeid)
+elementDot Def { defPattern = pat, defInit = Just init } =
+  do
+    nodeid <- getNodeID
+    (patnode, patname) <- patternDot pat
+    (initnode, initname) <- expDot init
+    return (patnode <$> initnode <$> dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Def | " <>
+                              string (" | <pat> pattern" ++
+                                      " | <init> init\"")) <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid <> string ":pat") <>
+            string " -> " <> string patname <$>
+            dquoted (string nodeid <> string ":init") <>
+            string " -> " <> string initname, nodeid)
+elementDot Def { defPattern = pat, defInit = Nothing } =
+  do
+    nodeid <- getNodeID
+    (patnode, patname) <- patternDot pat
+    return (patnode <$> dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Def | " <>
+                               string "<pat> pattern | <init> init\"") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid <> string ":pat") <>
+            string " -> " <> string patname, nodeid)
+elementDot Fun { funName = sym, funCases = cases } =
+  let
+    caseEdge nodeid (_, casename) =
+      dquoted (string nodeid <> string ":cases") <>
+      string " -> " <> string casename
+  in do
+    nodeid <- getNodeID
+    namestr <- name sym
+    caseContents <- mapM caseDot cases
+    return (vcat (map fst caseContents) <$>
+            dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Fun | " <>
+                              dquoted (bytestring namestr) <>
+                              string " | <cases> cases\"") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> vcat (map (caseEdge nodeid) caseContents), nodeid)
+elementDot Proof { proofName = sym, proofBody = body } =
+  do
+    namestr <- name sym
+    nodeid <- getNodeID
+    (bodynode, bodyname) <- expDot body
+    return (bodynode <$> dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Proof | " <>
+                              dquoted (bytestring namestr) <>
+                              string " | <body> body\"") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid <> string ":body") <>
+            string " -> " <> string bodyname, nodeid)
 
-instance (Format sym, Format (con sym)) => Format (Entry con sym) where
-  format Named { namedName = name, namedVal = val } =
-    hang val 2 (format "as" <+> name)
-  format (Unnamed e) = format e
+compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
+compoundDot (Exp e) = expDot e
+compoundDot (Element e) = elementDot e
 
-instance Format sym => Show (Element sym) where
-  show = show . format
+patternDot :: MonadSymbols m => Pattern -> StateT Word m (Doc, String)
+patternDot = undefined
 
-instance Format sym => Show (Exp sym) where
-  show = show . format
+literalDot :: MonadSymbols m => Literal -> StateT Word m (Doc, String)
+literalDot = undefined
+
+expDot :: MonadSymbols m => Exp -> StateT Word m (Doc, String)
+expDot = undefined
+
+fieldDot :: MonadSymbols m => Field -> StateT Word m (Doc, String)
+fieldDot Field { fieldName = sym, fieldVal = val } =
+  do
+    nodeid <- getNodeID
+    namestr <- name sym
+    (valnode, valname) <- expDot val
+    return (valnode <$> dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Field | " <>
+                              dquoted (bytestring namestr) <>
+                              string " | <value> value\"") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid <> string ":value") <>
+            string " -> " <> string valname, nodeid)
+
+caseDot :: MonadSymbols m => Case -> StateT Word m (Doc, String)
+caseDot Case { casePat = pat, caseBody = body } =
+  do
+    nodeid <- getNodeID
+    (patnode, patname) <- patternDot pat
+    (bodynode, bodyname) <- expDot body
+    return (patnode <$> bodynode <$> dquoted (string nodeid) <+>
+            brackets (dquoted (string "label = \"Case | " <>
+                              string (" | <pat> pattern" ++
+                                      " | <body> body\"")) <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid <> string ":pat") <>
+            string " -> " <> string patname <$>
+            dquoted (string nodeid <> string ":body") <>
+            string " -> " <> string bodyname, nodeid)
 
 -}
+
+recordDoc :: [(Doc, Doc)] -> Doc
+recordDoc =
+  let
+    entryDoc :: (Doc, Doc) -> Doc
+    entryDoc (fieldname, fieldval) = fieldname <+> equals <+> fieldval
+  in
+    nest 2 . parens . punctuate (comma <> linebreak) . map entryDoc
+
+listDoc :: [Doc] -> Doc
+listDoc = nest 2 . brackets . punctuate (comma <> linebreak)
+
+constructorDoc :: Doc -> [(Doc, Doc)] -> Doc
+constructorDoc prefix =
+  (prefix <+>) . recordDoc
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m [Element] where
+  formatM = liftM listDoc . mapM formatM
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Group where
+  formatM Group { groupElements = elems, groupPos = pos,
+                  groupVisibility = vis} =
+    do
+      posdoc <- formatM pos
+      elemdocs <- mapM formatM elems
+      return (constructorDoc (string "Group")
+                             [(string "pos", posdoc),
+                              (string "visibility", format vis),
+                              (string "elems", listDoc elemdocs)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m [Group] where
+  formatM = liftM listDoc . mapM formatM
+
+instance (MonadPositions m, MonadSymbols m, FormatM m con) =>
+         FormatM m (Content con) where
+  formatM (Body b) =
+    do
+      valdoc <- formatM b
+      return (constructorDoc (string "Body")
+                             [(string "value", valdoc)])
+  formatM (Value v) =
+    do
+      valdoc <- formatM v
+      return (constructorDoc (string "Value")
+                             [(string "value", valdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
+  formatM Builder { builderName = sym, builderKind = cls,
+                    builderSuperTypes = supers, builderParams = params,
+                    builderContent = body, builderPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      superdocs <- mapM formatM supers
+      paramdocs <- mapM formatM params
+      bodydoc <- formatM body
+      return (constructorDoc (string "Builder")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "kind", format cls),
+                              (string "params", listDoc paramdocs),
+                              (string "supers", listDoc superdocs),
+                              (string "body", bodydoc)])
+  formatM Def { defPattern = pat, defInit = Just init, defPos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      initdoc <- formatM init
+      return (constructorDoc (string "Group")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc),
+                              (string "init", initdoc)])
+  formatM Def { defPattern = pat, defInit = Nothing, defPos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      return (constructorDoc (string "Group")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc)])
+  formatM Fun { funName = sym, funCases = cases, funPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      casedocs <- mapM formatM cases
+      return (constructorDoc (string "Fun")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "cases", listDoc casedocs)])
+  formatM Truth { truthName = sym, truthContent = content,
+                  truthKind = kind, truthPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      contentdoc <- formatM content
+      return (constructorDoc (string "Truth")
+                             [(string "name", namedoc),
+                              (string "kind", format kind),
+                              (string "pos", posdoc),
+                              (string "content", contentdoc)])
+  formatM Proof { proofName = sym, proofBody = body, proofPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      bodydoc <- formatM body
+      return (constructorDoc (string "Proof")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "body", bodydoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
+  formatM (Exp e) = formatM e
+  formatM (Element e) = formatM e
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
+  formatM Option { optionPats = pats, optionPos = pos } =
+    do
+      posdoc <- formatM pos
+      patsdoc <- mapM formatM pats
+      return (constructorDoc (string "Options")
+                             [(string "pos", posdoc),
+                              (string "patterns", listDoc patsdoc)])
+  formatM Deconstruct { deconstructName = sym, deconstructPat = pat,
+                        deconstructPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      return (constructorDoc (string "Deconstruct")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "pat", patdoc)])
+  formatM Split { splitFields = fields, splitStrict = True, splitPos = pos } =
+    do
+      fieldsdoc <- mapM formatM fields
+      posdoc <- formatM pos
+      return (constructorDoc (string "Proof")
+                             [(string "pos", posdoc),
+                              (string "strict", string "true"),
+                              (string "fields", listDoc fieldsdoc)])
+  formatM Split { splitFields = fields, splitStrict = False, splitPos = pos } =
+    do
+      fieldsdoc <- mapM formatM fields
+      posdoc <- formatM pos
+      return (constructorDoc (string "Proof")
+                             [(string "pos", posdoc),
+                              (string "strict", string "false"),
+                              (string "fields", listDoc fieldsdoc)])
+  formatM Typed { typedPat = pat, typedType = ty, typedPos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      tydoc <- formatM ty
+      return (constructorDoc (string "Typed")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc),
+                              (string "type", tydoc)])
+  formatM As { asName = sym, asPat = pat, asPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      return (constructorDoc (string "As")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "pat", patdoc)])
+  formatM Name { nameSym = sym, namePos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      return (constructorDoc (string "Name")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc)])
+  formatM (Exact e) = formatM e
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Literal where
+  formatM Num { numVal = num, numPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (constructorDoc (string "Num")
+                             [(string "val", string (show num)),
+                              (string "pos", posdoc)])
+  formatM Str { strVal = str, strPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (constructorDoc (string "Str")
+                             [(string "val", bytestring str),
+                              (string "pos", posdoc)])
+  formatM Char { charVal = chr, charPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (constructorDoc (string "Char")
+                             [(string "val", char chr),
+                              (string "pos", posdoc)])
+  formatM Unit {} = return (string "()")
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
+  formatM Compound { compoundBody = body, compoundPos = pos } =
+    do
+      posdoc <- formatM pos
+      bodydoc <- mapM formatM body
+      return (constructorDoc (string "Compound")
+                             [(string "pos", posdoc),
+                              (string "body", listDoc bodydoc)])
+  formatM Abs { absKind = kind, absCases = cases, absPos = pos } =
+    do
+      posdoc <- formatM pos
+      casedocs <- mapM formatM cases
+      return (constructorDoc (string "Abs")
+                             [(string "pos", posdoc),
+                              (string "kind", format kind),
+                              (string "cases", listDoc casedocs)])
+  formatM Match { matchVal = val, matchCases = cases, matchPos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      casedocs <- mapM formatM cases
+      return (constructorDoc (string "Match")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "cases", listDoc casedocs)])
+  formatM Ascribe { ascribeVal = val, ascribeType = ty, ascribePos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      tydoc <- formatM ty
+      return (constructorDoc (string "Ascribe")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "type", tydoc)])
+  formatM Seq { seqFirst = val1, seqSecond = val2, seqPos = pos } =
+    do
+      posdoc <- formatM pos
+      val1doc <- formatM val1
+      val2doc <- formatM val2
+      return (constructorDoc (string "Seq")
+                             [(string "pos", posdoc),
+                              (string "first", val1doc),
+                              (string "second", val2doc)])
+  formatM Record { recordType = True, recordFields = fields, recordPos = pos } =
+    do
+      posdoc <- formatM pos
+      fielddocs <- mapM formatM fields
+      return (constructorDoc (string "Record")
+                             [(string "pos", posdoc),
+                              (string "type", string "true"),
+                              (string "fields", listDoc fielddocs)])
+  formatM Record { recordType = False, recordFields = fields,
+                   recordPos = pos } =
+    do
+      posdoc <- formatM pos
+      fielddocs <- mapM formatM fields
+      return (constructorDoc (string "Record")
+                             [(string "pos", posdoc),
+                              (string "type", string "false"),
+                              (string "fields", listDoc fielddocs)])
+  formatM Tuple { tupleFields = fields, tuplePos = pos } =
+    do
+      posdoc <- formatM pos
+      fielddocs <- mapM formatM fields
+      return (constructorDoc (string "Tuple")
+                             [(string "pos", posdoc),
+                              (string "fields", listDoc fielddocs)])
+  formatM Project { projectVal = val, projectName = sym, projectPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      return (constructorDoc (string "Project")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "value", valdoc)])
+  formatM Sym { symName = sym, symPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      return (constructorDoc (string "Sym")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc)])
+  formatM With { withVal = val, withArgs = args, withPos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      argdocs <- formatM args
+      return (constructorDoc (string "With")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "arg", argdocs)])
+  formatM Where { whereVal = val, whereProp = prop, wherePos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      propdoc <- formatM prop
+      return (constructorDoc (string "Where")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "prop", propdoc)])
+  formatM Anon { anonKind = cls, anonParams = params, anonContent = body,
+                 anonSuperTypes = supers, anonPos = pos } =
+
+    do
+      posdoc <- formatM pos
+      superdocs <- mapM formatM supers
+      paramdocs <- mapM formatM params
+      bodydoc <- mapM formatM body
+      return (constructorDoc (string "Anon")
+                             [(string "pos", posdoc),
+                              (string "kind", format cls),
+                              (string "params", listDoc paramdocs),
+                              (string "supers", listDoc superdocs),
+                              (string "body", listDoc bodydoc)])
+  formatM (Literal l) = formatM l
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Entry where
+  formatM Named { namedSym = sym, namedVal = val, namedPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      return (constructorDoc (string "Named")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "value", valdoc)])
+  formatM (Unnamed e) =
+    do
+      valdoc <- formatM e
+      return (constructorDoc (string "Unnamed")
+                             [(string "value", valdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Field where
+  formatM Field { fieldName = sym, fieldVal = val, fieldPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      return (constructorDoc (string "Field")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "value", valdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
+  formatM Case { casePat = pat, caseBody = body, casePos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      bodydoc <- formatM body
+      return (constructorDoc (string "Case")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc),
+                              (string "body", bodydoc)])
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Group where
@@ -1051,14 +1479,14 @@ builderPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] Element
 builderPickler =
   let
-    revfunc Builder { builderName = name, builderKind = kind,
+    revfunc Builder { builderName = sym, builderKind = kind,
                       builderParams = params, builderSuperTypes = supers,
                       builderContent = body, builderPos = pos } =
-      ((name, kind, pos), (params, supers, body))
+      ((sym, kind, pos), (params, supers, body))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((name, kind, pos), (params, supers, body)) ->
-             Builder { builderName = name, builderKind = kind,
+    xpWrap (\((sym, kind, pos), (params, supers, body)) ->
+             Builder { builderName = sym, builderKind = kind,
                        builderParams = params, builderSuperTypes = supers,
                        builderContent = body, builderPos = pos }, revfunc)
            (xpElem (gxFromString "Builder")
@@ -1066,20 +1494,6 @@ builderPickler =
                    (xpTriple (xpElemNodes (gxFromString "params") xpickle)
                              (xpElemNodes (gxFromString "supers") xpickle)
                              (xpElemNodes (gxFromString "body") xpickle)))
-
-declPickler :: (GenericXMLString tag, Show tag,
-                GenericXMLString text, Show text) =>
-               PU [NodeG [] tag text] Element
-declPickler =
-  let
-    revfunc Decl { declName = name, declType = ty, declPos = pos } =
-      ((name, pos), ty)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\((name, pos), ty) -> Decl { declName = name, declType = ty,
-                                         declPos = pos }, revfunc)
-           (xpElem (gxFromString "Decl") (xpPair xpickle xpickle)
-                   (xpElemNodes (gxFromString "type") xpickle))
 
 defPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -1094,18 +1508,19 @@ defPickler =
                                          defPos = pos }, revfunc)
            (xpElem (gxFromString "Def") xpickle
                    (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
-                           (xpElemNodes (gxFromString "init") xpickle)))
+                           (xpOption (xpElemNodes (gxFromString "init")
+                                                  xpickle))))
 
 funPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Element
 funPickler =
   let
-    revfunc Fun { funName = name, funCases = cases, funPos = pos } =
-      ((name, pos), cases)
+    revfunc Fun { funName = sym, funCases = cases, funPos = pos } =
+      ((sym, pos), cases)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((name, pos), cases) -> Fun { funName = name, funCases = cases,
+    xpWrap (\((sym, pos), cases) -> Fun { funName = sym, funCases = cases,
                                         funPos = pos }, revfunc)
            (xpElem (gxFromString "Fun") (xpPair xpickle xpickle)
                    (xpElemNodes (gxFromString "cases") xpickle))
@@ -1115,13 +1530,13 @@ truthPickler :: (GenericXMLString tag, Show tag,
                 PU [NodeG [] tag text] Element
 truthPickler =
   let
-    revfunc Truth { truthName = name, truthKind = kind,
+    revfunc Truth { truthName = sym, truthKind = kind,
                     truthContent = body, truthPos = pos } =
-      ((name, kind, pos), body)
+      ((sym, kind, pos), body)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((name, kind, pos), body) ->
-             Truth { truthName = name, truthContent = body,
+    xpWrap (\((sym, kind, pos), body) ->
+             Truth { truthName = sym, truthContent = body,
                      truthKind = kind, truthPos = pos }, revfunc)
            (xpElem (gxFromString "Truth") (xpTriple xpickle xpickle xpickle)
                    (xpElemNodes (gxFromString "type") xpickle))
@@ -1131,11 +1546,11 @@ proofPickler :: (GenericXMLString tag, Show tag,
                 PU [NodeG [] tag text] Element
 proofPickler =
   let
-    revfunc Proof { proofName = name, proofBody = body, proofPos = pos } =
-      ((name, pos), body)
+    revfunc Proof { proofName = sym, proofBody = body, proofPos = pos } =
+      ((sym, pos), body)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((name, pos), body) -> Proof { proofName = name, proofBody = body,
+    xpWrap (\((sym, pos), body) -> Proof { proofName = sym, proofBody = body,
                                             proofPos = pos }, revfunc)
            (xpElem (gxFromString "Proof") (xpPair xpickle xpickle)
                    (xpElemNodes (gxFromString "type") xpickle))
@@ -1145,14 +1560,13 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
   xpickle =
     let
       picker Builder {} = 0
-      picker Decl {} = 1
-      picker Def {} = 2
-      picker Fun {} = 3
-      picker Truth {} = 4
-      picker Proof {} = 5
+      picker Def {} = 1
+      picker Fun {} = 2
+      picker Truth {} = 3
+      picker Proof {} = 4
     in
-      xpAlt picker [builderPickler, declPickler, defPickler,
-                    funPickler, truthPickler, proofPickler]
+      xpAlt picker [builderPickler, defPickler, funPickler,
+                    truthPickler, proofPickler]
 
 expPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -1201,12 +1615,12 @@ deconstructPickler :: (GenericXMLString tag, Show tag,
                       PU [NodeG [] tag text] Pattern
 deconstructPickler =
   let
-    revfunc Deconstruct { deconstructName = name, deconstructPat = pat,
+    revfunc Deconstruct { deconstructName = sym, deconstructPat = pat,
                           deconstructPos = pos } =
-      ((name, pos), pat)
+      ((sym, pos), pat)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((name, pos), pat) -> Deconstruct { deconstructName = name,
+    xpWrap (\((sym, pos), pat) -> Deconstruct { deconstructName = sym,
                                                  deconstructPat = pat,
                                                  deconstructPos = pos },
             revfunc)
@@ -1243,17 +1657,17 @@ typedPickler =
                                          typedPos = pos }, revfunc)
            (xpElem (gxFromString "Typed") xpickle
                    (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
-                           (xpElemNodes (gxFromString "init") xpickle)))
+                           (xpElemNodes (gxFromString "type") xpickle)))
 
 asPickler :: (GenericXMLString tag, Show tag,
               GenericXMLString text, Show text) =>
              PU [NodeG [] tag text] Pattern
 asPickler =
   let
-    revfunc As { asName = name, asPat = pat, asPos = pos } = ((name, pos), pat)
+    revfunc As { asName = sym, asPat = pat, asPos = pos } = ((sym, pos), pat)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((name, pos), pat) -> As { asName = name, asPat = pat,
+    xpWrap (\((sym, pos), pat) -> As { asName = sym, asPat = pat,
                                         asPos = pos }, revfunc)
            (xpElem (gxFromString "As") (xpPair xpickle xpickle)
                    (xpElemNodes (gxFromString "pattern") xpickle))
@@ -1263,10 +1677,10 @@ namePickler :: (GenericXMLString tag, Show tag,
              PU [NodeG [] tag text] Pattern
 namePickler =
   let
-    revfunc Name { nameSym = name, namePos = pos } = (name, pos)
+    revfunc Name { nameSym = sym, namePos = pos } = (sym, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(name, pos) -> Name { nameSym = name, namePos = pos }, revfunc)
+    xpWrap (\(sym, pos) -> Name { nameSym = sym, namePos = pos }, revfunc)
            (xpElemAttrs (gxFromString "Name") (xpPair xpickle xpickle))
 
 exactPickler :: (GenericXMLString tag, Show tag,
@@ -1456,11 +1870,11 @@ projectPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] Exp
 projectPickler =
   let
-    revfunc Project { projectName = name, projectVal = val,
-                      projectPos = pos } = ((name, pos), val)
+    revfunc Project { projectName = sym, projectVal = val,
+                      projectPos = pos } = ((sym, pos), val)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((name, pos), val) -> Project { projectName = name,
+    xpWrap (\((sym, pos), val) -> Project { projectName = sym,
                                              projectVal = val,
                                              projectPos = pos }, revfunc)
            (xpElem (gxFromString "Project") (xpPair xpickle xpickle)
@@ -1471,10 +1885,10 @@ symPickler :: (GenericXMLString tag, Show tag,
              PU [NodeG [] tag text] Exp
 symPickler =
   let
-    revfunc Sym { symName = name, symPos = pos } = (name, pos)
+    revfunc Sym { symName = sym, symPos = pos } = (sym, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(name, pos) -> Sym { symName = name, symPos = pos }, revfunc)
+    xpWrap (\(sym, pos) -> Sym { symName = sym, symPos = pos }, revfunc)
            (xpElemAttrs (gxFromString "Sym") (xpPair xpickle xpickle))
 
 withPickler :: (GenericXMLString tag, Show tag,
@@ -1594,11 +2008,11 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Field where
-  xpickle = xpWrap (\((name, pos), val) -> Field { fieldName = name,
+  xpickle = xpWrap (\((sym, pos), val) -> Field { fieldName = sym,
                                                     fieldVal = val,
                                                     fieldPos = pos },
-                    \Field { fieldName = name, fieldVal = val,
-                             fieldPos = pos } -> ((name, pos), val))
+                    \Field { fieldName = sym, fieldVal = val,
+                             fieldPos = pos } -> ((sym, pos), val))
                    (xpElem (gxFromString "Field")
                            (xpPair xpickle xpickle)
                            xpickle)
