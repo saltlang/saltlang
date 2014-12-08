@@ -29,7 +29,7 @@ import Control.Monad.Symbols
 import Data.Position
 import Data.Ratio
 import Data.Symbol
-import Text.Format
+import Text.FormatM
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree
 
