@@ -22,6 +22,7 @@ module Language.Salt.Surface.Lexer(
        Frontend,
        Lexer,
        runLexer,
+       runLexerNoTokens,
        lex,
        lexRemaining,
        ) where
@@ -42,16 +43,12 @@ import Language.Salt.Message
 import Prelude hiding (log, span, lex)
 import System.IO
 import Text.Escapes.ByteString.Lazy
-import Text.Format((<>), (<+>), formatM)
-import Text.XML.Expat.Format
-import Text.XML.Expat.Pickle
 
 import qualified Control.Monad.CommentBuffer as CommentBuffer
 import qualified Control.Monad.Frontend as Frontend
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
 import qualified Data.ByteString.Lazy as Lazy hiding (uncons, drop)
 import qualified Data.ByteString.UTF8 as Strict
-import qualified Text.Format as Format
 import qualified Text.Numbers.ByteString.Lazy as Numbers
 
 import Text.AlexWrapper
@@ -151,7 +148,7 @@ tokens :-
 -- Newline in character literal
 <0>       '\r?\n'
         { linebreakAtOffset 1 `andThen`
-	  report newlineCharLiteral `andThen` skip }
+          report newlineCharLiteral `andThen` skip }
 
 -- Hard tab in character literal
 <0>       '\t'
@@ -168,12 +165,12 @@ tokens :-
 -- String literal begin
 <0>       \"
         { report bufferedComments `andThen`
-	  report startString `andThen` begin string  }
+          report startString `andThen` begin string  }
 
 -- Warn about hard tabs, but record them in the string buffer
 <string>  \t+
         { report tabInStringLiteral `andThen`
-	  record stringContent `andThen` skip }
+          record stringContent `andThen` skip }
 
 -- Unescaped newlines in strings are an error, but keep going
 <string>  \r?\n
@@ -213,7 +210,7 @@ tokens :-
 
 -- Close-quote, close out the string, convert it to a token, leave string mode
 <string>  \"
-	{ token bufferedString `andBegin` 0 }
+        { token bufferedString `andBegin` 0 }
 
 -- Record linebreaks for comments, append them to the comment buffer
 <comment> \r?\n
@@ -222,7 +219,7 @@ tokens :-
 -- Warn about trailing whitespace, even in comments
 <comment> [\ ]+$
         { record commentText `andThen`
-	  report trailingWhitespace `andThen` skip }
+          report trailingWhitespace `andThen` skip }
 
 -- Nest comments one level deeper
 <comment> \/\*
@@ -347,7 +344,7 @@ leaveComment bstr =
     if depth == 0
       then do
         CommentBuffer.finishComment
-	alexSetStartCode 0
+        alexSetStartCode 0
       else
         alexSetUserState us { userCommentDepth = depth - 1 }
 
@@ -360,7 +357,7 @@ fullComment = CommentBuffer.addComment
 -- ie. @report bufferedComments@)
 bufferedComments :: Position -> Lexer ()
 bufferedComments pos = CommentBuffer.saveCommentsAsPreceeding pos >>
-		       CommentBuffer.clearComments
+                       CommentBuffer.clearComments
 
 type Frontend = MessagesT [Message] Message (Frontend.Frontend Token)
 
@@ -447,70 +444,45 @@ lexRemaining =
       EOF -> return ()
       _ -> lexRemaining
 
--- | Print out all tokens as text to the given handle
-printTokens :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
-               Handle -> Strict.ByteString -> [Token] -> m ()
-printTokens handle fname tokens =
-  let
-    doc tokdocs = Format.vcat (Format.string "Tokens for" <+>
-                               Format.bytestring fname <>
-                               Format.colon : tokdocs) <> Format.line
-  in do
-    tokdocs <- mapM formatM tokens
-    liftIO (Format.putFast handle (doc tokdocs))
-
-printXMLTokens :: (MonadIO m) =>
-                  Handle -> Strict.ByteString -> [Token] -> m ()
-printXMLTokens handle fname tokens =
-  let
-    pickler = xpRoot (xpElem (Strict.fromString "tokens")
-                             (xpAttrFixed (Strict.fromString "filename")
-                                          (fname))
-                             (xpList xpickle))
-    xmltree = indent 2 (pickleTree pickler ((), tokens))
-  in
-    liftIO (Lazy.hPutStr handle (format xmltree))
-
 runLexer :: Lexer a
          -- ^ The lexer monad to run.
-         -> Maybe FilePath
-         -- ^ File to which to save text tokens, or Nothing
-         -> Maybe FilePath
-         -- ^ File to which to save XML tokens, or Nothing
          -> Strict.ByteString
          -- ^ The name of the file.
          -> Lazy.ByteString
          -- ^ The contents of the file.
-         -> Frontend a
-runLexer l textpath xmlpath name input =
+         -> Frontend (a, [Token])
+runLexer l name input =
   let
-    saveToks = isJust textpath || isJust xmlpath
-    initState = initUserState saveToks
+    initState = initUserState True
+
+    run =
+      do
+        startFile name input
+        out <- l
+        us @ UserState { userTokenBuf = tokbuf } <- alexGetUserState
+        finishFile
+        return (out, tokbuf)
+  in do
+    runAlexT run input name initState
+
+runLexerNoTokens :: Lexer a
+                 -- ^ The lexer monad to run.
+                 -> Strict.ByteString
+                 -- ^ The name of the file.
+                 -> Lazy.ByteString
+                 -- ^ The contents of the file.
+                 -> Frontend a
+runLexerNoTokens l name input =
+  let
+    initState = initUserState False
 
     run =
       do
         startFile name input
         out <- l
         finishFile
-        if saveToks
-          then do
-            us @ UserState { userTokenBuf = toks } <- alexGetUserState
-            case textpath of
-              Just path -> do
-                output <- liftIO (openFile path WriteMode)
-                printTokens output name (reverse toks)
-                liftIO (hClose output)
-              Nothing -> return ()
-            case xmlpath of
-              Just path -> do
-                output <- liftIO (openFile path WriteMode)
-                printXMLTokens output name (reverse toks)
-                liftIO (hClose output)
-              Nothing -> return ()
-            return out
-          else
-            return out
+        return out
   in do
-    out <- runAlexT run input name initState
-    return out
+    runAlexT run input name initState
+
 }

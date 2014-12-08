@@ -26,6 +26,7 @@ import Data.Message
 import Language.Salt.Compiler.Options
 import Language.Salt.Compiler.Stages
 import Language.Salt.Surface.Token
+import Prelude hiding (lex)
 import System.Environment
 import System.IO
 
@@ -37,20 +38,17 @@ import System.IO
 
 -- | Run the compiler with the given options.
 run :: Options -> IO ()
-run Options { optInputFiles = inputs, optStages = stages } =
+run opts @ Options { optInputFiles = inputs, optStages = stages } =
   case bounds stages of
     (Lexer, Lexer) ->
       let
-        Save { saveText = lexerText, saveXML = lexerXML } = stages ! Lexer
-        front = putMessagesT stderr Error (lexOnly lexerText lexerXML inputs)
+        front = putMessagesT stderr Error (lex opts inputs)
       in do
         _ <- runFrontendT front keywords
         return ()
     (Lexer, Parser) ->
       let
-        Save { saveText = lexerText, saveXML = lexerXML } = stages ! Lexer
-        Save { saveText = parserText, saveXML = parserXML } = stages ! Parser
-        msgs = parse lexerText lexerXML parserText parserXML inputs
+        msgs = parse opts inputs
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords

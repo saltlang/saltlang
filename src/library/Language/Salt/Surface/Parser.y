@@ -17,7 +17,8 @@
 {
 
 module Language.Salt.Surface.Parser(
-       parser
+       parser,
+       parserNoTokens
        ) where
 
 import Control.Monad.Error
@@ -25,6 +26,7 @@ import Control.Monad.Genpos
 import Control.Monad.SourceBuffer hiding (linebreak)
 import Control.Monad.Trans
 import Data.ByteString(ByteString)
+import Data.Either
 import Data.Symbol(Symbol)
 import Data.Typeable
 import Language.Salt.Surface.AST
@@ -164,16 +166,13 @@ closed_def: type_builder_kind ID args_opt extends
                                   proofPos = pos }
               }
 
-value_def: ID COLON exp
-             {% do
-                  pos <- span (Token.position $1) (expPosition $3)
-                  return Decl { declName = name $1, declType = $3,
-                                declPos = pos }
-             }
+value_def: pattern
+             {% return Def { defPattern = $1, defInit = Nothing,
+                             defPos = patternPosition $1 } }
          | pattern EQUAL exp
              {% do
                   pos <- span (patternPosition $1) (expPosition $3)
-                  return Def { defPattern = $1, defInit = $3,
+                  return Def { defPattern = $1, defInit = Just $3,
                                defPos = pos }
              }
 
@@ -633,35 +632,16 @@ str :: Token -> Strict.ByteString
 str (Token.String str _) = str
 str _ = error "Cannot get str of token"
 
-printXMLAST :: (MonadIO m) => Handle -> Strict.ByteString -> [Element] -> m ()
-printXMLAST handle fname ast =
-  let
-    pickler = xpRoot (xpElem (Strict.fromString "AST")
-                             (xpAttrFixed (Strict.fromString "filename")
-                                          (fname))
-                             (xpList xpickle))
-    xmltree = indent 2 (pickleTree pickler ((), ast))
-  in
-    liftIO (Lazy.hPutStr handle (format xmltree))
-
--- | Run the parser
+-- | Run the parser, include tokens with the result.
 parser :: Strict.ByteString
        -- ^ Name of the file being parsed.
        -> Lazy.ByteString
        -- ^ Content of the file being parsed
-       -> Maybe FilePath
-       -- ^ File to which to save text tokens, or 'Nothing'.
-       -> Maybe FilePath
-       -- ^ File to which to save XML tokens, or 'Nothing'.
-       -> Maybe FilePath
-       -- ^ File to which to save text AST, or 'Nothing'.
-       -> Maybe FilePath
-       -- ^ File to which to save XML AST, or 'Nothing'.
-       -> Frontend (Maybe [Element])
-parser name input tokentxt tokenxml asttxt astxml =
+       -> Frontend (Maybe AST, [Token])
+parser name input =
   let
-    lexer :: Lexer (Maybe [Element])
-    lexer =
+    run :: Lexer (Maybe AST)
+    run =
       do
         res <- runErrorT parse
         case res of
@@ -669,18 +649,29 @@ parser name input tokentxt tokenxml asttxt astxml =
             do
               lexRemaining
               return Nothing
-          Right ast ->
-            let
-              out = reverse ast
-            in do
-              case astxml of
-                Just path -> do
-                  output <- liftIO (openFile path WriteMode)
-                  printXMLAST output name out
-                  liftIO (hClose output)
-                Nothing -> return ()
-              return $! Just out
+          Right ast -> return $! Just (reverse ast)
   in
-    runLexer lexer tokentxt tokenxml name input
+    runLexer run name input
+
+-- | Run the parser
+parserNoTokens :: Strict.ByteString
+               -- ^ Name of the file being parsed.
+               -> Lazy.ByteString
+               -- ^ Content of the file being parsed
+               -> Frontend (Maybe [Element])
+parserNoTokens name input =
+  let
+    run :: Lexer (Maybe [Element])
+    run =
+      do
+        res <- runErrorT parse
+        case res of
+          Left () ->
+            do
+              lexRemaining
+              return Nothing
+          Right ast -> return $! Just (reverse ast)
+  in
+    runLexerNoTokens run name input
 
 }

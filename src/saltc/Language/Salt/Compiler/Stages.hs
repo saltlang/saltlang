@@ -17,48 +17,167 @@
 {-# OPTIONS_GHC -Wall -Werror #-}
 
 module Language.Salt.Compiler.Stages(
-       lexOnly,
+       lex,
        parse
        ) where
 
+import Control.Monad
+import Control.Monad.Positions
+import Control.Monad.Symbols
 import Control.Monad.Trans
+import Data.Array
+import Language.Salt.Compiler.Options
 import Language.Salt.Surface.AST
-import Language.Salt.Surface.Lexer
+import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
+import Language.Salt.Surface.Token
+import Prelude hiding (lex)
+import System.IO
+import Text.FormatM hiding (Options)
+import Text.XML.Expat.Pickle
 
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy as Lazy
+import qualified Text.XML.Expat.Format as XML
 
-lexOnly :: Bool -> Bool -> [FilePath] -> Frontend ()
-lexOnly savetext savexml =
+-- | Print out all tokens as text to the given handle
+printTextTokens :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
+                   Handle -> Strict.ByteString -> [Token] -> m ()
+printTextTokens handle fname tokens =
+  let
+    doc tokdocs = vcat (string "Tokens for" <+> bytestring fname <>
+                        colon : tokdocs) <> line
+  in do
+    tokdocs <- mapM formatM tokens
+    liftIO (putFast handle (doc tokdocs))
+
+printXMLTokens :: (MonadIO m) => Handle -> Strict.ByteString -> [Token] -> m ()
+printXMLTokens handle fname tokens =
+  let
+    pickler = xpRoot (xpElem (Strict.fromString "tokens")
+                             (xpAttrFixed (Strict.fromString "filename")
+                                          fname)
+                             (xpList xpickle))
+    xmltree = XML.indent 2 (pickleTree pickler ((), tokens))
+  in
+    liftIO (Lazy.hPutStr handle (XML.format xmltree))
+
+printTokens :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
+               Save -> FilePath -> [Token] -> m ()
+printTokens Save { saveText = savetext, saveXML = savexml } fname toks =
+  do
+    when savetext
+      (do
+         output <- liftIO (openFile (fname ++ ".tokens") WriteMode)
+         printTextTokens output (Strict.fromString fname) (reverse toks)
+         liftIO (hClose output))
+    when savexml
+      (do
+         output <- liftIO (openFile (fname ++ ".tokens.xml")
+                                    WriteMode)
+         printXMLTokens output (Strict.fromString fname) (reverse toks)
+         liftIO (hClose output))
+
+printTextAST :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
+                Handle -> AST -> m ()
+printTextAST handle ast =
+  do
+    astdoc <- formatM ast
+    liftIO (putOptimal handle 120 False astdoc)
+
+printXMLAST :: (MonadIO m) => Handle -> Strict.ByteString -> AST -> m ()
+printXMLAST handle fname ast =
+  let
+    pickler = xpRoot (xpElem (Strict.fromString "AST")
+                             (xpAttrFixed (Strict.fromString "filename") fname)
+                             (xpList xpickle))
+    xmltree = XML.indent 2 (pickleTree pickler ((), ast))
+  in
+    liftIO (Lazy.hPutStr handle (XML.format xmltree))
+
+printAST :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
+            Save -> FilePath -> AST -> m ()
+printAST Save { saveXML = savexml, saveText = savetxt } fname ast =
+  do
+    when savetxt
+      (do
+         output <- liftIO (openFile (fname ++ ".ast") WriteMode)
+         printTextAST output ast
+         liftIO (hClose output))
+    when savexml
+      (do
+         output <- liftIO (openFile (fname ++ ".ast.xml") WriteMode)
+         printXMLAST output (Strict.fromString fname) ast
+         liftIO (hClose output))
+
+-- | Just run the lexer, without the parser.
+lex :: Options
+    -- ^ Compiler options.
+    -> [FilePath]
+    -- ^ Files to lex
+    -> Frontend ()
+lex Options { optStages = stages } =
   let
     lexOnlyFile :: FilePath -> Frontend ()
-    lexOnlyFile fname  =
-      let
-        fnamebstr = Strict.fromString fname
-
-        textpath = if savetext then Just $! fname ++ ".tokens" else Nothing
-        xmlpath = if savexml then Just $! fname ++ ".tokens.xml" else Nothing
-      in do
-        input <- liftIO (Lazy.readFile fname)
-        runLexer lexRemaining textpath xmlpath fnamebstr input
+    lexOnlyFile =
+      case stages ! Lexer of
+        Save { saveText = False, saveXML = False } ->
+          \fname ->
+            let
+              fnamebstr = Strict.fromString fname
+            in do
+              input <- liftIO (Lazy.readFile fname)
+              runLexerNoTokens lexRemaining fnamebstr input
+        save ->
+          \fname ->
+            let
+              fnamebstr = Strict.fromString fname
+            in do
+              input <- liftIO (Lazy.readFile fname)
+              (_, toks) <- runLexer lexRemaining fnamebstr input
+              printTokens save fname toks
   in
     mapM_ lexOnlyFile
 
-parse :: Bool -> Bool -> Bool -> Bool -> [FilePath] -> Frontend ()
-parse toktxt tokxml asttxt astxml =
+-- Run the parser, produce an AST
+parse :: Options
+      -- ^ Compiler options.
+      -> [FilePath]
+      -- ^ Files to parse.
+      -> Frontend ()
+parse Options { optStages = stages } =
   let
-    parseFile :: FilePath -> Frontend (Maybe [Element])
-    parseFile fname =
-      let
-        fnamebstr = Strict.fromString fname
+    saveast = stages ! Parser
 
-        toktxtpath = if toktxt then Just $! fname ++ ".tokens" else Nothing
-        tokxmlpath = if tokxml then Just $! fname ++ ".tokens.xml" else Nothing
-        asttxtpath = if asttxt then Just $! fname ++ ".ast" else Nothing
-        astxmlpath = if astxml then Just $! fname ++ ".ast.xml" else Nothing
-      in do
-        input <- liftIO (Lazy.readFile fname)
-        parser fnamebstr input toktxtpath tokxmlpath asttxtpath astxmlpath
+    parseFile :: FilePath -> Frontend (Maybe [Element])
+    parseFile =
+      case stages ! Lexer of
+        Save { saveText = False, saveXML = False } ->
+          \fname ->
+            let
+              fnamebstr = Strict.fromString fname
+            in do
+              input <- liftIO (Lazy.readFile fname)
+              out <- parserNoTokens fnamebstr input
+              case out of
+                Just ast ->
+                  do
+                    printAST saveast fname ast
+                    return out
+                Nothing -> return out
+        savetokens ->
+          \fname ->
+            let
+              fnamebstr = Strict.fromString fname
+            in do
+              input <- liftIO (Lazy.readFile fname)
+              (out, tokens) <- parser fnamebstr input
+              printTokens savetokens fname tokens
+              case out of
+                Just ast ->
+                  do
+                    printAST saveast fname ast
+                    return out
+                Nothing -> return out
   in
     mapM_ parseFile
