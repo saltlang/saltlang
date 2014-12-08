@@ -46,7 +46,9 @@ data Save =
     -- | Save a textual representation.
     saveText :: !Bool,
     -- | Save an XML representation.
-    saveXML :: !Bool
+    saveXML :: !Bool,
+    -- | Save a graphviz representation.
+    saveDot :: !Bool
   }
   deriving (Eq, Show)
 
@@ -84,10 +86,11 @@ data Args =
     deriving Eq
 
 instance Monoid Save where
-  mempty = Save { saveText = False, saveXML = False }
-  mappend Save { saveText = text1, saveXML = xml1 }
-          Save { saveText = text2, saveXML = xml2 } =
-    Save { saveText = text1 || text2, saveXML = xml1 || xml2 }
+  mempty = Save { saveText = False, saveXML = False, saveDot = False }
+  mappend Save { saveText = text1, saveXML = xml1, saveDot = dot1 }
+          Save { saveText = text2, saveXML = xml2, saveDot = dot2 } =
+    Save { saveText = text1 || text2, saveXML = xml1 || xml2,
+           saveDot = dot1 || dot2 }
 
 instance Monoid LastStage where
   mempty = All
@@ -147,6 +150,19 @@ keepXML (Just "ast") =
   mempty { argASTSave = setSaveXML }
 keepXML (Just txt) = Error ["no compiler structure named " ++ txt ++ "\n"]
 
+setSaveDot :: Save
+setSaveDot = mempty { saveDot = True }
+
+keepDot :: Maybe String -> Args
+keepDot Nothing = mempty { argTokensSave = setSaveDot,
+                            argASTSave = setSaveDot }
+keepDot (Just "all") = mempty { argASTSave = setSaveDot }
+keepDot (Just "tokens") =
+  Error ["tokens have no graphviz representation"]
+keepDot (Just "ast") =
+  mempty { argASTSave = setSaveDot }
+keepDot (Just txt) = Error ["no compiler structure named " ++ txt ++ "\n"]
+
 stopAfter :: String -> Args
 stopAfter "lexer" = mempty { argLastStage = Stage Lexer }
 stopAfter "parser" = mempty { argLastStage = Stage Parser }
@@ -154,14 +170,17 @@ stopAfter txt = Error ["no compiler stage named " ++ txt ++ "\n"]
 
 optionsDesc :: [OptDescr Args]
 optionsDesc = [
-    Option ['V'] ["version"] (NoArg Version)
+    Option "s" ["stop-after"] (ReqArg stopAfter "STAGE")
+      "stop after compiler stage",
+    Option "V" ["version"] (NoArg Version)
       "display version number",
-    Option ['k'] ["keep"] (OptArg keepText "STAGE")
+
+    Option [] ["keep"] (OptArg keepText "STAGE")
       "save intermediate structures as text",
-    Option ['K'] ["keep-xml"] (OptArg keepXML "STAGE")
+    Option [] ["keep-xml"] (OptArg keepXML "STAGE")
       "save intermediate structures as text",
-    Option ['s'] ["stop-after"] (ReqArg stopAfter "STAGE")
-      "stop after compiler stage"
+    Option [] ["keep-dot"] (OptArg keepDot "STAGE")
+      "save intermediate structures as graphviz"
   ]
 
 -- | Get compiler options from the command line.
