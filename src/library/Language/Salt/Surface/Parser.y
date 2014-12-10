@@ -107,6 +107,8 @@ def_list: closed_def_list
 
 closed_def_list: open_def_list SEMICOLON
                    { $1 }
+               | closed_def_list SEMICOLON
+                   { $1 }
                | closed_def_list closed_def
                    { $2 : $1 }
                | closed_def
@@ -123,19 +125,25 @@ open_def_list: closed_def_list open_def
 
 closed_def: type_builder_kind ID args_opt extends
             LBRACE def_list group_list RBRACE
-              {% do
-                   grouppos <- span (elementPosition (last $6))
-                                    (elementPosition (head $6))
+              {% let
+                   groups = case $6 of
+                     [] -> return (reverse $7)
+                     _ ->
+                       do
+                         grouppos <- span (elementPosition (last $6))
+                                          (elementPosition (head $6))
+                         return (Group { groupVisibility = Public,
+                                         groupElements = reverse $6,
+                                         groupPos = grouppos } :
+                                         reverse $7)
+                 in do
+                   content <- groups
                    builderpos <- span (snd $1) (Token.position $8)
                    return Builder { builderKind = fst $1,
                                     builderName = name $2,
                                     builderSuperTypes = reverse $4,
                                     builderParams = reverse $3,
-                                    builderContent =
-                                      Body (Group { groupVisibility = Public,
-                                                    groupElements = reverse $6,
-                                                    groupPos = grouppos } :
-                                            reverse $7),
+                                    builderContent = Body content,
                                     builderPos = builderpos }
               }
           | FUN ID case_list pattern LBRACE stm_list RBRACE
@@ -197,17 +205,11 @@ open_def: FUN ID case_list pattern EQUAL exp
                                   builderContent = Value $6,
                                   builderPos = builderpos }
               }
-        | truth_kind ID args_opt COLON exp
-            {% do
-                 pos <- span (snd $1) (expPosition $5)
-                 return Truth { truthName = name $2, truthKind = fst $1,
-                                truthContent = Body $5, truthPos = pos }
-            }
         | truth_kind ID args_opt EQUAL exp
             {% do
                  pos <- span (snd $1) (expPosition $5)
                  return Truth { truthName = name $2, truthKind = fst $1,
-                                truthContent = Value $5, truthPos = pos }
+                                truthContent = $5, truthPos = pos }
             }
         | PROOF ID EQUAL exp
             {% do
@@ -486,6 +488,8 @@ stm_list: open_stm_list
             { [] }
 
 closed_stm_list: open_stm_list SEMICOLON
+                   { $1 }
+               | closed_stm_list SEMICOLON
                    { $1 }
                | closed_stm_list closed_def
                    { Element $2 : $1 }
