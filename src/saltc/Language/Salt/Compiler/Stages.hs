@@ -85,6 +85,13 @@ printTextAST handle ast =
     astdoc <- formatM ast
     liftIO (putOptimal handle 120 False astdoc)
 
+printDotAST :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
+                Handle -> AST -> m ()
+printDotAST handle ast =
+  do
+    astdoc <- astDot ast
+    liftIO (putFast handle astdoc)
+
 printXMLAST :: (MonadIO m) => Handle -> Strict.ByteString -> AST -> m ()
 printXMLAST handle fname ast =
   let
@@ -97,12 +104,18 @@ printXMLAST handle fname ast =
 
 printAST :: (MonadIO m, MonadPositions m, MonadSymbols m) =>
             Save -> FilePath -> AST -> m ()
-printAST Save { saveXML = savexml, saveText = savetxt } fname ast =
+printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
+         fname ast =
   do
     when savetxt
       (do
          output <- liftIO (openFile (fname ++ ".ast") WriteMode)
          printTextAST output ast
+         liftIO (hClose output))
+    when savedot
+      (do
+         output <- liftIO (openFile (fname ++ ".ast.dot") WriteMode)
+         printDotAST output ast
          liftIO (hClose output))
     when savexml
       (do
