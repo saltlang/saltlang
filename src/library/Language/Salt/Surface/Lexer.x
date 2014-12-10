@@ -98,7 +98,7 @@ tokens :-
         { report bufferedComments `andThen` produce decLiteral }
 
 -- Octal literals
-<0>       [\-\+]?0[0-7]+(\.[0-7]+)?([ep][\-\+]?[0-7]+)?
+<0>       [\-\+]?0[0-7]*(\.[0-7]+)?([ep][\-\+]?[0-7]+)?
         { report bufferedComments `andThen` produce octLiteral }
 
 -- Hex literals
