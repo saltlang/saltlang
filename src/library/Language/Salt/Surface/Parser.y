@@ -29,6 +29,7 @@ import Data.ByteString(ByteString)
 import Data.Either
 import Data.Symbol(Symbol)
 import Data.Typeable
+import Language.Salt.Frontend
 import Language.Salt.Surface.AST
 import Language.Salt.Surface.Common
 import Language.Salt.Surface.Lexer hiding (lexer)

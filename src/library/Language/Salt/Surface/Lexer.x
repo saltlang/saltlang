@@ -19,7 +19,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 
 module Language.Salt.Surface.Lexer(
-       Frontend,
        Lexer,
        runLexer,
        runLexerNoTokens,
@@ -38,14 +37,14 @@ import Data.LexicalError
 import Data.Maybe
 import Data.Position
 import Data.Symbol
-import Language.Salt.Surface.Token
+import Language.Salt.Frontend
 import Language.Salt.Message
+import Language.Salt.Surface.Token
 import Prelude hiding (log, span, lex)
 import System.IO
 import Text.Escapes.ByteString.Lazy
 
 import qualified Control.Monad.CommentBuffer as CommentBuffer
-import qualified Control.Monad.Frontend as Frontend
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
 import qualified Data.ByteString.Lazy as Lazy hiding (uncons, drop)
 import qualified Data.ByteString.UTF8 as Strict
@@ -358,8 +357,6 @@ fullComment = CommentBuffer.addComment
 bufferedComments :: Position -> Lexer ()
 bufferedComments pos = CommentBuffer.saveCommentsAsPreceeding pos >>
                        CommentBuffer.clearComments
-
-type Frontend = MessagesT [Message] Message (Frontend.Frontend Token)
 
 type Lexer = AlexT UserState Frontend
 

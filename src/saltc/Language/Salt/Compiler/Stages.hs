@@ -27,6 +27,7 @@ import Control.Monad.Symbols
 import Control.Monad.Trans
 import Data.Array
 import Language.Salt.Compiler.Options
+import Language.Salt.Frontend
 import Language.Salt.Surface.AST
 import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
