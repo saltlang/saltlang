@@ -18,7 +18,7 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FlexibleContexts #-}
 
 -- | The Abstract Syntax Tree, as yielded by a parser.  This is
--- rendered into surface syntax by Collect, which gathers all entries
+-- rendered into Absyn by Collect, which gathers all entries
 -- into a table.
 --
 -- Note that this structure isn't meant to be processed in any truly
@@ -34,7 +34,6 @@ module Language.Salt.Surface.AST(
        Element(..),
        Compound(..),
        Pattern(..),
-       Literal(..),
        Exp(..),
        Field(..),
        Entry(..),
@@ -52,10 +51,8 @@ import Control.Monad
 import Control.Monad.Positions
 import Control.Monad.State
 import Control.Monad.Symbols
-import Data.ByteString(ByteString)
 import Data.Hashable
 import Data.Position
-import Data.Ratio
 import Data.Symbol
 import Data.Word
 import Language.Salt.Surface.Common
@@ -219,35 +216,6 @@ data Pattern =
       namePos :: !Position
     }
   | Exact !Literal
-
--- | A literal value.
-data Literal =
-    -- | A number literal.
-    Num {
-      -- | The number value.
-      numVal :: !Rational,
-      -- | The position in source from which this arises.
-      numPos :: !Position
-    }
-    -- | A string literal.
-  | Str {
-      -- | The string value.
-      strVal :: !ByteString,
-      -- | The position in source from which this arises.
-      strPos :: !Position
-    }
-    -- | A Character literal.
-  | Char {
-      -- | The character value.
-      charVal :: !Char,
-      -- | The position in source from which this arises.
-      charPos :: !Position
-    }
-    -- | A unit value.
-  | Unit {
-      -- | The position in source from which this arises.
-      unitPos :: !Position
-    }
 
 -- | Expressions.  These represent computed values of any type.
 data Exp =
@@ -428,12 +396,6 @@ compoundPosition :: Compound -> Position
 compoundPosition (Exp e) = expPosition e
 compoundPosition (Element e) = elementPosition e
 
-literalPosition :: Literal -> Position
-literalPosition Num { numPos = pos } = pos
-literalPosition Str { strPos = pos } = pos
-literalPosition Char { charPos = pos } = pos
-literalPosition Unit { unitPos = pos } = pos
-
 expPosition :: Exp -> Position
 expPosition Compound { compoundPos = pos } = pos
 expPosition Abs { absPos = pos } = pos
@@ -504,13 +466,6 @@ instance Eq Pattern where
       name1 == name2 && pat1 == pat2
   Name { nameSym = name1 } == Name { nameSym = name2 } = name1 == name2
   Exact e1 == Exact e2 = e1 == e2
-  _ == _ = False
-
-instance Eq Literal where
-  Num { numVal = num1 } == Num { numVal = num2 } = num1 == num2
-  Str { strVal = str1 } == Str { strVal = str2 } = str1 == str2
-  Char { charVal = chr1 } == Char { charVal = chr2 } = chr1 == chr2
-  Unit {} == Unit {} = True
   _ == _ = False
 
 instance Eq Exp where
@@ -675,18 +630,6 @@ instance Ord Pattern where
   compare _ Name {} = LT
   compare (Exact e1) (Exact e2) = compare e1 e2
 
-instance Ord Literal where
-  compare Num { numVal = num1 } Num { numVal = num2 } = compare num1 num2
-  compare Num {} _ = GT
-  compare _ Num {} = LT
-  compare Str { strVal = str1 } Str { strVal = str2 } = compare str1 str2
-  compare Str {} _ = GT
-  compare _ Str {} = LT
-  compare Char { charVal = chr1 } Char { charVal = chr2 } = compare chr1 chr2
-  compare Char {} _ = GT
-  compare _ Char {} = LT
-  compare Unit {} Unit {} = EQ
-
 instance Ord Exp where
   compare Compound { compoundBody = body1 } Compound { compoundBody = body2 } =
     compare body1 body2
@@ -838,15 +781,6 @@ instance Hashable Pattern where
     s `hashWithSalt` (6 :: Int) `hashWithSalt` sym
   hashWithSalt s (Exact e) = s `hashWithSalt` (7 :: Int) `hashWithSalt` e
 
-instance Hashable Literal where
-  hashWithSalt s Num { numVal = num } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` num
-  hashWithSalt s Str { strVal = str } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` str
-  hashWithSalt s Char { charVal = chr } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` chr
-  hashWithSalt s Unit {} = s `hashWithSalt` (4 :: Int)
-
 instance Hashable  Exp where
   hashWithSalt s Compound { compoundBody = body } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` body
@@ -903,13 +837,6 @@ astDot elems =
             braces (line <>
                     vcat (map fst contents) <$> astnode <$>
                     vcat (map astedge contents) <> line))
-
-getNodeID :: MonadSymbols m => StateT Word m String
-getNodeID =
-  do
-    nodeid <- get
-    put $! nodeid + 1
-    return ("node" ++ show nodeid)
 
 groupDot :: MonadSymbols m => Group -> StateT Word m (Doc, String)
 groupDot Group { groupVisibility = vis, groupElements = elems } =
@@ -1176,39 +1103,6 @@ patternDot (Exact e) =
                       string "shape = \"record\"") <>
             char ';' <$> dquoted (string nodeid) <> string ":body" <>
           string " -> " <> dquoted (string bodyname), nodeid)
-
-literalDot :: MonadSymbols m => Literal -> StateT Word m (Doc, String)
-literalDot Num { numVal = num } =
-  do
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Num | " <>
-                               string (show num)) <$>
-                      string "shape = \"record\"") <> char ';', nodeid)
-literalDot Str { strVal = str } =
-  do
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Str | " <>
-                               string "\\\"" <> bytestring str <>
-                               string "\\\"") <$>
-                      string "shape = \"record\"") <> char ';', nodeid)
-literalDot Char { charVal = chr } =
-  do
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Char | " <>
-                               squoted (char chr)) <$>
-                      string "shape = \"record\"") <> char ';', nodeid)
-literalDot Unit {} =
-  do
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <> dquoted (string "Unit") <$>
-                      string "shape = \"record\"") <> char ';', nodeid)
 
 expDot :: MonadSymbols m => Exp -> StateT Word m (Doc, String)
 expDot Compound { compoundBody = body } =
@@ -1489,21 +1383,6 @@ caseDot Case { casePat = pat, caseBody = body } =
             dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname), nodeid)
 
-recordDoc :: [(Doc, Doc)] -> Doc
-recordDoc =
-  let
-    entryDoc :: (Doc, Doc) -> Doc
-    entryDoc (fieldname, fieldval) = fieldname <+> equals <+> fieldval
-  in
-    nest 2 . parens . punctuate (comma <> linebreak) . map entryDoc
-
-listDoc :: [Doc] -> Doc
-listDoc = nest 2 . brackets . punctuate (comma <> linebreak)
-
-constructorDoc :: Doc -> [(Doc, Doc)] -> Doc
-constructorDoc prefix =
-  (prefix <+>) . recordDoc
-
 instance (MonadPositions m, MonadSymbols m) => FormatM m [Element] where
   formatM = liftM listDoc . mapM formatM
 
@@ -1660,27 +1539,6 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
                              [(string "name", namedoc),
                               (string "pos", posdoc)])
   formatM (Exact e) = formatM e
-
-instance (MonadPositions m, MonadSymbols m) => FormatM m Literal where
-  formatM Num { numVal = num, numPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (constructorDoc (string "Num")
-                             [(string "val", string (show num)),
-                              (string "pos", posdoc)])
-  formatM Str { strVal = str, strPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (constructorDoc (string "Str")
-                             [(string "val", bytestring str),
-                              (string "pos", posdoc)])
-  formatM Char { charVal = chr, charPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (constructorDoc (string "Char")
-                             [(string "val", char chr),
-                              (string "pos", posdoc)])
-  formatM Unit {} = return (string "()")
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
   formatM Compound { compoundBody = body, compoundPos = pos } =
@@ -2110,62 +1968,6 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
     in
       xpAlt picker [optionPickler, deconstructPickler, splitPickler,
                     typedPickler, asPickler, namePickler, exactPickler]
-
-numPickler :: (GenericXMLString tag, Show tag,
-               GenericXMLString text, Show text) =>
-              PU [NodeG [] tag text] Literal
-numPickler =
-  let
-    revfunc Num { numVal = num, numPos = pos } =
-      (numerator num, denominator num, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(numer, denom, pos) -> Num { numVal = numer % denom,
-                                          numPos = pos }, revfunc)
-           (xpElemAttrs (gxFromString "Num")
-                        (xpTriple (xpAttr (gxFromString "numerator") xpPrim)
-                                  (xpAttr (gxFromString "denominator") xpPrim)
-                                  xpickle))
-
-strPickler :: (GenericXMLString tag, Show tag,
-               GenericXMLString text, Show text) =>
-              PU [NodeG [] tag text] Literal
-strPickler =
-  let
-    revfunc Str { strVal = str, strPos = pos } = (pos, gxFromByteString str)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(pos, str) -> Str { strVal = gxToByteString str,
-                                 strPos = pos }, revfunc)
-           (xpElem (gxFromString "Str") xpickle (xpContent xpText0))
-
-charPickler :: (GenericXMLString tag, Show tag,
-                GenericXMLString text, Show text) =>
-               PU [NodeG [] tag text] Literal
-charPickler =
-  let
-    revfunc Char { charVal = chr, charPos = pos } = (chr, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(chr, pos) -> Char { charVal = chr, charPos = pos }, revfunc)
-           (xpElemAttrs (gxFromString "char")
-                        (xpPair (xpAttr (gxFromString "value") xpPrim) xpickle))
-
-unitPickler :: (GenericXMLString tag, Show tag,
-                GenericXMLString text, Show text) =>
-               PU [NodeG [] tag text] Literal
-unitPickler = xpWrap (Unit, unitPos) (xpElemAttrs (gxFromString "Unit") xpickle)
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
-         XmlPickler [NodeG [] tag text] Literal where
-  xpickle =
-    let
-      picker Num {} = 0
-      picker Str {} = 1
-      picker Char {} = 2
-      picker Unit {} = 3
-    in
-      xpAlt picker [numPickler, strPickler, charPickler, unitPickler]
 
 compoundPickler :: (GenericXMLString tag, Show tag,
                     GenericXMLString text, Show text) =>
