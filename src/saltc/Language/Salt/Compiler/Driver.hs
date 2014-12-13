@@ -14,6 +14,7 @@
 -- along with this program; if not, write to the Free Software
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
+{-# OPTIONS_GHC -Wall -Werror #-}
 
 module Language.Salt.Compiler.Driver(
        run
@@ -27,7 +28,6 @@ import Language.Salt.Compiler.Options
 import Language.Salt.Compiler.Stages
 import Language.Salt.Surface.Token
 import Prelude hiding (lex)
-import System.Environment
 import System.IO
 
 -- Later on, have some sort of compiler products structure.  Also,
