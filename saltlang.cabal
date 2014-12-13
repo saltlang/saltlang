@@ -97,7 +97,7 @@ Source-Repository head
 Test-Suite unit-tests
     type:               exitcode-stdio-1.0
     build-depends:      base, Cabal, HUnit-Plus, proglang-util, containers,
-                        bound, prelude-extras, hashable-extras,
+                        bound, prelude-extras, hashable-extras, unordered-containers,
                         hashable, mtl, directory
     hs-source-dirs:     src test
     test-module:        UnitTest
@@ -128,7 +128,7 @@ Library
   default-language:     Haskell2010
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
-                        hexpat, hexpat-pickle, array
+                        hexpat, hexpat-pickle, array, unordered-containers
   build-tools:          alex, happy
   hs-source-dirs:       src/library
   exposed-modules:
@@ -136,12 +136,14 @@ Library
 --                        Language.Salt.Core.Patterns,
 --                        Language.Salt.Core.Syntax,
 --                        Language.Salt.Core.TypeCheck,
+                        Language.Salt.Frontend
                         Language.Salt.Message,
                         Language.Salt.Surface.AST
                         Language.Salt.Surface.Common
-                        Language.Salt.Surface.Parser
-                        Language.Salt.Surface.Token
                         Language.Salt.Surface.Lexer
+                        Language.Salt.Surface.Parser
+                        Language.Salt.Surface.Syntax
+                        Language.Salt.Surface.Token
 --  other-modules:        Control.Monad.Proof.Class,
 --                        Control.Monad.ProofChecker,
 --                        Control.Monad.ProofErrors.Class,
