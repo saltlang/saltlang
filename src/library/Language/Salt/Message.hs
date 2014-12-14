@@ -33,14 +33,16 @@ module Language.Salt.Message(
        hardTabs,
        trailingWhitespace,
        newlineInString,
-       parseError
+       parseError,
+       noTopLevelDef,
+       duplicateField
        ) where
 
 import Control.Monad.Messages
 import Data.Hashable
 import Data.Position
 import Language.Salt.Surface.Token
---import Data.Symbol
+import Data.Symbol
 --import Language.Salt.Core.Syntax
 
 import qualified Data.ByteString.Lazy as Lazy
@@ -104,14 +106,27 @@ data Message =
   | HardTabs {
       hardTabsPos :: !Position
     }
+    -- | Trailing whitespace.
   | TrailingWhitespace {
       trailingWhitespacePos :: !Position
     }
+    -- | Newline in a string constant.
   | NewlineInString {
       newlineInStringPos :: !Position
     }
+    -- | Parse error.
   | ParseError {
       parseErrorToken :: !Token
+    }
+    -- | Missing expected module definition.
+  | NoTopLevelDef {
+      noTopLevelDefName :: !Symbol,
+      noTopLevelDefPos :: !Position
+    }
+    -- | Duplicate record field binding.
+  | DuplicateField {
+      duplicateFieldName :: !Symbol,
+      duplicateFieldPos :: !Position
     }
 {-
   -- | An error message representing an undefined proposition in the
@@ -197,6 +212,12 @@ instance Hashable Message where
     s `hashWithSalt` (11 :: Int) `hashWithSalt` pos
   hashWithSalt s ParseError { parseErrorToken = tok } =
     s `hashWithSalt` (12 :: Int) `hashWithSalt` position tok
+  hashWithSalt s NoTopLevelDef { noTopLevelDefName = sym,
+                                 noTopLevelDefPos = pos } =
+    s `hashWithSalt` (13 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+  hashWithSalt s DuplicateField { duplicateFieldName = sym,
+                                  duplicateFieldPos = pos } =
+    s `hashWithSalt` (14 :: Int) `hashWithSalt` sym `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -212,6 +233,8 @@ instance Msg.Message Message where
   severity TrailingWhitespace {} = Msg.Warning
   severity NewlineInString {} = Msg.Error
   severity ParseError {} = Msg.Error
+  severity NoTopLevelDef {} = Msg.Error
+  severity DuplicateField {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
   position BadEscape { badEscPos = pos } = Just pos
@@ -226,6 +249,8 @@ instance Msg.Message Message where
   position TrailingWhitespace { trailingWhitespacePos = pos } = Just pos
   position NewlineInString { newlineInStringPos = pos } = Just pos
   position ParseError { parseErrorToken = tok } = Just (position tok)
+  position NoTopLevelDef { noTopLevelDefPos = pos } = Just pos
+  position DuplicateField { duplicateFieldPos = pos } = Just pos
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = Lazy.UTF8.fromString "Invalid character"
@@ -248,6 +273,8 @@ instance Msg.Message Message where
     Lazy.UTF8.fromString "Unescaped newline in string literal"
   brief ParseError {} =
     Lazy.UTF8.fromString "Syntax error"
+  brief NoTopLevelDef {} = Lazy.UTF8.fromString "Expected top-level definition"
+  brief DuplicateField {} = Lazy.UTF8.fromString "Duplicate field name"
 
   details BadChars {} = Lazy.empty
   details BadEscape {} = Lazy.empty
@@ -263,6 +290,8 @@ instance Msg.Message Message where
   details TrailingWhitespace {} = Lazy.empty
   details NewlineInString {} = Lazy.empty
   details ParseError {} = Lazy.empty
+  details NoTopLevelDef {} = Lazy.empty
+  details DuplicateField {} = Lazy.empty
 
   highlighting HardTabs {} = Msg.Background
   highlighting TrailingWhitespace {} = Msg.Background
@@ -371,3 +400,23 @@ parseError :: MonadMessages Message m =>
            -- ^ The position at which the hard tabs occur.
            -> m ()
 parseError tok = message ParseError { parseErrorToken = tok }
+
+-- | Report missing top-level definition.
+noTopLevelDef :: MonadMessages Message m =>
+                 Symbol
+              -- ^ The expected top level definition name.
+              -> Position
+              -- ^ The file position.
+              -> m ()
+noTopLevelDef sym pos = message NoTopLevelDef { noTopLevelDefName = sym,
+                                                noTopLevelDefPos = pos }
+
+-- | Report duplicate fields.
+duplicateField :: MonadMessages Message m =>
+                  Symbol
+               -- ^ The duplicate field name.
+               -> Position
+               -- ^ The position at which the duplicated field occurs.
+               -> m ()
+duplicateField sym pos = message NoTopLevelDef { noTopLevelDefName = sym,
+                                                 noTopLevelDefPos = pos }
