@@ -32,23 +32,22 @@ module Language.Salt.Core.Syntax(
        ) where
 
 import Bound
-import Bound.ExtraInstances()
+import Bound.Var.ExtraInstances()
 import Control.Applicative
 import Control.Monad hiding (mapM)
 import Control.Monad.Trans
-import Data.Default
 import Data.Foldable
 import Data.Hashable
 import Data.Hashable.Extras
-import Data.Hash.ExtraInstances()
+import Data.Hashable.ExtraInstances()
 import Data.Map(Map)
 import Data.Monoid(mappend, mempty)
-import Data.Pos
+import Data.Position
 import Data.Traversable
 import Prelude hiding (foldr1, foldr, mapM)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
-import Text.Format
+import Text.Format hiding ((<$>))
 
 import qualified Data.Map as Map
 
@@ -76,7 +75,7 @@ data Pattern bound const free =
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
-      deconstructPos :: !Pos
+      deconstructPos :: !Position
     }
     -- | An "as" binding.  Allows part of a pattern to be bound to a
     -- name, but further deconstructed by another pattern.  For
@@ -87,11 +86,11 @@ data Pattern bound const free =
       -- | The inner binding, which further deconstructs the binding.
       asBind :: Pattern bound const free,
       -- | The position in source from which this originates.
-      asPos :: !Pos
+      asPos :: !Position
     }
     -- | A simple name binding.  This does the same thing as an as
     -- pattern, but does not further deconstruct the binding.
-    -- 
+    --
     -- In the intended use case, we have a special symbol representing
     -- a wildcard (namely, the unused symbol), so we don't bother
     -- defining another constructor for it.
@@ -99,7 +98,7 @@ data Pattern bound const free =
       -- | The bound variable type being bound.
       nameSym :: !bound,
       -- | The position in source from which this originates.
-      namePos :: !Pos
+      namePos :: !Position
     }
     -- | A constant.  Constrains the binding to the given value.
   | Constant (const free)
@@ -113,7 +112,7 @@ data Case bound free =
     -- | The body of the case.
     caseBody :: Scope bound (Term bound) free,
     -- | The position in source from which this originates.
-    casePos :: !Pos
+    casePos :: !Position
   }
 
 -- | An element.  This is either an argument in a product type or a
@@ -128,16 +127,16 @@ data Element bound free =
     -- | The type of the element.
     elemType :: Scope bound (Term bound) free,
     -- | The position in source from which this originates.
-    elemPos :: !Pos
+    elemPos :: !Position
   }
 
 -- | Terms.  Represents pure terms in the language.  Terms are further
 -- subdivided into types, propositions, and elimination and
 -- introduction terms (both of which represent values).
--- 
+--
 -- Types and propositions do not support decidable equality, and thus
 -- cannot be computed upon.
--- 
+--
 -- Values can be computed upon, and can appear in a pattern match.
 -- Elimination terms are those terms whose type can be inferred in
 -- type checking.  Introduction terms are those terms that require a
@@ -156,7 +155,7 @@ data Term bound free =
       -- value of any argument by their binding name.
       funcTypeRetTy :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
-      funcTypePos :: !Pos
+      funcTypePos :: !Position
     }
   -- | Dependent sum type.  This is the type given to structures.
   | RecordType {
@@ -164,11 +163,11 @@ data Term bound free =
       -- in the binding order is a degenerate scope; the remaining
       -- scopes may reference any previous elements from the binding
       -- order, but not themselves or any future scopes.
-      -- 
+      --
       -- Note: all fields are given names by transliteration.
       recTypeBody :: [Element bound free],
       -- | The position in source from which this originates.
-      recTypePos :: !Pos
+      recTypePos :: !Position
     }
   -- | Refinement type.  This type represents all members of a type
   -- satisfying a given proposition.
@@ -179,7 +178,7 @@ data Term bound free =
       -- type.  These express the constraints on the base type.
       refineCases :: [Case bound free],
       -- | The position in source from which this originates.
-      refinePos :: !Pos
+      refinePos :: !Position
     }
   -- | Computation type.  This type represents a computation, and
   -- includes both its result type and a specification of its
@@ -192,7 +191,7 @@ data Term bound free =
       -- | The specification describing the computation's behavior.
       compSpec :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
-      compTypePos :: !Pos
+      compTypePos :: !Position
     }
 
   -- Propositions.  These do not support decidable equality.  As such,
@@ -210,7 +209,7 @@ data Term bound free =
       -- | A case statement which denotes a proposition.
       quantCases :: [Case bound free],
       -- | The position in source from which this originates.
-      quantPos :: !Pos
+      quantPos :: !Position
     }
 
   -- Elimination Terms.  These terms generate a type in type checking.
@@ -229,7 +228,7 @@ data Term bound free =
       -- term.
       callFunc :: Term bound free,
       -- | The position in source from which this originates.
-      callPos :: !Pos
+      callPos :: !Position
     }
   -- | A typed term.  This is an introduction term with an explicit
   -- type tag, which makes it an elimination term.
@@ -239,7 +238,7 @@ data Term bound free =
       -- | The type of the introduction term.
       typedType :: Term bound free,
       -- | The position in source from which this originates.
-      typedPos :: !Pos
+      typedPos :: !Position
     }
   -- | A variable symbol.  Since we know the types of all variables,
   -- this is an elimination term.
@@ -247,24 +246,24 @@ data Term bound free =
       -- | The underlying symbol.
       varSym :: !free,
       -- | The position in source from which this originates.
-      varPos :: !Pos
+      varPos :: !Position
     }
 
   -- Introduction Terms.  These terms require a type in type checking.
 
   -- | An eta expansion.  This is present for type checking only.
   -- This represents a "frozen" substitution.
-  -- 
+  --
   -- XXX Quite possibly this will be removed
   | Eta {
       etaTerm :: Term bound free,
       etaType :: Term bound free,
       -- | The position in source from which this originates.
-      etaPos :: !Pos
+      etaPos :: !Position
     }
   -- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
-  -- 
+  --
   -- Lambdas will ultimately need to be extended to support
   -- overloading, which adds an inherent multiple dispatch ability.
   -- This is obviousy highly nontrivial to implement.
@@ -272,7 +271,7 @@ data Term bound free =
       -- | The cases describing this function's behavior.
       lambdaCases :: [Case bound free],
       -- | The position in source from which this originates.
-      lambdaPos :: !Pos
+      lambdaPos :: !Position
     }
   -- | A structure.  Structures can be named or ordered in the surface
   -- syntax.  Ordered structures are transliterated into named
@@ -281,7 +280,7 @@ data Term bound free =
       -- | The bindings for this record.  These are introduction terms.
       recVals :: Map bound (Term bound free),
       -- | The position in source from which this originates.
-      recPos :: !Pos
+      recPos :: !Position
     }
   -- | A collection of one or more terms, each of which is
   -- bound to a name.  Each of the members of the group may reference
@@ -289,28 +288,28 @@ data Term bound free =
   | Fix {
       fixTerms :: Map bound (Scope bound (Term bound) free),
       -- | The position in source from which this originates.
-      fixPos :: !Pos
+      fixPos :: !Position
     }
   -- | A computation value.  This is essentially a "frozen"
   -- computation.
   | Comp {
       compBody :: Comp bound free,
       -- | The position in source from which this originates.
-      compPos :: !Pos
+      compPos :: !Position
     }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
-  | BadTerm !Pos
+  | BadTerm !Position
 
 -- | Commands.  These represent individual statements, or combinations
 -- thereof, which do not bind variables.
--- 
--- We don't need alot of control flow structures.  Loops are handled
+--
+-- We don't need a lot of control flow structures.  Loops are handled
 -- by the Fix structure, conditionals are handled by the pattern
 -- matching inherent in Lambdas.  Widening and narrowing (ie typecase
 -- and downcast) can be effectively handled by adding a multiple
 -- dispatch capability).
--- 
+--
 -- The Core-to-LLVM compiler should therefore be smart enough to
 -- figure out when it can implement a Fix as a loop, and when it can
 -- inline lambdas, and when it can figure out dispatch decisions
@@ -320,7 +319,7 @@ data Cmd bound free =
       -- | The term representing the value of this command
       valTerm :: Term bound free,
       -- | The position in source from which this originates.
-      valPos :: !Pos
+      valPos :: !Position
     }
   -- | Evaluate a computation value.  This allows execution of
   -- computations produced by terms.
@@ -328,20 +327,20 @@ data Cmd bound free =
       -- | The computation value to evaluate
       evalTerm :: Term bound free,
       -- | The position in source from which this originates.
-      evalPos :: !Pos
+      evalPos :: !Position
     }
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
-  | BadCmd !Pos
+  | BadCmd !Position
 
 -- | Computations. Semantically, computations are generators for
 -- sequences of atomic actions, which are not guaranteed to terminate,
 -- or even run without error (in the case of unverified computations.
 -- In terms of programming language structures, they represent
 -- higher-order stateful procedures.
--- 
+--
 -- Obviously, computations do not admit decidable equality.
--- 
+--
 -- A raw computation is something akin to a function taking void in C,
 -- or a monad in Haskell. Stateful functions with arguments are
 -- modeled as regular functions which produce a computation.
@@ -357,28 +356,28 @@ data Comp bound free =
       -- | The next computation to execute.
       seqNext :: Scope bound (Comp bound) free,
       -- | The position in source from which this originates.
-      seqPos :: !Pos
+      seqPos :: !Position
     }
   -- | Result of a computation. This is always the end of a sequence.
   | End {
       -- | The command to run to produce a result.
       endCmd :: Cmd bound free,
       -- | The position in source from which this originates.
-      endPos :: !Pos
+      endPos :: !Position
     }
   -- | Placeholder for a malformed computation, allowing type checking
   -- to continue in spite of errors.
-  | BadComp !Pos
+  | BadComp !Position
 
 -- The equality and comparison functions ignore position
-eqBinds :: (Default b, Eq b, Eq s, Eq1 t) =>
+eqBinds :: (Eq b, Eq s, Eq1 t) =>
            [(b, Pattern b t s)] -> [(b, Pattern b t s)] -> Bool
 eqBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
   (name1 == name2) && (bind1 ==# bind2) && eqBinds binds1 binds2
 eqBinds [] [] = True
 eqBinds _ _ = False
 
-compareBinds :: (Default b, Ord b, Ord s, Ord1 t) =>
+compareBinds :: (Ord b, Ord s, Ord1 t) =>
                 [(b, Pattern b t s)] -> [(b, Pattern b t s)] -> Ordering
 compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
   case compare name1 name2 of
@@ -390,7 +389,7 @@ compareBinds [] [] = EQ
 compareBinds [] _ = LT
 compareBinds _ [] = GT
 
-instance (Default b, Eq b, Eq1 t) => Eq1 (Pattern b t) where
+instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                 deconstructConstructor = constructor1 } ==#
     Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -404,17 +403,17 @@ instance (Default b, Eq b, Eq1 t) => Eq1 (Pattern b t) where
   Constant term1 ==# Constant term2 = term1 ==# term2
   _ ==# _ = False
 
-instance (Default b, Eq b) => Eq1 (Case b) where
+instance Eq b => Eq1 (Case b) where
   Case { casePat = pat1, caseBody = body1 } ==#
     Case { casePat = pat2, caseBody = body2 } =
     pat1 ==# pat2 && body1 ==# body2
 
-instance (Default b, Eq b) => Eq1 (Element b) where
+instance Eq b => Eq1 (Element b) where
   Element { elemType = ty1, elemPat = pat1, elemName = name1 } ==#
     Element { elemType = ty2, elemPat = pat2, elemName = name2 } =
     name1 == name2 && ty1 ==# ty2 && pat1 ==# pat2
 
-instance (Default b, Eq b) => Eq1 (Term b) where
+instance Eq b => Eq1 (Term b) where
   FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 } ==#
     FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
       argtys1 ==# argtys2 && retty1 ==# retty2
@@ -447,13 +446,13 @@ instance (Default b, Eq b) => Eq1 (Term b) where
   BadTerm _ ==# BadTerm _ = True
   _ ==# _ = False
 
-instance (Default b, Eq b) => Eq1 (Cmd b) where
+instance Eq b => Eq1 (Cmd b) where
   Value { valTerm = term1 } ==# Value { valTerm = term2 } = term1 ==# term2
   Eval { evalTerm = term1 } ==# Eval { evalTerm = term2 } = term1 ==# term2
   BadCmd _ ==# BadCmd _ = True
   _ ==# _ = False
 
-instance (Default b, Eq b) => Eq1 (Comp b) where
+instance Eq b => Eq1 (Comp b) where
   Seq { seqType = ty1, seqPat = pat1, seqCmd = cmd1, seqNext = next1 } ==#
     Seq { seqType = ty2, seqPat = pat2, seqCmd = cmd2, seqNext = next2 } =
       pat1 ==# pat2 && cmd1 ==# cmd2 && next1 ==# next2 && ty1 ==# ty2
@@ -463,14 +462,14 @@ instance (Default b, Eq b) => Eq1 (Comp b) where
   BadComp _ ==# BadComp _ = True
   _ ==# _ = False
 
-instance (Default b, Eq b, Eq s, Eq1 t) => Eq (Pattern b t s) where (==) = (==#)
-instance (Default b, Eq b, Eq s) => Eq (Case b s) where (==) = (==#)
-instance (Default b, Eq b, Eq s) => Eq (Element b s) where (==) = (==#)
-instance (Default b, Eq b, Eq s) => Eq (Term b s) where (==) = (==#)
-instance (Default b, Eq b, Eq s) => Eq (Cmd b s) where (==) = (==#)
-instance (Default b, Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
+instance (Eq b, Eq s, Eq1 t) => Eq (Pattern b t s) where (==) = (==#)
+instance (Eq b, Eq s) => Eq (Case b s) where (==) = (==#)
+instance (Eq b, Eq s) => Eq (Element b s) where (==) = (==#)
+instance (Eq b, Eq s) => Eq (Term b s) where (==) = (==#)
+instance (Eq b, Eq s) => Eq (Cmd b s) where (==) = (==#)
+instance (Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
 
-instance (Default b, Ord b, Ord1 t) => Ord1 (Pattern b t) where
+instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
   compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                          deconstructConstructor = constructor1 }
            Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -495,14 +494,14 @@ instance (Default b, Ord b, Ord1 t) => Ord1 (Pattern b t) where
   compare1 _ Name {} = LT
   compare1 (Constant term1) (Constant term2) = compare1 term1 term2
 
-instance (Default b, Ord b) => Ord1 (Case b) where
+instance Ord b => Ord1 (Case b) where
   compare1 Case { casePat = pat1, caseBody = body1 }
            Case { casePat = pat2, caseBody = body2 } =
     case compare1 pat1 pat2 of
       EQ -> compare body1 body2
       out -> out
 
-instance (Default b, Ord b) => Ord1 (Element b) where
+instance Ord b => Ord1 (Element b) where
   compare1 Element { elemName = name1, elemPat = pat1, elemType = ty1 }
            Element { elemName = name2, elemPat = pat2, elemType = ty2 } =
     case compare name1 name2 of
@@ -511,7 +510,7 @@ instance (Default b, Ord b) => Ord1 (Element b) where
         out -> out
       out -> out
 
-instance (Default b, Ord b) => Ord1 (Term b) where
+instance Ord b => Ord1 (Term b) where
   compare1 FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 }
            FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
     case compare1 retty1 retty2 of
@@ -593,7 +592,7 @@ instance (Default b, Ord b) => Ord1 (Term b) where
   compare1 _ Comp {} = LT
   compare1 (BadTerm _) (BadTerm _) = EQ
 
-instance (Default b, Ord b) => Ord1 (Cmd b) where
+instance Ord b => Ord1 (Cmd b) where
   compare1 Value { valTerm = term1 } Value { valTerm = term2 } =
     compare1 term1 term2
   compare1 Value {} _ = GT
@@ -604,7 +603,7 @@ instance (Default b, Ord b) => Ord1 (Cmd b) where
   compare1 _ Eval {} = LT
   compare1 (BadCmd _) (BadCmd _) = EQ
 
-instance (Default b, Ord b) => Ord1 (Comp b) where
+instance Ord b => Ord1 (Comp b) where
   compare1 Seq { seqType = ty1, seqPat = pat1,
                  seqCmd = cmd1, seqNext = next1 }
            Seq { seqType = ty2, seqPat = pat2,
@@ -623,53 +622,15 @@ instance (Default b, Ord b) => Ord1 (Comp b) where
   compare1 _ End {} = LT
   compare1 (BadComp _) (BadComp _) = EQ
 
-instance (Default b, Ord b, Ord s, Ord1 t) => Ord (Pattern b t s) where
+instance (Ord b, Ord s, Ord1 t) => Ord (Pattern b t s) where
   compare = compare1
-instance (Default b, Ord b, Ord s) => Ord (Case b s) where compare = compare1
-instance (Default b, Ord b, Ord s) => Ord (Element b s) where compare = compare1
-instance (Default b, Ord b, Ord s) => Ord (Term b s) where compare = compare1
-instance (Default b, Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
-instance (Default b, Ord b, Ord s) => Ord (Comp b s) where compare = compare1
+instance (Ord b, Ord s) => Ord (Case b s) where compare = compare1
+instance (Ord b, Ord s) => Ord (Element b s) where compare = compare1
+instance (Ord b, Ord s) => Ord (Term b s) where compare = compare1
+instance (Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
+instance (Ord b, Ord s) => Ord (Comp b s) where compare = compare1
 
-instance Position (t s) => Position (Pattern b t s) where
-  pos Deconstruct { deconstructPos = p } = p
-  pos As { asPos = p } = p
-  pos Name { namePos = p } = p
-  pos (Constant t) = pos t
-
-instance Position (Case b s) where
-  pos Case { casePos = p } = p
-
-instance Position (Element b s) where
-  pos Element { elemPos = p } = p
-
-instance Position (Term b s) where
-  pos FuncType { funcTypePos = p } = p
-  pos RecordType { recTypePos = p } = p
-  pos RefineType { refinePos = p } = p
-  pos CompType { compTypePos = p } = p
-  pos Quantified { quantPos = p } = p
-  pos Call { callPos = p } = p
-  pos Var { varPos = p } = p
-  pos Typed { typedPos = p } = p
-  pos Eta { etaPos = p } = p
-  pos Lambda { lambdaPos = p } = p
-  pos Record { recPos = p } = p
-  pos Fix { fixPos = p } = p
-  pos Comp { compPos = p } = p
-  pos (BadTerm p) = p
-
-instance Position (Cmd b s) where
-  pos Eval { evalPos = p } = p
-  pos Value { valPos = p } = p
-  pos (BadCmd p) = p
-
-instance Position (Comp b s) where
-  pos Seq { seqPos = p } = p
-  pos End { endPos = p } = p
-  pos (BadComp p) = p
-
-instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
+instance (Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
   hashWithSalt1 s Deconstruct { deconstructConstructor = constructor,
                                 deconstructBinds = binds,
                                 deconstructStrict = strict } =
@@ -681,15 +642,15 @@ instance (Default b, Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
     s `hashWithSalt` (3 :: Int) `hashWithSalt` name
   hashWithSalt1 s (Constant c) = (s `hashWithSalt` (4 :: Int)) `hashWithSalt1` c
 
-instance (Default b, Hashable b) => Hashable1 (Case b) where
+instance (Hashable b) => Hashable1 (Case b) where
   hashWithSalt1 s Case { casePat = pat, caseBody = body } =
     s `hashWithSalt1` pat `hashWithSalt1` body
 
-instance (Default b, Hashable b) => Hashable1 (Element b) where
+instance (Hashable b) => Hashable1 (Element b) where
   hashWithSalt1 s Element { elemName = name, elemPat = pat, elemType = ty } =
     (s `hashWithSalt` name) `hashWithSalt1` pat `hashWithSalt1` ty
 
-instance (Default b, Hashable b) => Hashable1 (Term b) where
+instance (Hashable b) => Hashable1 (Term b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` argtys `hashWithSalt` retty
   hashWithSalt1 s RecordType { recTypeBody = body } =
@@ -723,14 +684,14 @@ instance (Default b, Hashable b) => Hashable1 (Term b) where
     s `hashWithSalt` (1 :: Int) `hashWithSalt1` body
   hashWithSalt1 s (BadTerm _) = s `hashWithSalt` (0 :: Int)
 
-instance (Default b, Hashable b) => Hashable1 (Cmd b) where
+instance (Hashable b) => Hashable1 (Cmd b) where
   hashWithSalt1 s Value { valTerm = term } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt1` term
   hashWithSalt1 s Eval { evalTerm = term } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` term
   hashWithSalt1 s (BadCmd _) = s `hashWithSalt` (0 :: Int)
 
-instance (Default b, Hashable b) => Hashable1 (Comp b) where
+instance (Hashable b) => Hashable1 (Comp b) where
   hashWithSalt1 s Seq { seqCmd = cmd, seqNext = next,
                         seqType = ty, seqPat = pat } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt1` ty `hashWithSalt1`
@@ -739,23 +700,23 @@ instance (Default b, Hashable b) => Hashable1 (Comp b) where
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` cmd
   hashWithSalt1 s (BadComp _) = s `hashWithSalt` (0 :: Int)
 
-instance (Default b, Hashable b, Hashable1 t, Hashable s) =>
+instance (Hashable b, Hashable1 t, Hashable s) =>
          Hashable (Pattern b t s) where
   hashWithSalt = hashWithSalt1
 
-instance (Default b, Hashable b, Hashable s) => Hashable (Case b s) where
+instance (Hashable b, Hashable s) => Hashable (Case b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Default b, Hashable b, Hashable s) => Hashable (Element b s) where
+instance (Hashable b, Hashable s) => Hashable (Element b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Default b, Hashable b, Hashable s) => Hashable (Term b s) where
+instance (Hashable b, Hashable s) => Hashable (Term b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Default b, Hashable b, Hashable s) => Hashable (Cmd b s) where
+instance (Hashable b, Hashable s) => Hashable (Cmd b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Default b, Hashable b, Hashable s) => Hashable (Comp b s) where
+instance (Hashable b, Hashable s) => Hashable (Comp b s) where
   hashWithSalt = hashWithSalt1
 
 instance Functor t => Functor (Pattern b t) where
@@ -935,10 +896,10 @@ instance Traversable (Comp b) where
 liftpos :: Pos
 liftpos = internal "Monad transformer lift"
 -}
-injectpos :: Pos
+injectpos :: Position
 injectpos = internal "Monad return"
 
-substpos :: Pos
+substpos :: Position
 substpos = internal "Monad substitution"
 
 instance MonadTrans (Pattern b) where
@@ -951,11 +912,11 @@ instance Bound (Pattern b) where
   b @ Name { nameSym = name } >>>= _ = b { nameSym = name }
   Constant t >>>= f = Constant (t >>= f)
 
-instance Default b => Applicative (Term b) where
+instance Applicative (Term b) where
   pure = return
   (<*>) = ap
 
-instance Default b => Applicative (Comp b) where
+instance Applicative (Comp b) where
   pure = return
   (<*>) = ap
 
@@ -1032,7 +993,7 @@ instance Monad (Comp b) where
         seqPat = pat >>>= termSubstComp f, seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
-
+{-
 formatBind :: (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
               (b, t s) -> Doc
 formatBind (name, bind) = name <+> equals <+> bind
@@ -1082,7 +1043,7 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
     braceBlock "FuncType" [
         "args" <+> equals <+> headlessBracketList args,
         "ret" <+> equals <+> ret
-      ] 
+      ]
   format RecordType { recTypeBody = body } =
     braceBlock "RecordType" [ "body" <+> equals <+> headlessBracketList body ]
   format RefineType { refineType = ty, refineCases = cases } =
@@ -1099,7 +1060,7 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
   format Quantified { quantKind = kind, quantType = ty, quantCases = cases } =
     braceBlock kind [
         "type" <+> equals <+> ty,
-        "cases" <+> equals <+> headlessBracketList cases        
+        "cases" <+> equals <+> headlessBracketList cases
       ]
   format Call { callFunc = func, callArgs = args } =
     braceBlock "Call" [
@@ -1170,3 +1131,4 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Show (Cmd b s) where
 instance (Default b, Ord b, Eq b, Format b, Format s) =>
          Show (Comp b s) where
   show = show . format
+-}

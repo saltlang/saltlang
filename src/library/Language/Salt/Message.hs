@@ -35,7 +35,8 @@ module Language.Salt.Message(
        newlineInString,
        parseError,
        noTopLevelDef,
-       duplicateField
+       duplicateField,
+       namelessField
        ) where
 
 import Control.Monad.Messages
@@ -128,6 +129,9 @@ data Message =
       duplicateFieldName :: !Symbol,
       duplicateFieldPos :: !Position
     }
+  | NamelessField {
+      namelessFieldPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -218,6 +222,8 @@ instance Hashable Message where
   hashWithSalt s DuplicateField { duplicateFieldName = sym,
                                   duplicateFieldPos = pos } =
     s `hashWithSalt` (14 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+  hashWithSalt s NamelessField { namelessFieldPos = pos } =
+    s `hashWithSalt` (15 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -235,6 +241,7 @@ instance Msg.Message Message where
   severity ParseError {} = Msg.Error
   severity NoTopLevelDef {} = Msg.Error
   severity DuplicateField {} = Msg.Error
+  severity NamelessField {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
   position BadEscape { badEscPos = pos } = Just pos
@@ -251,6 +258,7 @@ instance Msg.Message Message where
   position ParseError { parseErrorToken = tok } = Just (position tok)
   position NoTopLevelDef { noTopLevelDefPos = pos } = Just pos
   position DuplicateField { duplicateFieldPos = pos } = Just pos
+  position NamelessField { namelessFieldPos = pos } = Just pos
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = Lazy.UTF8.fromString "Invalid character"
@@ -275,6 +283,7 @@ instance Msg.Message Message where
     Lazy.UTF8.fromString "Syntax error"
   brief NoTopLevelDef {} = Lazy.UTF8.fromString "Expected top-level definition"
   brief DuplicateField {} = Lazy.UTF8.fromString "Duplicate field name"
+  brief NamelessField {} = Lazy.UTF8.fromString "Field binding has no name"
 
   details BadChars {} = Lazy.empty
   details BadEscape {} = Lazy.empty
@@ -292,6 +301,7 @@ instance Msg.Message Message where
   details ParseError {} = Lazy.empty
   details NoTopLevelDef {} = Lazy.empty
   details DuplicateField {} = Lazy.empty
+  details NamelessField {} = Lazy.empty
 
   highlighting HardTabs {} = Msg.Background
   highlighting TrailingWhitespace {} = Msg.Background
@@ -420,3 +430,10 @@ duplicateField :: MonadMessages Message m =>
                -> m ()
 duplicateField sym pos = message NoTopLevelDef { noTopLevelDefName = sym,
                                                  noTopLevelDefPos = pos }
+
+-- | Report a field binding with no name.
+namelessField :: MonadMessages Message m =>
+                 Position
+              -- ^ The position at which the hard tabs occur.
+              -> m ()
+namelessField pos = message NamelessField { namelessFieldPos = pos }

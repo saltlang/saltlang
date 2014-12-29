@@ -47,7 +47,8 @@ import qualified Language.Salt.Message as Message
 
 }
 
-%name parse
+%name parse def_list
+%name parseStms stm_list
 %tokentype { Token }
 %error { parseError }
 %monad { Parser }

@@ -120,9 +120,16 @@ Executable saltc
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, saltlang
-  build-tools:          alex
   hs-source-dirs:       src/saltc
   main-is:              Language/Salt/Compiler/Main.hs
+
+Executable salti
+  default-language:     Maskell2010
+  build-depends:        base, compiler-misc, bound, containers, prelude-extras,
+                        mtl, hashable, hashable-extras, bytestring, utf8-string,
+                        hexpat, hexpat-pickle, array, saltlang, readline
+  hs-source-dirs:       src/salti
+  main-is:              Language/Salt/Interpreter/Main.hs
 
 Library
   default-language:     Haskell2010
