@@ -28,6 +28,7 @@ module Language.Salt.Surface.AST(
        BuilderKind(..),
        TruthKind(..),
        Visibility(..),
+       FieldName(..),
        Group(..),
        Content(..),
        Scope,
@@ -38,12 +39,14 @@ module Language.Salt.Surface.AST(
        Field(..),
        Entry(..),
        Case(..),
+       -- * Position Accessors
        elementPosition,
        patternPosition,
        compoundPosition,
        literalPosition,
        expPosition,
        casePosition,
+       -- * Graphviz Renderer
        astDot
        ) where
 
@@ -52,6 +55,7 @@ import Control.Monad.Positions
 import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Hashable
+--import Data.HashSet(HashSet)
 import Data.Position
 import Data.Symbol
 import Data.Word
@@ -60,6 +64,13 @@ import Prelude hiding (sequence, init, exp)
 import Text.FormatM
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
+
+--import qualified Data.HashSet as HashSet
+import qualified Data.ByteString as Strict
+import qualified Data.ByteString.UTF8 as Strict
+
+newtype FieldName = FieldName { fieldSym :: Symbol }
+  deriving (Ord, Eq)
 
 -- | Represents a group of definitions with a given visibility.
 --
@@ -292,8 +303,8 @@ data Exp =
   | Project {
       -- | The inner expression
       projectVal :: !Exp,
-      -- | The name of the field being accessed.
-      projectName :: !Symbol,
+      -- | The name(s) of the field(s) being accessed.
+      projectFields :: ![FieldName],
       -- | The position in source from which this arises.
       projectPos :: !Position
     }
@@ -358,7 +369,7 @@ data Entry =
 data Field =
   Field {
     -- | The name being bound.
-    fieldName :: !Symbol,
+    fieldName :: !FieldName,
     -- | The value assigned to the bound name.
     fieldVal :: !Exp,
     -- | The position in source from which this arises.
@@ -376,6 +387,19 @@ data Case =
     casePos :: !Position
   }
 
+
+{-
+fieldDepends :: HashSet Symbol -> Field -> HashSet Symbol
+-- For fields, we don't look at the field name.
+fieldDepends captures Field { fieldVal = val } = expDepends captures val
+
+caseDepends :: HashSet Symbol -> Case -> HashSet Symbol
+caseDepends captures Case { casePat = pat, caseBody = exp } =
+  let
+    (newcaptures, patdepends) = patternDepends captures pat
+  in
+    HashSet.union patdepends (expDepends captures exp)
+-}
 elementPosition :: Element -> Position
 elementPosition Builder { builderPos = pos } = pos
 elementPosition Def { defPos = pos } = pos
@@ -488,8 +512,8 @@ instance Eq Exp where
       ty1 == ty2 && fields1 == fields2
   Tuple { tupleFields = fields1 } == Tuple { tupleFields = fields2 } =
     fields1 == fields2
-  Project { projectVal = val1, projectName = name1 } ==
-    Project { projectVal = val2, projectName = name2 } =
+  Project { projectVal = val1, projectFields = name1 } ==
+    Project { projectVal = val2, projectFields = name2 } =
       name1 == name2 && val1 == val2
   Sym { symName = name1 } == Sym { symName = name2 } = name1 == name2
   With { withVal = val1, withArgs = args1 } ==
@@ -674,8 +698,8 @@ instance Ord Exp where
     compare fields1 fields2
   compare Tuple {} _ = GT
   compare _ Tuple {} = LT
-  compare Project { projectVal = val1, projectName = name1 }
-          Project { projectVal = val2, projectName = name2 } =
+  compare Project { projectVal = val1, projectFields = name1 }
+          Project { projectVal = val2, projectFields = name2 } =
     case compare name1 name2 of
       EQ -> compare val1 val2
       out -> out
@@ -737,6 +761,9 @@ instance Ord Case where
         EQ -> compare body1 body2
         out -> out
 
+instance Hashable FieldName where
+  hashWithSalt s FieldName { fieldSym = sym } = s `hashWithSalt` sym
+
 instance Hashable Group where
   hashWithSalt s Group { groupVisibility = vis1, groupElements = elems1 } =
     s `hashWithSalt` vis1 `hashWithSalt` elems1
@@ -796,7 +823,7 @@ instance Hashable  Exp where
     s `hashWithSalt` (6 :: Int) `hashWithSalt` ty `hashWithSalt` fields
   hashWithSalt s Tuple { tupleFields = fields } =
     s `hashWithSalt` (7 :: Int) `hashWithSalt` fields
-  hashWithSalt s Project { projectVal = val, projectName = sym } =
+  hashWithSalt s Project { projectVal = val, projectFields = sym } =
     s `hashWithSalt` (8 :: Int) `hashWithSalt` sym `hashWithSalt` val
   hashWithSalt s Sym { symName = sym } =
     s `hashWithSalt` (9 :: Int) `hashWithSalt` sym
@@ -1226,15 +1253,18 @@ expDot Tuple { tupleFields = fields } =
                                string "<fields> fields") <$>
                       string "shape = \"record\"") <>
             char ';' <$> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
-expDot Project { projectVal = val, projectName = sym } =
-  do
-    namestr <- name sym
+expDot Project { projectVal = val, projectFields = fields } =
+  let
+    commabstr = Strict.fromString ", "
+  in do
+    names <- mapM (name . fieldSym) fields
     nodeid <- getNodeID
     (valnode, valname) <- expDot val
     return (valnode <$> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Project | " <>
-                               string "\\\"" <> bytestring namestr <>
+                               string "\\\"" <>
+                               bytestring (Strict.intercalate commabstr names) <>
                                string "\\\"" <>
                                string "<val> value") <$>
                       string "shape = \"record\"") <>
@@ -1351,7 +1381,8 @@ entryDot (Unnamed e) =
           string " -> " <> dquoted (string expname), nodeid)
 
 fieldDot :: MonadSymbols m => Field -> StateT Word m (Doc, String)
-fieldDot Field { fieldName = sym, fieldVal = val } =
+fieldDot Field { fieldName = FieldName { fieldSym = sym },
+                 fieldVal = val } =
   do
     nodeid <- getNodeID
     namestr <- name sym
@@ -1385,6 +1416,9 @@ caseDot Case { casePat = pat, caseBody = body } =
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m [Element] where
   formatM = liftM listDoc . mapM formatM
+
+instance MonadSymbols m => FormatM m FieldName where
+  formatM = formatM . fieldSym
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Group where
   formatM Group { groupElements = elems, groupPos = pos,
@@ -1607,13 +1641,14 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       return (constructorDoc (string "Tuple")
                              [(string "pos", posdoc),
                               (string "fields", listDoc fielddocs)])
-  formatM Project { projectVal = val, projectName = sym, projectPos = pos } =
+  formatM Project { projectVal = val, projectFields = fields,
+                    projectPos = pos } =
     do
-      namedoc <- formatM sym
+      fielddocs <- mapM formatM fields
       posdoc <- formatM pos
       valdoc <- formatM val
       return (constructorDoc (string "Project")
-                             [(string "name", namedoc),
+                             [(string "fields", listDoc fielddocs),
                               (string "pos", posdoc),
                               (string "value", valdoc)])
   formatM Sym { symName = sym, symPos = pos } =
@@ -1694,6 +1729,14 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
                              [(string "pos", posdoc),
                               (string "pattern", patdoc),
                               (string "body", bodydoc)])
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] FieldName where
+  xpickle = xpWrap (FieldName, fieldSym) xpickle
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [(tag, text)] FieldName where
+  xpickle = xpWrap (FieldName, fieldSym) xpickle
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Group where
@@ -2066,7 +2109,7 @@ tuplePickler =
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (\(pos, fields) -> Tuple { tupleFields = fields,
-                                                tuplePos = pos }, revfunc)
+                                      tuplePos = pos }, revfunc)
            (xpElem (gxFromString "Record") xpickle
                    (xpElemNodes (gxFromString "fields") xpickle))
 
@@ -2075,15 +2118,16 @@ projectPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] Exp
 projectPickler =
   let
-    revfunc Project { projectName = sym, projectVal = val,
-                      projectPos = pos } = ((sym, pos), val)
+    revfunc Project { projectFields = fields, projectVal = val,
+                      projectPos = pos } = (pos, (fields, val))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((sym, pos), val) -> Project { projectName = sym,
-                                             projectVal = val,
-                                             projectPos = pos }, revfunc)
-           (xpElem (gxFromString "Project") (xpPair xpickle xpickle)
-                   (xpElemNodes (gxFromString "value") xpickle))
+    xpWrap (\((pos), (fields, val)) -> Project { projectFields = fields,
+                                                 projectVal = val,
+                                                 projectPos = pos }, revfunc)
+           (xpElem (gxFromString "Project") xpickle
+                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
+                           (xpElemNodes (gxFromString "fields") xpickle)))
 
 symPickler :: (GenericXMLString tag, Show tag,
               GenericXMLString text, Show text) =>

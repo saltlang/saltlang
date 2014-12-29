@@ -263,28 +263,27 @@ args_opt: LPAREN field_list RPAREN
 field_list: field_list COMMA ID COLON exp
               {% do
                    pos <- span (Token.position $3) (expPosition $5)
-                   return (Field { fieldName = name $3, fieldVal = $5,
-                                   fieldPos = pos } : $1)
+                   return (Field { fieldName = FieldName { fieldSym = name $3 },
+                                   fieldVal = $5, fieldPos = pos } : $1)
               }
           | ID COLON exp
               {% do
                    pos <- span (Token.position $1) (expPosition $3)
-                   return [ Field { fieldName = name $1, fieldVal = $3,
-                                    fieldPos = pos } ]
+                   return [ Field { fieldName = FieldName { fieldSym = name $1 },
+                                    fieldVal = $3, fieldPos = pos } ]
               }
 
 bind_list: bind_list COMMA ID EQUAL exp
              {% do
                   pos <- span (Token.position $3) (expPosition $5)
-                  return (Field { fieldName = name $3, fieldVal = $5,
-                                  fieldPos = pos } : $1)
-
+                  return (Field { fieldName = FieldName { fieldSym = name $3 },
+                                  fieldVal = $5, fieldPos = pos } : $1)
              }
          | ID EQUAL exp
              {% do
                   pos <- span (Token.position $1) (expPosition $3)
-                  return [ Field { fieldName = name $1, fieldVal = $3,
-                                   fieldPos = pos } ]
+                  return [ Field { fieldName = FieldName { fieldSym = name $1 },
+                                   fieldVal = $3, fieldPos = pos } ]
              }
 
 extends: COLON extend_list
@@ -348,7 +347,9 @@ extend: extend WITH LPAREN exp_list RPAREN
       | extend DOT ID
           {% do
                pos <- span (expPosition $1) (Token.position $3)
-               return Project { projectVal = $1, projectName = name $3,
+               return Project { projectVal = $1,
+                                projectFields =
+                                  [ FieldName { fieldSym = name $3 } ],
                                 projectPos = pos }
           }
       | type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
@@ -452,7 +453,15 @@ inner_exp: type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
          | inner_exp DOT ID
             {% do
                  pos <- span (expPosition $1) (Token.position $3)
-                 return Project { projectVal = $1, projectName = name $3,
+                 return Project { projectVal = $1,
+                                  projectFields =
+                                    [ FieldName { fieldSym = name $3 } ],
+                                  projectPos = pos }
+            }
+         | inner_exp DOT LPAREN project_list RPAREN
+            {% do
+                 pos <- span (expPosition $1) (Token.position $5)
+                 return Project { projectVal = $1, projectFields = reverse $4,
                                   projectPos = pos }
             }
 --         | inner_exp LBRACK exp_list RBRACK
@@ -461,6 +470,11 @@ inner_exp: type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
             { Sym { symName = name $1, symPos = Token.position $1 } }
          | literal
             { Literal $1 }
+
+project_list: project_list COMMA ID
+              { FieldName { fieldSym = name $3 } : $1 }
+          | ID
+              { [ FieldName { fieldSym = name $1 } ] }
 
 abstraction_kind: LAMBDA
                     { (Lambda, Token.position $1) }
