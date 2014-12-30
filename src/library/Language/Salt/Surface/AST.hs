@@ -28,7 +28,6 @@ module Language.Salt.Surface.AST(
        BuilderKind(..),
        TruthKind(..),
        Visibility(..),
-       FieldName(..),
        Group(..),
        Content(..),
        Scope,
@@ -39,11 +38,9 @@ module Language.Salt.Surface.AST(
        Field(..),
        Entry(..),
        Case(..),
-       -- * Position Accessors
        elementPosition,
-       patternPosition,
        compoundPosition,
-       literalPosition,
+       patternPosition,
        expPosition,
        casePosition,
        -- * Graphviz Renderer
@@ -55,7 +52,6 @@ import Control.Monad.Positions
 import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Hashable
---import Data.HashSet(HashSet)
 import Data.Position
 import Data.Symbol
 import Data.Word
@@ -65,12 +61,8 @@ import Text.FormatM
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
---import qualified Data.HashSet as HashSet
 import qualified Data.ByteString as Strict
 import qualified Data.ByteString.UTF8 as Strict
-
-newtype FieldName = FieldName { fieldSym :: Symbol }
-  deriving (Ord, Eq)
 
 -- | Represents a group of definitions with a given visibility.
 --
@@ -156,7 +148,7 @@ data Element =
     -- theorem being proven.
   | Proof {
       -- | The name of the theorem being proven.
-      proofName :: !Symbol,
+      proofName :: !Exp,
       -- | The body of the proof.
       proofBody :: !Exp,
       -- | The position in source from which this arises.
@@ -387,19 +379,6 @@ data Case =
     casePos :: !Position
   }
 
-
-{-
-fieldDepends :: HashSet Symbol -> Field -> HashSet Symbol
--- For fields, we don't look at the field name.
-fieldDepends captures Field { fieldVal = val } = expDepends captures val
-
-caseDepends :: HashSet Symbol -> Case -> HashSet Symbol
-caseDepends captures Case { casePat = pat, caseBody = exp } =
-  let
-    (newcaptures, patdepends) = patternDepends captures pat
-  in
-    HashSet.union patdepends (expDepends captures exp)
--}
 elementPosition :: Element -> Position
 elementPosition Builder { builderPos = pos } = pos
 elementPosition Def { defPos = pos } = pos
@@ -761,9 +740,6 @@ instance Ord Case where
         EQ -> compare body1 body2
         out -> out
 
-instance Hashable FieldName where
-  hashWithSalt s FieldName { fieldSym = sym } = s `hashWithSalt` sym
-
 instance Hashable Group where
   hashWithSalt s Group { groupVisibility = vis1, groupElements = elems1 } =
     s `hashWithSalt` vis1 `hashWithSalt` elems1
@@ -1004,20 +980,19 @@ elementDot Truth { truthName = sym, truthKind = kind, truthContent = prop } =
                       string "shape = \"record\"") <>
             char ';' <$> dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname), nodeid)
-elementDot Proof { proofName = sym, proofBody = body } =
+elementDot Proof { proofName = pname, proofBody = body } =
   do
-    namestr <- name sym
     nodeid <- getNodeID
+    (namenode, namename) <- expDot pname
     (bodynode, bodyname) <- expDot body
-    return (bodynode <$> dquoted (string nodeid) <+>
+    return (namenode <$> bodynode <$> dquoted (string nodeid) <+>
             brackets (string "label = " <>
-                      dquoted (string "Proof | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string " | <body> body") <$>
+                      dquoted (string "Proof | <name> name | <body> body") <$>
                       string "shape = \"record\"") <>
             char ';' <$> dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname), nodeid)
+            string " -> " <> dquoted (string bodyname) <$>
+            dquoted (string nodeid) <> string ":name" <>
+            string " -> " <> dquoted (string namename), nodeid)
 
 compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
 compoundDot (Exp e) = expDot e
@@ -1417,9 +1392,6 @@ caseDot Case { casePat = pat, caseBody = body } =
 instance (MonadPositions m, MonadSymbols m) => FormatM m [Element] where
   formatM = liftM listDoc . mapM formatM
 
-instance MonadSymbols m => FormatM m FieldName where
-  formatM = formatM . fieldSym
-
 instance (MonadPositions m, MonadSymbols m) => FormatM m Group where
   formatM Group { groupElements = elems, groupPos = pos,
                   groupVisibility = vis} =
@@ -1731,14 +1703,6 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
                               (string "body", bodydoc)])
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
-         XmlPickler [NodeG [] tag text] FieldName where
-  xpickle = xpWrap (FieldName, fieldSym) xpickle
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
-         XmlPickler [(tag, text)] FieldName where
-  xpickle = xpWrap (FieldName, fieldSym) xpickle
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Group where
   xpickle = xpWrap (\((vis, pos), elems) -> Group { groupVisibility = vis,
                                                     groupElements = elems,
@@ -1850,14 +1814,16 @@ proofPickler :: (GenericXMLString tag, Show tag,
                 PU [NodeG [] tag text] Element
 proofPickler =
   let
-    revfunc Proof { proofName = sym, proofBody = body, proofPos = pos } =
-      ((sym, pos), body)
+    revfunc Proof { proofName = pname, proofBody = body, proofPos = pos } =
+      (pos, (pname, body))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((sym, pos), body) -> Proof { proofName = sym, proofBody = body,
-                                            proofPos = pos }, revfunc)
-           (xpElem (gxFromString "Proof") (xpPair xpickle xpickle)
-                   (xpElemNodes (gxFromString "type") xpickle))
+    xpWrap (\(pos, (pname, body)) -> Proof { proofName = pname,
+                                             proofBody = body,
+                                             proofPos = pos }, revfunc)
+           (xpElem (gxFromString "Proof") xpickle
+                   (xpPair (xpElemNodes (gxFromString "name") xpickle)
+                           (xpElemNodes (gxFromString "type") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Element where
