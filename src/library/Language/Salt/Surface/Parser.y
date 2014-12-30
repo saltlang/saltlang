@@ -165,11 +165,11 @@ closed_def: type_builder_kind ID args_opt extends
                                              casePos = casepos } : $3),
                                 funPos = funpos }
               }
-          | PROOF ID LBRACE stm_list RBRACE
+          | PROOF static_exp LBRACE stm_list RBRACE
               {% do
                    compoundpos <- span (Token.position $3) (Token.position $5)
                    pos <- span (Token.position $1) (Token.position $5)
-                   return Proof { proofName = name $2,
+                   return Proof { proofName = $2,
                                   proofBody =
                                     Compound { compoundBody = reverse $4,
                                                compoundPos = compoundpos },
@@ -213,10 +213,10 @@ open_def: FUN ID case_list pattern EQUAL exp
                  return Truth { truthName = name $2, truthKind = fst $1,
                                 truthContent = $5, truthPos = pos }
             }
-        | PROOF ID EQUAL exp
+        | PROOF static_exp EQUAL exp
             {% do
                  pos <- span (Token.position $1) (expPosition $4)
-                 return Proof { proofName = name $2, proofBody = $4,
+                 return Proof { proofName = $2, proofBody = $4,
                                 proofPos = pos }
             }
 
@@ -286,88 +286,91 @@ bind_list: bind_list COMMA ID EQUAL exp
                                    fieldVal = $3, fieldPos = pos } ]
              }
 
-extends: COLON extend_list
+extends: COLON static_exp_list
            { $2 }
        |
            { [] }
 
-extend_list: extend_list COMMA extend
+static_exp_list: static_exp_list COMMA static_exp
                { $3 : $1 }
-           | extend
+           | static_exp
                { [ $1 ] }
 
-extend: extend WITH LPAREN exp_list RPAREN
-          {% do
-               withpos <- span (expPosition $1) (Token.position $5)
-               recpos <- span (Token.position $3) (Token.position $5)
-               return With { withVal = $1,
-                             withArgs = Tuple { tupleFields = reverse $4,
-                                                tuplePos = recpos },
-                             withPos = withpos }
-          }
-      | extend WITH LPAREN bind_list RPAREN
-          {% do
-               withpos <- span (expPosition $1) (Token.position $5)
-               recpos <- span (Token.position $3) (Token.position $5)
-               return With { withVal = $1,
-                             withArgs = Record { recordFields = reverse $4,
-                                                 recordType = False,
-                                                 recordPos = recpos },
-                             withPos = withpos }
-          }
-      | extend WHERE LPAREN bind_list RPAREN
-          {% do
-               withpos <- span (expPosition $1) (Token.position $5)
-               recpos <- span (Token.position $3) (Token.position $5)
-               return Where { whereVal = $1,
-                              whereProp = Record { recordFields = reverse $4,
-                                                   recordType = False,
-                                                   recordPos = recpos },
-                              wherePos = withpos }
-          }
-      | extend LPAREN exp_list RPAREN
-          {% do
-               seqpos <- span (expPosition $1) (Token.position $4)
-               recpos <- span (Token.position $2) (Token.position $4)
-               return Seq { seqFirst = $1,
-                            seqSecond = Tuple { tupleFields = reverse $3,
-                                                tuplePos = recpos },
-                            seqPos = seqpos }
-          }
-      | extend LPAREN bind_list RPAREN
-          {% do
-               seqpos <- span (expPosition $1) (Token.position $4)
-               recpos <- span (Token.position $2) (Token.position $4)
-               return Seq { seqFirst = $1,
-                            seqSecond = Record { recordFields = reverse $3,
-                                                 recordType = False,
-                                                 recordPos = recpos },
-                            seqPos = seqpos }
-          }
-      | extend DOT ID
-          {% do
-               pos <- span (expPosition $1) (Token.position $3)
-               return Project { projectVal = $1,
-                                projectFields =
-                                  [ FieldName { fieldSym = name $3 } ],
-                                projectPos = pos }
-          }
-      | type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
-          {% do
-               grouppos <- span (elementPosition (last $5))
-                                (elementPosition (head $5))
-               builderpos <- span (snd $1) (Token.position $7)
-               return Anon { anonKind = fst $1,
-                             anonSuperTypes = reverse $3,
-                             anonParams = reverse $2,
-                             anonContent = Group { groupVisibility = Public,
-                                                   groupElements = reverse $5,
-                                                   groupPos = grouppos } :
-                                           reverse $6,
-                             anonPos = builderpos }
-          }
-      | ID
-          { Sym { symName = name $1, symPos = Token.position $1 } }
+static_exp: static_exp WITH LPAREN exp_list RPAREN
+              {% do
+                   withpos <- span (expPosition $1) (Token.position $5)
+                   recpos <- span (Token.position $3) (Token.position $5)
+                   return With { withVal = $1,
+                                 withArgs = Tuple { tupleFields = reverse $4,
+                                                    tuplePos = recpos },
+                                 withPos = withpos }
+              }
+          | static_exp WITH LPAREN bind_list RPAREN
+              {% do
+                   withpos <- span (expPosition $1) (Token.position $5)
+                   recpos <- span (Token.position $3) (Token.position $5)
+                   return With { withVal = $1,
+                                 withArgs = Record { recordFields = reverse $4,
+                                                     recordType = False,
+                                                     recordPos = recpos },
+                                 withPos = withpos }
+              }
+          | static_exp WHERE LPAREN bind_list RPAREN
+              {% do
+                   withpos <- span (expPosition $1) (Token.position $5)
+                   recpos <- span (Token.position $3) (Token.position $5)
+                   return Where { whereVal = $1,
+                                  whereProp = Record {
+                                                recordFields = reverse $4,
+                                                recordType = False,
+                                                recordPos = recpos
+                                              },
+                                  wherePos = withpos }
+              }
+          | static_exp LPAREN exp_list RPAREN
+              {% do
+                   seqpos <- span (expPosition $1) (Token.position $4)
+                   recpos <- span (Token.position $2) (Token.position $4)
+                   return Seq { seqFirst = $1,
+                                seqSecond = Tuple { tupleFields = reverse $3,
+                                                    tuplePos = recpos },
+                                seqPos = seqpos }
+              }
+          | static_exp LPAREN bind_list RPAREN
+              {% do
+                   seqpos <- span (expPosition $1) (Token.position $4)
+                   recpos <- span (Token.position $2) (Token.position $4)
+                   return Seq { seqFirst = $1,
+                                seqSecond = Record { recordFields = reverse $3,
+                                                     recordType = False,
+                                                     recordPos = recpos },
+                                seqPos = seqpos }
+              }
+          | static_exp DOT ID
+              {% do
+                   pos <- span (expPosition $1) (Token.position $3)
+                   return Project { projectVal = $1,
+                                    projectFields =
+                                      [ FieldName { fieldSym = name $3 } ],
+                                    projectPos = pos }
+              }
+          | type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
+              {% do
+                   grouppos <- span (elementPosition (last $5))
+                                    (elementPosition (head $5))
+                   builderpos <- span (snd $1) (Token.position $7)
+                   return Anon { anonKind = fst $1,
+                                 anonSuperTypes = reverse $3,
+                                 anonParams = reverse $2,
+                                 anonContent = Group {
+                                                 groupVisibility = Public,
+                                                 groupElements = reverse $5,
+                                                 groupPos = grouppos
+                                               } : reverse $6,
+                                 anonPos = builderpos }
+              }
+          | ID
+              { Sym { symName = name $1, symPos = Token.position $1 } }
 
 exp_list: exp_list COMMA exp
             { $3 : $1 }
