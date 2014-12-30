@@ -84,10 +84,14 @@ data Token =
   | Class !Position
   -- | The text 'typeclass'
   | Typeclass !Position
+  -- | The text 'instance'
+  | Instance !Position
   -- | The text 'theorem'
   | Theorem !Position
   -- | The text 'invariant'
   | Invariant !Position
+  -- | The text 'axiom'
+  | Axiom !Position
   -- | The text 'proof'
   | Proof !Position
   -- | The text 'with'
@@ -141,8 +145,10 @@ position (Module pos) = pos
 position (Signature pos) = pos
 position (Class pos) = pos
 position (Typeclass pos) = pos
+position (Instance pos) = pos
 position (Theorem pos) = pos
 position (Invariant pos) = pos
+position (Axiom pos) = pos
 position (Proof pos) = pos
 position (With pos) = pos
 position (Where pos) = pos
@@ -170,9 +176,11 @@ keywords = [
     (Strict.fromString "signature", Signature),
     (Strict.fromString "class", Class),
     (Strict.fromString "typeclass", Typeclass),
+    (Strict.fromString "instance", Instance),
     (Strict.fromString "theorem", Theorem),
     (Strict.fromString "invariant", Invariant),
-    (Strict.fromString "Proof", Proof),
+    (Strict.fromString "axiom", Axiom),
+    (Strict.fromString "proof", Proof),
     (Strict.fromString "with", With),
     (Strict.fromString "where", Where),
     (Strict.fromString "as", As),
@@ -436,6 +444,16 @@ typeclassPickler =
   in
     xpWrap (Typeclass, revfunc) (xpElemAttrs (gxFromString "Typeclass") xpickle)
 
+instancePickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+instancePickler =
+  let
+    revfunc (Instance pos) = pos
+    revfunc _ = error $! "Can't convert to Instance"
+  in
+    xpWrap (Instance, revfunc) (xpElemAttrs (gxFromString "Instance") xpickle)
+
 theoremPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Token
@@ -455,6 +473,16 @@ invariantPickler =
     revfunc _ = error $! "Can't convert to Invariant"
   in
     xpWrap (Invariant, revfunc) (xpElemAttrs (gxFromString "Invariant") xpickle)
+
+axiomPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+axiomPickler =
+  let
+    revfunc (Axiom pos) = pos
+    revfunc _ = error $! "Can't convert to Axiom"
+  in
+    xpWrap (Axiom, revfunc) (xpElemAttrs (gxFromString "Axiom") xpickle)
 
 proofPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
@@ -611,20 +639,22 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Signature _) = 22
       picker (Class _) = 23
       picker (Typeclass _) = 24
-      picker (Theorem _) = 25
-      picker (Invariant _) = 26
-      picker (Proof _) = 27
-      picker (With _) = 28
-      picker (Where _) = 29
-      picker (As _) = 30
-      picker (Private _) = 31
-      picker (Protected _) = 32
-      picker (Public _) = 33
-      picker (Match _) = 34
-      picker (Let _) = 35
-      picker (Fun _) = 36
-      picker (Import _) = 37
-      picker (Use _) = 38
+      picker (Instance _) = 25
+      picker (Theorem _) = 26
+      picker (Invariant _) = 27
+      picker (Axiom _) = 28
+      picker (Proof _) = 29
+      picker (With _) = 30
+      picker (Where _) = 31
+      picker (As _) = 32
+      picker (Private _) = 33
+      picker (Protected _) = 34
+      picker (Public _) = 35
+      picker (Match _) = 36
+      picker (Let _) = 37
+      picker (Fun _) = 38
+      picker (Import _) = 39
+      picker (Use _) = 40
     in
       xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
                     charPickler,equalPickler, ellipsisPickler, barPickler,
@@ -632,9 +662,10 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                     lparenPickler, rparenPickler, lbrackPickler, rbrackPickler,
                     lbracePickler, rbracePickler, lambdaPickler, forallPickler,
                     existsPickler, modulePickler, signaturePickler,
-                    classPickler, typeclassPickler, theoremPickler,
-                    invariantPickler, proofPickler, withPickler, wherePickler,
-                    asPickler, privatePickler, protectedPickler, publicPickler,
+                    classPickler, typeclassPickler, instancePickler,
+                    theoremPickler, invariantPickler, axiomPickler,
+                    proofPickler, withPickler, wherePickler, asPickler,
+                    privatePickler, protectedPickler, publicPickler,
                     matchPickler, letPickler, funPickler, importPickler,
                     usePickler ]
 
@@ -682,8 +713,10 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (Signature pos) = addPosition pos (string "keyword \"signature\"")
   formatM (Class pos) = addPosition pos (string "keyword \"class\"")
   formatM (Typeclass pos) = addPosition pos (string "keyword \"typeclass\"")
+  formatM (Instance pos) = addPosition pos (string "keyword \"instance\"")
   formatM (Theorem pos) = addPosition pos (string "keyword \"theorem\"")
   formatM (Invariant pos) = addPosition pos (string "keyword \"invariant\"")
+  formatM (Axiom pos) = addPosition pos (string "keyword \"axiom\"")
   formatM (Proof pos) = addPosition pos (string "keyword \"proof\"")
   formatM (With pos) = addPosition pos (string "keyword \"with\"")
   formatM (Where pos) = addPosition pos (string "keyword \"where\"")
