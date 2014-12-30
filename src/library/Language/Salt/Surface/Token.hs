@@ -107,7 +107,11 @@ data Token =
   -- | The text 'let'
   | Let !Position
   -- | The text 'fun'
-  | Fun ! Position
+  | Fun !Position
+  -- | The text 'import'
+  | Import !Position
+  -- | The text 'use'
+  | Use !Position
   -- | The end-of-file token
   | EOF
     deriving (Ord, Eq)
@@ -149,6 +153,8 @@ position (Public pos) = pos
 position (Match pos) = pos
 position (Let pos) = pos
 position (Fun pos) = pos
+position (Import pos) = pos
+position (Use pos) = pos
 position EOF = error "Can't take position of EOF"
 
 keywords :: [(Strict.ByteString, Position -> Token)]
@@ -175,7 +181,9 @@ keywords = [
     (Strict.fromString "public", Public),
     (Strict.fromString "match", Match),
     (Strict.fromString "let", Let),
-    (Strict.fromString "fun", Fun)
+    (Strict.fromString "fun", Fun),
+    (Strict.fromString "import", Import),
+    (Strict.fromString "use", Use)
   ]
 
 idPickler :: (GenericXMLString tag, Show tag,
@@ -548,6 +556,26 @@ funPickler =
   in
     xpWrap (Fun, revfunc) (xpElemAttrs (gxFromString "Fun") xpickle)
 
+importPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Token
+importPickler =
+  let
+    revfunc (Import pos) = pos
+    revfunc _ = error $! "Can't convert to Import"
+  in
+    xpWrap (Import, revfunc) (xpElemAttrs (gxFromString "Import") xpickle)
+
+usePickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Token
+usePickler =
+  let
+    revfunc (Use pos) = pos
+    revfunc _ = error $! "Can't convert to Use"
+  in
+    xpWrap (Use, revfunc) (xpElemAttrs (gxFromString "Use") xpickle)
+
 eofPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Token
@@ -595,6 +623,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Match _) = 34
       picker (Let _) = 35
       picker (Fun _) = 36
+      picker (Import _) = 37
+      picker (Use _) = 38
     in
       xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
                     charPickler,equalPickler, ellipsisPickler, barPickler,
@@ -605,7 +635,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                     classPickler, typeclassPickler, theoremPickler,
                     invariantPickler, proofPickler, withPickler, wherePickler,
                     asPickler, privatePickler, protectedPickler, publicPickler,
-                    matchPickler, letPickler, funPickler ]
+                    matchPickler, letPickler, funPickler, importPickler,
+                    usePickler ]
 
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos doc =
@@ -663,3 +694,5 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (Match pos) = addPosition pos (string "keyword \"match\"")
   formatM (Let pos) = addPosition pos (string "keyword \"let\"")
   formatM (Fun pos) = addPosition pos (string "keyword \"fun\"")
+  formatM (Import pos) = addPosition pos (string "keyword \"import\"")
+  formatM (Use pos) = addPosition pos (string "keyword \"use\"")
