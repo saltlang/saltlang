@@ -23,7 +23,6 @@ module Language.Salt.Surface.Common(
        BuilderKind(..),
        TruthKind(..),
        AbstractionKind(..),
-       AliasClass(..),
        Visibility(..),
        Literal(..),
        literalPosition,
@@ -110,20 +109,6 @@ data AbstractionKind =
   | Forall
     -- | An exists proposition.
   | Exists
-    deriving (Ord, Eq, Enum)
-
--- | Alias classes.  These define the exact semantics of an alias.
-data AliasClass =
-    -- | Imports add an alias to a declaration in another scope to the
-    -- current scope.
-    Import
-    -- | Open aliases (from "import Module.*") are the same as
-    -- importing all entities defined in given scope.  They cannot be
-    -- qualified.
-  | Open
-    -- | Exports alter the visibility and possibly the name of a
-    -- declaration.  By default, they make a given declaration public.
-  | Export
     deriving (Ord, Eq, Enum)
 
 -- | Visibilities.  Controls when accesses to a given element are legal.
@@ -413,9 +398,6 @@ instance Show TruthKind where
   show Axiom = "axiom"
 
 instance Format TruthKind where format = string . show
-
-instance Hashable AliasClass where
-  hashWithSalt s = hashWithSalt s . fromEnum
 
 instance Hashable Visibility where
   hashWithSalt s = hashWithSalt s . fromEnum
