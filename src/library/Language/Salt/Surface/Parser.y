@@ -91,7 +91,7 @@ import qualified Language.Salt.Message as Message
        MATCH { Token.Match _ }
        LET { Token.Let _ }
        FUN { Token.Fun _ }
-
+       IMPORT { Token.Import _ }
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
        INSTANCE
@@ -221,6 +221,11 @@ open_def: FUN ID case_list pattern EQUAL exp
                  pos <- span (Token.position $1) (expPosition $4)
                  return Proof { proofName = $2, proofBody = $4,
                                 proofPos = pos }
+            }
+        | IMPORT static_exp
+            {% do
+                 pos <- span (Token.position $1) (expPosition $2)
+                 return Import { importExp = $2, importPos = pos }
             }
 
 group_list: group_list PRIVATE COLON def_list

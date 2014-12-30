@@ -154,6 +154,12 @@ data Element =
       -- | The position in source from which this arises.
       proofPos :: !Position
     }
+  | Import {
+      -- | The value to import.
+      importExp :: !Exp,
+      -- | The position in source from which this arises.
+      importPos :: !Position
+    }
 
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
@@ -385,6 +391,7 @@ elementPosition Def { defPos = pos } = pos
 elementPosition Fun { funPos = pos } = pos
 elementPosition Truth { truthPos = pos } = pos
 elementPosition Proof { proofPos = pos } = pos
+elementPosition Import { importPos = pos } = pos
 
 patternPosition :: Pattern -> Position
 patternPosition Option { optionPos = pos } = pos
@@ -446,6 +453,7 @@ instance Eq Element where
   Proof { proofName = name1, proofBody = body1 } ==
     Proof { proofName = name2, proofBody = body2 } =
       name1 == name2 && body1 == body2
+  Import { importExp = exp1 } == Import { importExp = exp2 } = exp1 == exp2
   _ == _ = False
 
 instance Eq Compound where
@@ -587,6 +595,10 @@ instance Ord Element where
     case compare name1 name2 of
       EQ -> compare body1 body2
       out -> out
+  compare Proof {} _ = GT
+  compare _ Proof {} = LT
+  compare Import { importExp = exp1 } Import { importExp = exp2 } =
+    compare exp1 exp2
 
 instance Ord Compound where
   compare (Exp e1) (Exp e2) = compare e1 e2
@@ -764,6 +776,8 @@ instance Hashable Element where
     kind `hashWithSalt` prop
   hashWithSalt s Proof { proofName = sym, proofBody = body } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt` sym `hashWithSalt` body
+  hashWithSalt s Import { importExp = exp } =
+    s `hashWithSalt` (7 :: Int) `hashWithSalt` exp
 
 instance Hashable Compound where
   hashWithSalt s (Element e) = s `hashWithSalt` (1 :: Int) `hashWithSalt` e
@@ -992,6 +1006,16 @@ elementDot Proof { proofName = pname, proofBody = body } =
             char ';' <$> dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname) <$>
             dquoted (string nodeid) <> string ":name" <>
+            string " -> " <> dquoted (string namename), nodeid)
+elementDot Import { importExp = exp } =
+  do
+    nodeid <- getNodeID
+    (namenode, namename) <- expDot exp
+    return (namenode <$> dquoted (string nodeid) <+>
+            brackets (string "label = " <>
+                      dquoted (string "Import | <exp> exp") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid) <> string ":exp" <>
             string " -> " <> dquoted (string namename), nodeid)
 
 compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
@@ -1480,6 +1504,13 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
                              [(string "name", namedoc),
                               (string "pos", posdoc),
                               (string "body", bodydoc)])
+  formatM Import { importExp = exp, importPos = pos } =
+    do
+      expdoc <- formatM exp
+      posdoc <- formatM pos
+      return (constructorDoc (string "Import")
+                             [(string "exp", expdoc),
+                              (string "pos", posdoc)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
   formatM (Exp e) = formatM e
@@ -1507,7 +1538,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
     do
       fieldsdoc <- mapM formatM fields
       posdoc <- formatM pos
-      return (constructorDoc (string "Proof")
+      return (constructorDoc (string "Split")
                              [(string "pos", posdoc),
                               (string "strict", string "true"),
                               (string "fields", listDoc fieldsdoc)])
@@ -1515,7 +1546,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
     do
       fieldsdoc <- mapM formatM fields
       posdoc <- formatM pos
-      return (constructorDoc (string "Proof")
+      return (constructorDoc (string "Split")
                              [(string "pos", posdoc),
                               (string "strict", string "false"),
                               (string "fields", listDoc fieldsdoc)])
@@ -1825,6 +1856,18 @@ proofPickler =
                    (xpPair (xpElemNodes (gxFromString "name") xpickle)
                            (xpElemNodes (gxFromString "type") xpickle)))
 
+importPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Element
+importPickler =
+  let
+    revfunc Import { importExp = exp, importPos = pos } = (pos, exp)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, exp) -> Import { importExp = exp, importPos = pos }, revfunc)
+           (xpElem (gxFromString "Import") xpickle
+                   (xpElemNodes (gxFromString "name") xpickle))
+
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Element where
   xpickle =
@@ -1834,9 +1877,10 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker Fun {} = 2
       picker Truth {} = 3
       picker Proof {} = 4
+      picker Import {} = 5
     in
       xpAlt picker [builderPickler, defPickler, funPickler,
-                    truthPickler, proofPickler]
+                    truthPickler, proofPickler, importPickler]
 
 expPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
