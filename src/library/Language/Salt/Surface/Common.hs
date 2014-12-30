@@ -19,6 +19,7 @@
 
 -- | A module containing common structures for both AST and Syntax.
 module Language.Salt.Surface.Common(
+       FieldName(..),
        BuilderKind(..),
        TruthKind(..),
        AbstractionKind(..),
@@ -34,6 +35,7 @@ module Language.Salt.Surface.Common(
        ) where
 
 import Control.Monad.Positions
+import Control.Monad.Symbols
 import Control.Monad.State
 import Data.Array
 import Data.ByteString(ByteString)
@@ -41,10 +43,15 @@ import Data.Hashable
 import Data.Ratio
 import Text.Format
 import Data.Position
+import Data.Symbol
 import Data.Word
 import Text.FormatM
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
+
+-- | A newtype to discriminate field names from symbols.
+newtype FieldName = FieldName { fieldSym :: Symbol }
+  deriving (Ord, Eq)
 
 -- | Scope classes.  These define the exact semantics of a scoped
 -- entity declaration.
@@ -221,6 +228,20 @@ literalDot Unit {} =
     return (dquoted (string nodeid) <+>
             brackets (string "label = " <> dquoted (string "Unit") <$>
                       string "shape = \"record\"") <> char ';', nodeid)
+
+instance Hashable FieldName where
+  hashWithSalt s FieldName { fieldSym = sym } = s `hashWithSalt` sym
+
+instance MonadSymbols m => FormatM m FieldName where
+  formatM = formatM . fieldSym
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] FieldName where
+  xpickle = xpWrap (FieldName, fieldSym) xpickle
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [(tag, text)] FieldName where
+  xpickle = xpWrap (FieldName, fieldSym) xpickle
 
 instance Eq Literal where
   Num { numVal = num1 } == Num { numVal = num2 } = num1 == num2
