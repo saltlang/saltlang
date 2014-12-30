@@ -77,8 +77,10 @@ import qualified Language.Salt.Message as Message
        SIGNATURE { Token.Signature _ }
        CLASS { Token.Class _ }
        TYPECLASS { Token.Typeclass _ }
+       INSTANCE { Token.Instance _ }
        THEOREM { Token.Theorem _ }
        INVARIANT { Token.Invariant _ }
+       AXIOM { Token.Axiom _ }
        PROOF { Token.Proof _ }
        WITH { Token.With _ }
        WHERE { Token.Where _ }
@@ -92,6 +94,7 @@ import qualified Language.Salt.Message as Message
 
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
+       INSTANCE
 %right LAMBDA FORALL EXISTS MATCH
 %right BAR
 %nonassoc COLON WITH
@@ -245,6 +248,8 @@ truth_kind: THEOREM
               { (Theorem, Token.position $1) }
           | INVARIANT
               { (Invariant, Token.position $1) }
+          | AXIOM
+              { (Axiom, Token.position $1) }
 
 type_builder_kind: MODULE
                      { (Module, Token.position $1) }
@@ -254,6 +259,8 @@ type_builder_kind: MODULE
                      { (Class, Token.position $1) }
                  | TYPECLASS
                      { (Typeclass, Token.position $1) }
+                 | INSTANCE
+                     { (Instance, Token.position $1) }
 
 args_opt: LPAREN field_list RPAREN
             { $2 }

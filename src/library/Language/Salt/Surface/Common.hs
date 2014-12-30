@@ -84,6 +84,7 @@ data BuilderKind =
     -- allowed.
   | Class
   | Typeclass
+  | Instance
     deriving (Ord, Eq, Enum)
 
 -- | Truth classes.  These define the exact semantics of a truth
@@ -99,6 +100,7 @@ data TruthKind =
     -- the pre- and post-conditions of every state transition in the
     -- current scope.  They do not need to be proven.
   | Invariant
+  | Axiom
     deriving (Ord, Eq, Enum)
 
 data AbstractionKind =
@@ -374,7 +376,10 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                                        (gxFromString "Class")),
                    xpWrap (const Typeclass, const ())
                           (xpAttrFixed (gxFromString "kind")
-                                       (gxFromString "Typeclass"))]
+                                       (gxFromString "Typeclass")),
+                   xpWrap (const Instance, const ())
+                          (xpAttrFixed (gxFromString "kind")
+                                       (gxFromString "Instance"))]
 
 instance Show BuilderKind where
   show Signature = "signature"
@@ -382,6 +387,7 @@ instance Show BuilderKind where
   show Module = "module"
   show Class = "class"
   show Typeclass = "typeclass"
+  show Instance = "instance"
 
 instance Format BuilderKind where format = string . show
 
@@ -396,11 +402,15 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                                        (gxFromString "Theorem")),
                    xpWrap (const Invariant, const ())
                           (xpAttrFixed (gxFromString "kind")
-                                       (gxFromString "Invariant"))]
+                                       (gxFromString "Invariant")),
+                   xpWrap (const Axiom, const ())
+                          (xpAttrFixed (gxFromString "kind")
+                                       (gxFromString "Axiom"))]
 
 instance Show TruthKind where
   show Theorem = "theorem"
   show Invariant = "invariant"
+  show Axiom = "axiom"
 
 instance Format TruthKind where format = string . show
 
