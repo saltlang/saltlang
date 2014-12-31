@@ -24,10 +24,11 @@
 -- Note that this structure isn't meant to be processed in any truly
 -- meaningful way.
 module Language.Salt.Surface.AST(
-       AST,
        BuilderKind(..),
        TruthKind(..),
        Visibility(..),
+       AST(..),
+       Use(..),
        Group(..),
        Content(..),
        Scope,
@@ -52,6 +53,7 @@ import Control.Monad.Positions
 import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Hashable
+import Data.List hiding (init)
 import Data.Position
 import Data.Symbol
 import Data.Word
@@ -63,6 +65,26 @@ import Text.XML.Expat.Tree(NodeG)
 
 import qualified Data.ByteString as Strict
 import qualified Data.ByteString.UTF8 as Strict
+
+-- | Type of an AST.
+data AST =
+  AST {
+    -- | The headers.
+    astUses :: ![Use],
+    -- | The top-level scope.
+    astScope :: ![Element]
+  }
+  deriving (Ord, Eq)
+
+-- | Use directives.  These import content from another file.
+data Use =
+  -- | A use header.
+  Use {
+    -- | The qualified name in the use directive.
+    useName :: ![Symbol],
+    -- | The position in source from which this arises.
+    usePos :: !Position
+  }
 
 -- | Represents a group of definitions with a given visibility.
 --
@@ -88,8 +110,6 @@ data Content =
 
 -- | Type of a scope.
 type Scope = [Group]
-
-type AST = [Element]
 
 -- | Scope elements.  These represent declarations, imports, and truth
 -- statements inside a scope.  Note: some of these can be built from
@@ -424,6 +444,9 @@ expPosition (Literal l) = literalPosition l
 casePosition :: Case -> Position
 casePosition Case { casePos = pos } = pos
 
+instance Eq Use where
+  Use { useName = name1 } == Use { useName = name2 } = name1 == name2
+
 instance Eq Group where
   Group { groupVisibility = vis1, groupElements = elems1 } ==
     Group { groupVisibility = vis2, groupElements = elems2 } =
@@ -535,6 +558,9 @@ instance Eq Case where
     Case { caseBody = body2, casePat = pat2 } =
       body1 == body2 && pat1 == pat2
 
+instance Ord Use where
+  compare Use { useName = name1 } Use { useName = name2 } =
+    compare name1 name2
 
 instance Ord Group where
   compare Group { groupVisibility = vis1, groupElements = elems1 }
@@ -752,9 +778,16 @@ instance Ord Case where
         EQ -> compare body1 body2
         out -> out
 
+instance Hashable AST where
+  hashWithSalt s AST { astUses = uses, astScope = scope } =
+    s `hashWithSalt` uses `hashWithSalt` scope
+
+instance Hashable Use where
+  hashWithSalt s Use { useName = uname } = s `hashWithSalt` uname
+
 instance Hashable Group where
-  hashWithSalt s Group { groupVisibility = vis1, groupElements = elems1 } =
-    s `hashWithSalt` vis1 `hashWithSalt` elems1
+  hashWithSalt s Group { groupVisibility = vis, groupElements = elems } =
+    s `hashWithSalt` vis `hashWithSalt` elems
 
 instance Hashable Content where
   hashWithSalt s (Body b) = s `hashWithSalt` (1 :: Int) `hashWithSalt` b
@@ -842,18 +875,33 @@ instance Hashable Entry where
   hashWithSalt s (Unnamed e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
 
 astDot :: MonadSymbols m => AST -> m Doc
-astDot elems =
+astDot AST { astUses = uses, astScope = scope } =
   let
-    astedge (_, nodename) = string "\"ast\":bottom" <>
+    astedge (_, nodename) = string "\"ast\":scope" <>
                             string "-> " <> dquoted (string nodename)
-    astnode =
-      string "\"ast\" [ label = \"AST | <bottom> body\" shape = \"record\" ]"
+    astnode = string ("\"ast\" [ label = \"AST | <uses> uses | " ++
+                      "<scope> scope\" shape = \"record\" ]")
   in do
-    (contents, _) <- runStateT (mapM elementDot elems) 0
+    (usecontents, _) <- runStateT (mapM useDot uses) 0
+    (contents, _) <- runStateT (mapM elementDot scope) 0
     return (string "digraph g " <>
             braces (line <>
-                    vcat (map fst contents) <$> astnode <$>
+                    vcat (map fst usecontents) <$>
+                    vcat (map fst contents) <$>
+                    astnode <$>
+                    vcat (map astedge usecontents) <$>
                     vcat (map astedge contents) <> line))
+
+useDot :: MonadSymbols m => Use -> StateT Word m (Doc, String)
+useDot Use { useName = uname } =
+  do
+    unames <- mapM formatM uname
+    nodeid <- getNodeID
+    return (dquoted (string nodeid) <+>
+            brackets (string "label = " <>
+                      dquoted (string "Use | " <>
+                               punctuate dot unames) <$>
+                      string "shape = \"record\"") <> char ';', nodeid)
 
 groupDot :: MonadSymbols m => Group -> StateT Word m (Doc, String)
 groupDot Group { groupVisibility = vis, groupElements = elems } =
@@ -1413,8 +1461,24 @@ caseDot Case { casePat = pat, caseBody = body } =
             dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname), nodeid)
 
-instance (MonadPositions m, MonadSymbols m) => FormatM m [Element] where
-  formatM = liftM listDoc . mapM formatM
+instance (MonadPositions m, MonadSymbols m) => FormatM m AST where
+  formatM AST { astUses = uses, astScope = scope } =
+    do
+      usesdoc <- liftM listDoc (mapM formatM uses)
+      scopedoc <- liftM listDoc (mapM formatM scope)
+      return (constructorDoc (string "AST")
+                             [(string "uses", usesdoc),
+                              (string "scope", scopedoc)])
+
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Use where
+  formatM Use { useName = uname, usePos = pos } =
+    do
+      posdoc <- formatM pos
+      unames <- mapM formatM uname
+      return (constructorDoc (string "Use")
+                             [(string "pos", posdoc),
+                              (string "name", punctuate dot unames)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Group where
   formatM Group { groupElements = elems, groupPos = pos,
@@ -1734,13 +1798,29 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
                               (string "body", bodydoc)])
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] AST where
+  xpickle =
+    xpWrap (\(uses, scope) -> AST { astUses = uses, astScope = scope },
+            \AST { astUses = uses, astScope = scope } -> (uses, scope))
+           (xpElemNodes (gxFromString "AST")
+                        (xpPair (xpElemNodes (gxFromString "uses") xpickle)
+                                (xpElemNodes (gxFromString "scope") xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Use where
+  xpickle = xpWrap (\(pos, uname) -> Use { useName = uname, usePos = pos },
+                    \Use { useName = uname, usePos = pos } -> (pos, uname))
+                   (xpElem (gxFromString "Use") xpickle
+                           (xpElemNodes (gxFromString "name") xpickle))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Group where
   xpickle = xpWrap (\((vis, pos), elems) -> Group { groupVisibility = vis,
                                                     groupElements = elems,
                                                     groupPos = pos },
                     \Group { groupVisibility = vis, groupElements = elems,
                              groupPos = pos } -> ((vis, pos), elems))
-                   (xpElem (gxFromString "group")
+                   (xpElem (gxFromString "Group")
                            (xpPair xpickle xpickle)
                            (xpElemNodes (gxFromString "elements") xpickle))
 
@@ -2132,7 +2212,7 @@ projectPickler =
                       projectPos = pos } = (pos, (fields, val))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((pos), (fields, val)) -> Project { projectFields = fields,
+    xpWrap (\(pos, (fields, val)) -> Project { projectFields = fields,
                                                  projectVal = val,
                                                  projectPos = pos }, revfunc)
            (xpElem (gxFromString "Project") xpickle

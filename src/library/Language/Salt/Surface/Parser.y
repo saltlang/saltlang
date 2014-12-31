@@ -47,7 +47,7 @@ import qualified Language.Salt.Message as Message
 
 }
 
-%name parse def_list
+%name parse top_level
 %name parseStms stm_list
 %tokentype { Token }
 %error { parseError }
@@ -92,6 +92,7 @@ import qualified Language.Salt.Message as Message
        LET { Token.Let _ }
        FUN { Token.Fun _ }
        IMPORT { Token.Import _ }
+       USE { Token.Use _ }
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
        INSTANCE
@@ -102,6 +103,36 @@ import qualified Language.Salt.Message as Message
 %left WHERE
 
 %%
+
+top_level: use_list def_list
+             { AST { astUses = reverse $1, astScope = reverse $2 } }
+
+use_list: use_list USE qual_id SEMICOLON
+            {% let
+                 (qualname, _) = $3
+               in do
+                 pos <- span (Token.position $2) (Token.position $4)
+                 return (Use { useName = reverse qualname, usePos = pos } : $1)
+            }
+        | use_list USE qual_id
+            {% let
+                 (qualname, qualpos) = $3
+               in do
+                 pos <- span (Token.position $2) qualpos
+                 return (Use { useName = reverse qualname, usePos = pos } : $1)
+            }
+        |
+            { [] }
+
+qual_id: qual_id DOT ID
+           {% let
+                (list, headpos) = $1
+              in do
+                pos <- span headpos (Token.position $3)
+                return (name $3 : list, pos)
+           }
+       | ID
+           { ([ name $1 ], Token.position $1) }
 
 def_list: closed_def_list
             { $1 }
@@ -684,7 +715,7 @@ parser name input =
             do
               lexRemaining
               return Nothing
-          Right ast -> return $! Just (reverse ast)
+          Right ast -> return $! Just ast
   in
     runLexer run name input
 
@@ -693,10 +724,10 @@ parserNoTokens :: Strict.ByteString
                -- ^ Name of the file being parsed.
                -> Lazy.ByteString
                -- ^ Content of the file being parsed
-               -> Frontend (Maybe [Element])
+               -> Frontend (Maybe AST)
 parserNoTokens name input =
   let
-    run :: Lexer (Maybe [Element])
+    run :: Lexer (Maybe AST)
     run =
       do
         res <- runErrorT parse
@@ -705,7 +736,7 @@ parserNoTokens name input =
             do
               lexRemaining
               return Nothing
-          Right ast -> return $! Just (reverse ast)
+          Right ast -> return $! Just ast
   in
     runLexerNoTokens run name input
 

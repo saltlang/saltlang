@@ -96,9 +96,9 @@ printDotAST handle ast =
 printXMLAST :: (MonadIO m) => Handle -> Strict.ByteString -> AST -> m ()
 printXMLAST handle fname ast =
   let
-    pickler = xpRoot (xpElem (Strict.fromString "AST")
-                             (xpAttrFixed (Strict.fromString "filename") fname)
-                             (xpList xpickle))
+    pickler = xpRoot (xpElem (Strict.fromString "file")
+                             (xpAttrFixed (Strict.fromString "name") fname)
+                             xpickle)
     xmltree = XML.indent 2 (pickleTree pickler ((), ast))
   in
     liftIO (Lazy.hPutStr handle (XML.format xmltree))
@@ -163,7 +163,7 @@ parse Options { optStages = stages } =
   let
     saveast = stages ! Parser
 
-    parseFile :: FilePath -> Frontend (Maybe [Element])
+    parseFile :: FilePath -> Frontend (Maybe AST)
     parseFile =
       case stages ! Lexer of
         Save { saveText = False, saveXML = False } ->
