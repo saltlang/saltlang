@@ -93,6 +93,7 @@ import qualified Language.Salt.Message as Message
        FUN { Token.Fun _ }
        IMPORT { Token.Import _ }
        USE { Token.Use _ }
+       SYNTAX { Token.Syntax _ }
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
        INSTANCE
@@ -223,6 +224,11 @@ open_def: type_builder_kind ID args_opt extends EQUAL exp
             {% do
                  pos <- span (Token.position $1) (expPosition $2)
                  return Import { importExp = $2, importPos = pos }
+            }
+        | SYNTAX exp
+            {% do
+                 pos <- span (Token.position $1) (expPosition $2)
+                 return Syntax { syntaxExp = $2, syntaxPos = pos }
             }
 
 closed_value_def: FUN ID case_list pattern LBRACE stm_list RBRACE

@@ -180,6 +180,12 @@ data Element =
       -- | The position in source from which this arises.
       importPos :: !Position
     }
+  | Syntax {
+      -- | The value to syntax.
+      syntaxExp :: !Exp,
+      -- | The position in source from which this arises.
+      syntaxPos :: !Position
+    }
 
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
@@ -412,6 +418,7 @@ elementPosition Fun { funPos = pos } = pos
 elementPosition Truth { truthPos = pos } = pos
 elementPosition Proof { proofPos = pos } = pos
 elementPosition Import { importPos = pos } = pos
+elementPosition Syntax { syntaxPos = pos } = pos
 
 patternPosition :: Pattern -> Position
 patternPosition Option { optionPos = pos } = pos
@@ -477,6 +484,7 @@ instance Eq Element where
     Proof { proofName = name2, proofBody = body2 } =
       name1 == name2 && body1 == body2
   Import { importExp = exp1 } == Import { importExp = exp2 } = exp1 == exp2
+  Syntax { syntaxExp = exp1 } == Syntax { syntaxExp = exp2 } = exp1 == exp2
   _ == _ = False
 
 instance Eq Compound where
@@ -624,6 +632,10 @@ instance Ord Element where
   compare Proof {} _ = GT
   compare _ Proof {} = LT
   compare Import { importExp = exp1 } Import { importExp = exp2 } =
+    compare exp1 exp2
+  compare Import {} _ = GT
+  compare _ Import {} = LT
+  compare Syntax { syntaxExp = exp1 } Syntax { syntaxExp = exp2 } =
     compare exp1 exp2
 
 instance Ord Compound where
@@ -811,6 +823,8 @@ instance Hashable Element where
     s `hashWithSalt` (6 :: Int) `hashWithSalt` sym `hashWithSalt` body
   hashWithSalt s Import { importExp = exp } =
     s `hashWithSalt` (7 :: Int) `hashWithSalt` exp
+  hashWithSalt s Syntax { syntaxExp = exp } =
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` exp
 
 instance Hashable Compound where
   hashWithSalt s (Element e) = s `hashWithSalt` (1 :: Int) `hashWithSalt` e
@@ -1065,6 +1079,16 @@ elementDot Import { importExp = exp } =
                       string "shape = \"record\"") <>
             char ';' <$> dquoted (string nodeid) <> string ":exp" <>
             string " -> " <> dquoted (string namename), nodeid)
+elementDot Syntax { syntaxExp = exp } =
+  do
+    nodeid <- getNodeID
+    (expnode, expname) <- expDot exp
+    return (expnode <$> dquoted (string nodeid) <+>
+            brackets (string "label = " <>
+                      dquoted (string "Syntax | <exp> exp") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid) <> string ":exp" <>
+            string " -> " <> dquoted (string expname), nodeid)
 
 compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
 compoundDot (Exp e) = expDot e
@@ -1575,6 +1599,13 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
       return (constructorDoc (string "Import")
                              [(string "exp", expdoc),
                               (string "pos", posdoc)])
+  formatM Syntax { syntaxExp = exp, syntaxPos = pos } =
+    do
+      expdoc <- formatM exp
+      posdoc <- formatM pos
+      return (constructorDoc (string "Syntax")
+                             [(string "exp", expdoc),
+                              (string "pos", posdoc)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
   formatM (Exp e) = formatM e
@@ -1948,6 +1979,18 @@ importPickler =
            (xpElem (gxFromString "Import") xpickle
                    (xpElemNodes (gxFromString "name") xpickle))
 
+syntaxPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Element
+syntaxPickler =
+  let
+    revfunc Syntax { syntaxExp = exp, syntaxPos = pos } = (pos, exp)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, exp) -> Syntax { syntaxExp = exp, syntaxPos = pos }, revfunc)
+           (xpElem (gxFromString "Syntax") xpickle
+                   (xpElemNodes (gxFromString "name") xpickle))
+
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Element where
   xpickle =
@@ -1958,9 +2001,11 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker Truth {} = 3
       picker Proof {} = 4
       picker Import {} = 5
+      picker Syntax {} = 6
     in
-      xpAlt picker [builderPickler, defPickler, funPickler,
-                    truthPickler, proofPickler, importPickler]
+      xpAlt picker [ builderPickler, defPickler, funPickler,
+                     truthPickler, proofPickler, importPickler,
+                     syntaxPickler ]
 
 expPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>

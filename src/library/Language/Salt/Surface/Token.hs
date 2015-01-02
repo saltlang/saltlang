@@ -116,6 +116,8 @@ data Token =
   | Import !Position
   -- | The text 'use'
   | Use !Position
+  -- | The text 'syntax'
+  | Syntax !Position
   -- | The end-of-file token
   | EOF
     deriving (Ord, Eq)
@@ -161,6 +163,7 @@ position (Let pos) = pos
 position (Fun pos) = pos
 position (Import pos) = pos
 position (Use pos) = pos
+position (Syntax pos) = pos
 position EOF = error "Can't take position of EOF"
 
 keywords :: [(Strict.ByteString, Position -> Token)]
@@ -191,7 +194,8 @@ keywords = [
     (Strict.fromString "let", Let),
     (Strict.fromString "fun", Fun),
     (Strict.fromString "import", Import),
-    (Strict.fromString "use", Use)
+    (Strict.fromString "use", Use),
+    (Strict.fromString "syntax", Syntax)
   ]
 
 idPickler :: (GenericXMLString tag, Show tag,
@@ -604,6 +608,16 @@ usePickler =
   in
     xpWrap (Use, revfunc) (xpElemAttrs (gxFromString "Use") xpickle)
 
+syntaxPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Token
+syntaxPickler =
+  let
+    revfunc (Syntax pos) = pos
+    revfunc _ = error $! "Can't convert to Syntax"
+  in
+    xpWrap (Syntax, revfunc) (xpElemAttrs (gxFromString "Syntax") xpickle)
+
 eofPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Token
@@ -655,6 +669,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Fun _) = 38
       picker (Import _) = 39
       picker (Use _) = 40
+      picker (Syntax _) = 41
     in
       xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
                     charPickler,equalPickler, ellipsisPickler, barPickler,
@@ -667,7 +682,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                     proofPickler, withPickler, wherePickler, asPickler,
                     privatePickler, protectedPickler, publicPickler,
                     matchPickler, letPickler, funPickler, importPickler,
-                    usePickler ]
+                    usePickler, syntaxPickler ]
 
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos doc =
@@ -729,3 +744,4 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (Fun pos) = addPosition pos (string "keyword \"fun\"")
   formatM (Import pos) = addPosition pos (string "keyword \"import\"")
   formatM (Use pos) = addPosition pos (string "keyword \"use\"")
+  formatM (Syntax pos) = addPosition pos (string "keyword \"syntax\"")
