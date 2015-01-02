@@ -147,16 +147,20 @@ closed_def_list: open_def_list SEMICOLON
                    { $1 }
                | closed_def_list closed_def
                    { $2 : $1 }
+               | closed_def_list closed_value_def
+                   { $2 : $1 }
                | closed_def
+                   { [ $1 ] }
+               | closed_value_def
                    { [ $1 ] }
 
 open_def_list: closed_def_list open_def
                  { $2 : $1 }
-             | closed_def_list value_def
+             | closed_def_list open_value_def
                  { $2 : $1 }
              | open_def
                  { [ $1 ] }
-             | value_def
+             | open_value_def
                  { [ $1 ] }
 
 closed_def: type_builder_kind ID args_opt extends
@@ -182,23 +186,6 @@ closed_def: type_builder_kind ID args_opt extends
                                     builderContent = Body content,
                                     builderPos = builderpos }
               }
-          | FUN ID case_list pattern LBRACE stm_list RBRACE
-              {% do
-                   compoundpos <- span (Token.position $5) (Token.position $7)
-                   casepos <- span (patternPosition $4) (Token.position $7)
-                   funpos <- span (Token.position $1) (Token.position $7)
-                   return Fun { funName = name $2,
-                                funCases =
-                                  reverse (Case {
-                                             casePat = $4,
-                                             caseBody =
-                                               Compound {
-                                                 compoundBody = reverse $6,
-                                                 compoundPos = compoundpos
-                                               },
-                                             casePos = casepos } : $3),
-                                funPos = funpos }
-              }
           | PROOF static_exp LBRACE stm_list RBRACE
               {% do
                    compoundpos <- span (Token.position $3) (Token.position $5)
@@ -210,28 +197,7 @@ closed_def: type_builder_kind ID args_opt extends
                                   proofPos = pos }
               }
 
-value_def: pattern
-             {% return Def { defPattern = $1, defInit = Nothing,
-                             defPos = patternPosition $1 } }
-         | pattern EQUAL exp
-             {% do
-                  pos <- span (patternPosition $1) (expPosition $3)
-                  return Def { defPattern = $1, defInit = Just $3,
-                               defPos = pos }
-             }
-
-open_def: FUN ID case_list pattern EQUAL exp
-            {% do
-                 casepos <- span (casePosition (head $3)) (expPosition $6)
-                 funpos <- span (Token.position $1) (expPosition $6)
-                 return Fun { funName = name $2,
-                              funCases = reverse (Case { casePat = $4,
-                                                         caseBody = $6,
-                                                         casePos = casepos } :
-                                                  $3),
-                              funPos = funpos }
-            }
-        | type_builder_kind ID args_opt extends EQUAL exp
+open_def: type_builder_kind ID args_opt extends EQUAL exp
             {% do
                  builderpos <- span (snd $1) (expPosition $6)
                  return Builder { builderKind = fst $1,
@@ -240,7 +206,7 @@ open_def: FUN ID case_list pattern EQUAL exp
                                   builderParams = reverse $3,
                                   builderContent = Value $6,
                                   builderPos = builderpos }
-              }
+            }
         | truth_kind ID args_opt EQUAL exp
             {% do
                  pos <- span (snd $1) (expPosition $5)
@@ -259,18 +225,67 @@ open_def: FUN ID case_list pattern EQUAL exp
                  return Import { importExp = $2, importPos = pos }
             }
 
+closed_value_def: FUN ID case_list pattern LBRACE stm_list RBRACE
+                    {% do
+                         compoundpos <- span (Token.position $5)
+                                             (Token.position $7)
+                         casepos <- span (patternPosition $4)
+                                         (Token.position $7)
+                         funpos <- span (Token.position $1)
+                                        (Token.position $7)
+                         return Fun { funName = name $2,
+                                      funCases =
+                                        reverse (Case {
+                                                   casePat = $4,
+                                                   caseBody =
+                                                     Compound {
+                                                       compoundBody =
+                                                         reverse $6,
+                                                       compoundPos =
+                                                         compoundpos
+                                                     },
+                                                   casePos = casepos } : $3),
+                                      funPos = funpos }
+                                }
+
+
+open_value_def: pattern
+                  {% return Def { defPattern = $1, defInit = Nothing,
+                                  defPos = patternPosition $1 }
+                  }
+              | pattern EQUAL exp
+                  {% do
+                       pos <- span (patternPosition $1) (expPosition $3)
+                       return Def { defPattern = $1, defInit = Just $3,
+                                    defPos = pos }
+                  }
+              | FUN ID case_list pattern EQUAL exp
+                  {% do
+                       casepos <- span (casePosition (head $3)) (expPosition $6)
+                       funpos <- span (Token.position $1) (expPosition $6)
+                       return Fun { funName = name $2,
+                                    funCases =
+                                      reverse (Case { casePat = $4,
+                                                      caseBody = $6,
+                                                      casePos = casepos } :
+                                               $3),
+                                    funPos = funpos }
+                  }
+
 group_list: group_list PRIVATE COLON def_list
               {% do
                    pos <- span (Token.position $2) (elementPosition (head $4))
                    return (Group { groupVisibility = Private,
                                    groupElements = $4,
-                                   groupPos = pos } : $1) }
+                                   groupPos = pos } : $1)
+              }
           | group_list PROTECTED COLON def_list
               {% do
                    pos <- span (Token.position $2) (elementPosition (head $4))
                    return (Group { groupVisibility = Protected,
                                    groupElements = $4,
-                                   groupPos = pos } : $1) }
+                                   groupPos = pos } : $1)
+              }
           | group_list PUBLIC COLON def_list
               {% do
                    pos <- span (Token.position $2) (elementPosition (head $4))
@@ -522,7 +537,9 @@ project_list: project_list COMMA ID
           | ID
               { [ FieldName { fieldSym = name $1 } ] }
 
-abstraction_kind: LAMBDA
+abstraction_kind: FUN
+                    { (Lambda, Token.position $1) }
+                | LAMBDA
                     { (Lambda, Token.position $1) }
                 | FORALL
                     { (Forall, Token.position $1) }
@@ -555,12 +572,14 @@ closed_stm_list: open_stm_list SEMICOLON
                    { $1 }
                | closed_stm_list closed_def
                    { Element $2 : $1 }
+               | LET closed_value_def
+                   { [ Element $2 ] }
                | closed_def
                    { [ Element $1 ] }
 
 open_stm: open_def
             { Element $1 }
-        | LET value_def
+        | LET open_value_def
             { Element $2 }
         | exp
             { Exp $1 }
