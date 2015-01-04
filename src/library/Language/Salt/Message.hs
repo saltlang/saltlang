@@ -36,7 +36,16 @@ module Language.Salt.Message(
        parseError,
        noTopLevelDef,
        duplicateField,
-       namelessField
+       namelessField,
+       duplicateTruth,
+       badSyntax,
+       badSyntaxKind,
+       badSyntaxName,
+       badSyntaxAssoc,
+       badSyntaxPrec,
+       badSyntaxRef,
+       multipleFixity,
+       undefSymbol
        ) where
 
 import Control.Monad.Messages
@@ -132,6 +141,42 @@ data Message =
   | NamelessField {
       namelessFieldPos :: !Position
     }
+    -- | Duplicate truth definition in the current environment.
+  | DuplicateTruth {
+      duplicateTruthName :: !Symbol,
+      duplicateTruthPos :: !Position
+    }
+    -- | A bad syntax directive kind.
+  | BadSyntax {
+      badSyntaxPos :: !Position
+    }
+    -- | A bad syntax directive kind.
+  | BadSyntaxKind {
+      badSyntaxKindPos :: !Position
+    }
+    -- | An invalid name in a syntax directive.
+  | BadSyntaxName {
+      badSyntaxNamePos :: !Position
+    }
+    -- | An invalid associativity in a syntax directive.
+  | BadSyntaxAssoc {
+      badSyntaxAssocPos :: !Position
+    }
+    -- | An invalid precedence relation in a syntax directive.
+  | BadSyntaxPrec {
+      badSyntaxPrecPos :: !Position
+    }
+    -- | An invalid reference in a syntax directive
+  | BadSyntaxRef {
+      badSyntaxRefPos :: !Position
+    }
+  | MultipleFixity {
+      multipleFixityPos :: !Position
+    }
+  | UndefSymbol {
+      undefSymbolSym :: !Symbol,
+      undefSymbolPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -224,6 +269,25 @@ instance Hashable Message where
     s `hashWithSalt` (14 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s NamelessField { namelessFieldPos = pos } =
     s `hashWithSalt` (15 :: Int) `hashWithSalt` pos
+  hashWithSalt s DuplicateTruth { duplicateTruthName = sym,
+                                  duplicateTruthPos = pos } =
+    s `hashWithSalt` (16 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+  hashWithSalt s BadSyntax { badSyntaxPos = pos } =
+    s `hashWithSalt` (17 :: Int) `hashWithSalt` pos
+  hashWithSalt s BadSyntaxKind { badSyntaxKindPos = pos } =
+    s `hashWithSalt` (18 :: Int) `hashWithSalt` pos
+  hashWithSalt s BadSyntaxName { badSyntaxNamePos = pos } =
+    s `hashWithSalt` (19 :: Int) `hashWithSalt` pos
+  hashWithSalt s BadSyntaxAssoc { badSyntaxAssocPos = pos } =
+    s `hashWithSalt` (20 :: Int) `hashWithSalt` pos
+  hashWithSalt s BadSyntaxPrec { badSyntaxPrecPos = pos } =
+    s `hashWithSalt` (21 :: Int) `hashWithSalt` pos
+  hashWithSalt s BadSyntaxRef { badSyntaxRefPos = pos } =
+    s `hashWithSalt` (22 :: Int) `hashWithSalt` pos
+  hashWithSalt s MultipleFixity { multipleFixityPos = pos } =
+    s `hashWithSalt` (23 :: Int) `hashWithSalt` pos
+  hashWithSalt s UndefSymbol { undefSymbolSym = sym, undefSymbolPos = pos } =
+    s `hashWithSalt` (24 :: Int) `hashWithSalt` sym `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -242,6 +306,15 @@ instance Msg.Message Message where
   severity NoTopLevelDef {} = Msg.Error
   severity DuplicateField {} = Msg.Error
   severity NamelessField {} = Msg.Error
+  severity DuplicateTruth {} = Msg.Error
+  severity BadSyntax {} = Msg.Error
+  severity BadSyntaxKind {} = Msg.Error
+  severity BadSyntaxName {} = Msg.Error
+  severity BadSyntaxAssoc {} = Msg.Error
+  severity BadSyntaxPrec {} = Msg.Error
+  severity BadSyntaxRef {} = Msg.Error
+  severity MultipleFixity {} = Msg.Error
+  severity UndefSymbol {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
   position BadEscape { badEscPos = pos } = Just pos
@@ -259,6 +332,15 @@ instance Msg.Message Message where
   position NoTopLevelDef { noTopLevelDefPos = pos } = Just pos
   position DuplicateField { duplicateFieldPos = pos } = Just pos
   position NamelessField { namelessFieldPos = pos } = Just pos
+  position DuplicateTruth { duplicateTruthPos = pos } = Just pos
+  position BadSyntax { badSyntaxPos = pos } = Just pos
+  position BadSyntaxKind { badSyntaxKindPos = pos } = Just pos
+  position BadSyntaxName { badSyntaxNamePos = pos } = Just pos
+  position BadSyntaxAssoc { badSyntaxAssocPos = pos } = Just pos
+  position BadSyntaxPrec { badSyntaxPrecPos = pos } = Just pos
+  position BadSyntaxRef { badSyntaxRefPos = pos } = Just pos
+  position MultipleFixity { multipleFixityPos = pos } = Just pos
+  position UndefSymbol { undefSymbolPos = pos } = Just pos
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = Lazy.UTF8.fromString "Invalid character"
@@ -284,6 +366,15 @@ instance Msg.Message Message where
   brief NoTopLevelDef {} = Lazy.UTF8.fromString "Expected top-level definition"
   brief DuplicateField {} = Lazy.UTF8.fromString "Duplicate field name"
   brief NamelessField {} = Lazy.UTF8.fromString "Field binding has no name"
+  brief DuplicateTruth {} = Lazy.UTF8.fromString "Duplicate truth definition"
+  brief BadSyntax {} = Lazy.UTF8.fromString "Invalid syntax directive"
+  brief BadSyntaxKind {} = Lazy.UTF8.fromString "Invalid syntax directive"
+  brief BadSyntaxName {} = Lazy.UTF8.fromString "Invalid syntax directive"
+  brief BadSyntaxAssoc {} = Lazy.UTF8.fromString "Invalid syntax directive"
+  brief BadSyntaxPrec {} = Lazy.UTF8.fromString "Invalid syntax directive"
+  brief BadSyntaxRef {} = Lazy.UTF8.fromString "Invalid syntax directive"
+  brief MultipleFixity {} = Lazy.UTF8.fromString "Multiple fixity directives"
+  brief UndefSymbol {} = Lazy.UTF8.fromString "Undefined symbol"
 
   details BadChars {} = Lazy.empty
   details BadEscape {} = Lazy.empty
@@ -302,6 +393,18 @@ instance Msg.Message Message where
   details NoTopLevelDef {} = Lazy.empty
   details DuplicateField {} = Lazy.empty
   details NamelessField {} = Lazy.empty
+  details DuplicateTruth {} = Lazy.empty
+  details BadSyntax {} = Lazy.empty
+  details BadSyntaxKind {} =
+    Lazy.UTF8.fromString "Expected \"infix\", \"postfix\", or \"prec\""
+  details BadSyntaxName {} = Lazy.UTF8.fromString "Expected a name here"
+  details BadSyntaxAssoc {} =
+    Lazy.UTF8.fromString "Expected \"left\", \"right\", or \"nonassoc\""
+  details BadSyntaxPrec {} =
+    Lazy.UTF8.fromString "Expected \">\", \"<\", or \"==\""
+  details BadSyntaxRef {} = Lazy.UTF8.fromString "Expected a name here"
+  details MultipleFixity {} = Lazy.empty
+  details UndefSymbol {} = Lazy.empty
 
   highlighting HardTabs {} = Msg.Background
   highlighting TrailingWhitespace {} = Msg.Background
@@ -428,12 +531,83 @@ duplicateField :: MonadMessages Message m =>
                -> Position
                -- ^ The position at which the duplicated field occurs.
                -> m ()
-duplicateField sym pos = message NoTopLevelDef { noTopLevelDefName = sym,
-                                                 noTopLevelDefPos = pos }
+duplicateField sym pos = message DuplicateField { duplicateFieldName = sym,
+                                                  duplicateFieldPos = pos }
 
 -- | Report a field binding with no name.
 namelessField :: MonadMessages Message m =>
                  Position
-              -- ^ The position at which the hard tabs occur.
+              -- ^ The position at which the nameless field occurs.
               -> m ()
 namelessField pos = message NamelessField { namelessFieldPos = pos }
+
+-- | Report duplicate truths.
+duplicateTruth :: MonadMessages Message m =>
+                  Symbol
+               -- ^ The duplicate truth name.
+               -> Position
+               -- ^ The position at which the duplicated truth
+               -- definition occurs.
+               -> m ()
+duplicateTruth sym pos = message DuplicateTruth { duplicateTruthName = sym,
+                                                  duplicateTruthPos = pos }
+
+-- | Report a bad syntax directive.
+badSyntax :: MonadMessages Message m =>
+             Position
+          -- ^ The position at which the bad syntax kind occurs.
+          -> m ()
+badSyntax pos = message BadSyntax { badSyntaxPos = pos }
+
+-- | Report a bad syntax directive.
+badSyntaxKind :: MonadMessages Message m =>
+                 Position
+              -- ^ The position at which the bad syntax kind occurs.
+              -> m ()
+badSyntaxKind pos = message BadSyntaxKind { badSyntaxKindPos = pos }
+
+-- | Report a bad syntax directive.
+badSyntaxName :: MonadMessages Message m =>
+                 Position
+              -- ^ The position at which the bad syntax name occurs.
+              -> m ()
+badSyntaxName pos = message BadSyntaxName { badSyntaxNamePos = pos }
+
+-- | Report a bad associativity syntax directive.
+badSyntaxAssoc :: MonadMessages Message m =>
+                 Position
+              -- ^ The position at which the bad syntax associativity occurs.
+              -> m ()
+badSyntaxAssoc pos = message BadSyntaxAssoc { badSyntaxAssocPos = pos }
+
+-- | Report a bad precedence in a syntax directive.
+badSyntaxPrec :: MonadMessages Message m =>
+                 Position
+              -- ^ The position at which the bad syntax precedence occurs.
+              -> m ()
+badSyntaxPrec pos = message BadSyntaxPrec { badSyntaxPrecPos = pos }
+
+-- | Report a bad reference syntax directive.
+badSyntaxRef :: MonadMessages Message m =>
+                Position
+             -- ^ The position at which the bad syntax name occurs.
+             -> m ()
+badSyntaxRef pos = message BadSyntaxRef { badSyntaxRefPos = pos }
+
+-- | Report a bad reference syntax directive.
+multipleFixity :: MonadMessages Message m =>
+                  Position
+               -- ^ The position at which the bad syntax name occurs.
+               -> m ()
+multipleFixity pos = message MultipleFixity { multipleFixityPos = pos }
+
+-- | Report an undefined symbol.
+undefSymbol :: MonadMessages Message m =>
+               Symbol
+            -- ^ The undefined symbol name.
+            -> Position
+            -- ^ The position at which the undefined symbol
+            -- definition occurs.
+            -> m ()
+undefSymbol sym pos = message UndefSymbol { undefSymbolSym = sym,
+                                            undefSymbolPos = pos }

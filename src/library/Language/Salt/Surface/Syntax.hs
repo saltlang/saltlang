@@ -17,9 +17,15 @@
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FlexibleContexts #-}
 
--- | Abstract Syntax structure.  This is
+-- | Abstract Syntax structure.  This represents the surface language
+-- in a more abstract form than is found in the AST structure.
 module Language.Salt.Surface.Syntax(
+       Assoc(..),
+       Fixity(..),
+       Syntax(..),
        Defs(..),
+       Truth(..),
+       Directive(..),
        Scope(..),
        Content(..),
        Element(..),
@@ -35,25 +41,65 @@ module Language.Salt.Surface.Syntax(
 
 import Data.Array
 import Data.Position
-import Data.Monoid
 import Data.Symbol
 import Data.Word
 import Data.HashMap.Strict(HashMap)
 import Language.Salt.Surface.Common
 
-import qualified Data.HashMap.Strict as HashMap
+data Assoc = Left | Right | NonAssoc
+  deriving (Ord, Eq)
 
--- | A set of definitions for a given symbol.  Represented as an array
--- of lists of 'Element's, indexed by 'Visibility', representing all
--- the definitions at that visibility.
-newtype Defs = Defs { defs :: Array Visibility [Element] }
+data Fixity = Prefix | Infix !Assoc | Postfix
+  deriving (Ord, Eq)
+
+-- | Syntax information for a symbol.
+data Syntax =
+  Syntax {
+    -- | Fixity (and associativity).
+    syntaxFixity :: !Fixity,
+    -- | Precedence relations.
+    syntaxPrecs :: ![(Ordering, Exp)]
+  }
+
+-- | A set of definitions for a given symbol, as well as the syntax
+-- information for the symbol.
+data Defs =
+  Defs {
+    -- | An array of lists of 'Element's, indexed by 'Visibility',
+    -- representing all the definitions at that visibility.
+    defs :: Array Visibility [Element],
+    -- | Syntax information for this definition.
+    defsSyntax :: !Syntax
+  }
+
+-- | Truths.  These are similar to declarations, except that they
+-- affect the proof environment.  These include theorems and
+-- invariants.
+data Truth =
+  Truth {
+    -- | The class of the truth.
+    truthKind :: !TruthKind,
+    -- | The visibility of the truth.
+    truthVisibility :: !Visibility,
+    -- | The truth proposition.
+    truthContent :: !Exp,
+    -- | The position in source from which this arises.
+    truthPos :: !Position
+  }
 
 -- | A scope.  Consists of a map from symbols to definition sets
 -- represented as 'Defs'.
 data Scope =
   Scope {
-    -- | All definitions in this scope
-    scopeDefs :: !(HashMap Symbol Defs)
+    -- | The definition environment for this scope.  This contains all
+    -- concrete definitions.
+    scopeDefs :: !(HashMap Symbol Defs),
+    -- | The truth environment for this scope.  This contains all
+    -- theorems, axioms, and invariants.
+    scopeTruths :: !(HashMap Symbol Truth),
+    -- | The directives in this scope.  This contains all proofs,
+    -- imports, and fixity directives.
+    scopeDirectives :: ![Directive]
   }
 
 -- | Content of a definition.  Used wherever we can see a definition
@@ -63,6 +109,27 @@ data Content =
     Body !Scope
     -- | An expression.
   | Value !Exp
+
+-- | Directives.  These are static commands, like imports or proofs,
+-- which influence a scope, but do not directly define anything.
+data Directive =
+    -- | A proof.  This is just a code block with the name of the
+    -- theorem being proven.
+    Proof {
+      -- | The name of the theorem being proven.
+      proofName :: !Exp,
+      -- | The body of the proof.
+      proofBody :: !Exp,
+      -- | The position in source from which this arises.
+      proofPos :: !Position
+    }
+    -- | An import directive.
+  | Import {
+      -- | The name(s) to import.
+      importExp :: !Exp,
+      -- | The position in source from which this arises.
+      importPos :: !Position
+    }
 
 -- | Scope elements.  These represent declarations, imports, and truth
 -- statements inside a scope.  Note: some of these can be built from
@@ -75,25 +142,6 @@ data Element =
       defInit :: !(Maybe Exp),
       -- | The position in source from which this arises.
       defPos :: !Position
-    }
-    -- | Truths.  These are similar to declarations, except that they
-    -- affect the proof environment.  These include theorems and
-    -- invariants.
-  | Truth {
-      -- | The class of the truth.
-      truthKind :: !TruthKind,
-      -- | The truth proposition.
-      truthContent :: !Exp,
-      -- | The position in source from which this arises.
-      truthPos :: !Position
-    }
-    -- | A proof.  This is just a code block with the name of the
-    -- theorem being proven.
-  | Proof {
-      -- | The body of the proof.
-      proofBody :: !Exp,
-      -- | The position in source from which this arises.
-      proofPos :: !Position
     }
 
 -- | Compound expression elements.  These are either "ordinary"
@@ -219,7 +267,7 @@ data Exp =
     -- | A record literal.  Can represent a record type, or a record value.
   | Record {
       -- | The fields in this record expression.
-      recordFields :: !(HashMap Symbol Exp),
+      recordFields :: !(HashMap FieldName Exp),
       -- | The position in source from which this arises.
       recordPos :: !Position
     }
@@ -237,7 +285,7 @@ data Exp =
       -- | The inner expression
       projectVal :: !Exp,
       -- | The name of the field being accessed.
-      projectName :: !Symbol,
+      projectName :: ![FieldName],
       -- | The position in source from which this arises.
       projectPos :: !Position
     }
@@ -299,9 +347,9 @@ data Entry =
 data Fields =
   Fields {
     -- | Named bindings.
-    fieldsBindings :: !(HashMap Symbol Field),
+    fieldsBindings :: !(HashMap FieldName Field),
     -- | A mapping from field positions to names.
-    fieldsOrder :: !(Array Word Symbol)
+    fieldsOrder :: !(Array Word FieldName)
   }
 
 -- | A field.
@@ -323,27 +371,3 @@ data Case =
     -- | The position in source from which this arises.
     casePos :: !Position
   }
-
-instance Monoid Scope where
-  mempty = Scope { scopeDefs = HashMap.empty }
-
-  mappend Scope { scopeDefs = defs1 } Scope { scopeDefs = defs2 } =
-    let
-      combine Defs { defs = arr1 } Defs { defs = arr2 } =
-        let
-          (lo1, hi1) = bounds arr1
-          (lo2, hi2) = bounds arr2
-          lo = min lo1 lo2
-          hi = max hi1 hi2
-
-          getEntries idx
-            | idx >= lo1 && idx <= hi1 && idx >= lo2 && idx <= hi2 =
-              arr1 ! idx ++ arr2 ! idx
-            | idx < lo1 && idx <= hi1 = arr2 ! idx
-            | otherwise = arr1 ! idx
-
-          values = map getEntries (enumFromTo lo hi)
-        in
-          Defs { defs = listArray (lo, hi) values }
-    in
-      Scope { scopeDefs = HashMap.unionWith combine defs1 defs2 }
