@@ -147,6 +147,7 @@ Library
                         Language.Salt.Frontend
                         Language.Salt.Message,
                         Language.Salt.Surface.AST
+                        Language.Salt.Surface.Collect
                         Language.Salt.Surface.Common
                         Language.Salt.Surface.Lexer
                         Language.Salt.Surface.Parser

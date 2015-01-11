@@ -45,7 +45,9 @@ module Language.Salt.Message(
        badSyntaxPrec,
        badSyntaxRef,
        multipleFixity,
-       undefSymbol
+       undefSymbol,
+       namelessUninitDef,
+       duplicateBuilder
        ) where
 
 import Control.Monad.Messages
@@ -173,9 +175,19 @@ data Message =
   | MultipleFixity {
       multipleFixityPos :: !Position
     }
+  -- | The undefined symbol.
   | UndefSymbol {
       undefSymbolSym :: !Symbol,
       undefSymbolPos :: !Position
+    }
+  -- | An uninitialized definition with no top-level name.
+  | NamelessUninitDef {
+      namelessUninitDefPos :: !Position
+    }
+    -- | Duplicate truth definition in the current environment.
+  | DuplicateBuilder {
+      duplicateBuilderName :: !Symbol,
+      duplicateBuilderPos :: !Position
     }
 {-
   -- | An error message representing an undefined proposition in the
@@ -288,6 +300,11 @@ instance Hashable Message where
     s `hashWithSalt` (23 :: Int) `hashWithSalt` pos
   hashWithSalt s UndefSymbol { undefSymbolSym = sym, undefSymbolPos = pos } =
     s `hashWithSalt` (24 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+  hashWithSalt s NamelessUninitDef { namelessUninitDefPos = pos } =
+    s `hashWithSalt` (25 :: Int) `hashWithSalt` pos
+  hashWithSalt s DuplicateBuilder { duplicateBuilderName = sym,
+                                    duplicateBuilderPos = pos } =
+    s `hashWithSalt` (26 :: Int) `hashWithSalt` sym `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -315,6 +332,8 @@ instance Msg.Message Message where
   severity BadSyntaxRef {} = Msg.Error
   severity MultipleFixity {} = Msg.Error
   severity UndefSymbol {} = Msg.Error
+  severity NamelessUninitDef {} = Msg.Warning
+  severity DuplicateBuilder {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
   position BadEscape { badEscPos = pos } = Just pos
@@ -341,6 +360,8 @@ instance Msg.Message Message where
   position BadSyntaxRef { badSyntaxRefPos = pos } = Just pos
   position MultipleFixity { multipleFixityPos = pos } = Just pos
   position UndefSymbol { undefSymbolPos = pos } = Just pos
+  position NamelessUninitDef { namelessUninitDefPos = pos } = Just pos
+  position DuplicateBuilder { duplicateBuilderPos = pos } = Just pos
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = Lazy.UTF8.fromString "Invalid character"
@@ -375,6 +396,10 @@ instance Msg.Message Message where
   brief BadSyntaxRef {} = Lazy.UTF8.fromString "Invalid syntax directive"
   brief MultipleFixity {} = Lazy.UTF8.fromString "Multiple fixity directives"
   brief UndefSymbol {} = Lazy.UTF8.fromString "Undefined symbol"
+  brief NamelessUninitDef {} =
+    Lazy.UTF8.fromString "Uninitialized definition with no top-level name"
+  brief DuplicateBuilder {} =
+    Lazy.UTF8.fromString "Duplicate builder definition"
 
   details BadChars {} = Lazy.empty
   details BadEscape {} = Lazy.empty
@@ -405,6 +430,8 @@ instance Msg.Message Message where
   details BadSyntaxRef {} = Lazy.UTF8.fromString "Expected a name here"
   details MultipleFixity {} = Lazy.empty
   details UndefSymbol {} = Lazy.empty
+  details NamelessUninitDef {} = Lazy.empty
+  details DuplicateBuilder {} = Lazy.empty
 
   highlighting HardTabs {} = Msg.Background
   highlighting TrailingWhitespace {} = Msg.Background
@@ -611,3 +638,22 @@ undefSymbol :: MonadMessages Message m =>
             -> m ()
 undefSymbol sym pos = message UndefSymbol { undefSymbolSym = sym,
                                             undefSymbolPos = pos }
+
+-- | Report an uninitialized definition with no top-level name.
+namelessUninitDef :: MonadMessages Message m =>
+                     Position
+                  -- ^ The position at which the nameless field occurs.
+                  -> m ()
+namelessUninitDef pos = message NamelessUninitDef { namelessUninitDefPos = pos }
+
+-- | Report duplicate builders.
+duplicateBuilder :: MonadMessages Message m =>
+                    Symbol
+                 -- ^ The duplicate builder name.
+                 -> Position
+                 -- ^ The position at which the duplicated builder
+                 -- definition occurs.
+                 -> m ()
+duplicateBuilder sym pos =
+  message DuplicateBuilder { duplicateBuilderName = sym,
+                             duplicateBuilderPos = pos }

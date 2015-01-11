@@ -23,11 +23,10 @@ module Language.Salt.Surface.Syntax(
        Assoc(..),
        Fixity(..),
        Syntax(..),
-       Defs(..),
        Truth(..),
-       Directive(..),
+       Proof(..),
        Scope(..),
-       Content(..),
+       Builder(..),
        Element(..),
        Compound(..),
        Pattern(..),
@@ -61,17 +60,6 @@ data Syntax =
     syntaxPrecs :: ![(Ordering, Exp)]
   }
 
--- | A set of definitions for a given symbol, as well as the syntax
--- information for the symbol.
-data Defs =
-  Defs {
-    -- | An array of lists of 'Element's, indexed by 'Visibility',
-    -- representing all the definitions at that visibility.
-    defs :: Array Visibility [Element],
-    -- | Syntax information for this definition.
-    defsSyntax :: !Syntax
-  }
-
 -- | Truths.  These are similar to declarations, except that they
 -- affect the proof environment.  These include theorems and
 -- invariants.
@@ -91,28 +79,38 @@ data Truth =
 -- represented as 'Defs'.
 data Scope =
   Scope {
-    -- | The definition environment for this scope.  This contains all
-    -- concrete definitions.
-    scopeDefs :: !(HashMap Symbol Defs),
+    scopeBuilders :: !(HashMap Symbol Builder),
+    -- | The syntax directives for this scope.
+    scopeSyntax :: !(HashMap Symbol Syntax),
     -- | The truth environment for this scope.  This contains all
     -- theorems, axioms, and invariants.
     scopeTruths :: !(HashMap Symbol Truth),
-    -- | The directives in this scope.  This contains all proofs,
-    -- imports, and fixity directives.
-    scopeDirectives :: ![Directive]
+    -- | All concrete definitions for this scope.
+    scopeElems :: !(Array Visibility [Element]),
+    -- | Proofs given in this scope.
+    scopeProofs :: ![Proof]
   }
 
--- | Content of a definition.  Used wherever we can see a definition
--- body, or else an expression.
-data Content =
-    -- | An actual definition body.
-    Body !Scope
-    -- | An expression.
-  | Value !Exp
+-- | A builder definition.
+data Builder =
+  Builder {
+    -- | The type of entity the builder represents.
+    builderKind :: !BuilderKind,
+    -- | The visibility of this definition.
+    builderVisibility :: !Visibility,
+    -- | The parameters of the builder entity.
+    builderParams :: !Fields,
+    -- | The declared supertypes for this builder entity.
+    builderSuperTypes :: ![Exp],
+    -- | The entities declared by the builder.
+    builderContent :: !Exp,
+    -- | The position in source from which this arises.
+    builderPos :: !Position
+  }
 
 -- | Directives.  These are static commands, like imports or proofs,
 -- which influence a scope, but do not directly define anything.
-data Directive =
+data Proof =
     -- | A proof.  This is just a code block with the name of the
     -- theorem being proven.
     Proof {
@@ -123,25 +121,26 @@ data Directive =
       -- | The position in source from which this arises.
       proofPos :: !Position
     }
+
+-- | Scope elements.  These represent declarations and imports
+-- statements inside a scope.
+data Element =
+    -- | Value definitions.  These are declarations coupled with
+    -- values.  These include function declarations.
+    Def {
+      -- | The binding pattern.
+      defPattern :: !Pattern,
+      -- | The value's initializer.
+      defInit :: !(Maybe Exp),
+      -- | The position in source from which this arises.
+      defPos :: !Position
+    }
     -- | An import directive.
   | Import {
       -- | The name(s) to import.
       importExp :: !Exp,
       -- | The position in source from which this arises.
       importPos :: !Position
-    }
-
--- | Scope elements.  These represent declarations, imports, and truth
--- statements inside a scope.  Note: some of these can be built from
--- others.
-data Element =
-    -- | Value definitions.  These are declarations coupled with
-    -- values.  These include function declarations.
-    Def {
-      -- | The value's initializer.
-      defInit :: !(Maybe Exp),
-      -- | The position in source from which this arises.
-      defPos :: !Position
     }
 
 -- | Compound expression elements.  These are either "ordinary"
@@ -315,18 +314,18 @@ data Exp =
       -- | The position in source from which this arises.
       wherePos :: !Position
     }
-    -- | Builder.
-  | Builder {
+    -- | Builder literal.
+  | Anon {
       -- | The type of entity the builder represents.
-      builderKind :: !BuilderKind,
+      anonKind :: !BuilderKind,
       -- | The declared supertypes for this builder entity.
-      builderSuperTypes :: ![Exp],
+      anonSuperTypes :: ![Exp],
       -- | The parameters of the builder entity.
-      builderParams :: !Fields,
+      anonParams :: !Fields,
       -- | The entities declared by the builder.
-      builderContent :: !Scope,
+      anonContent :: !Scope,
       -- | The position in source from which this arises.
-      builderPos :: !Position
+      anonPos :: !Position
     }
     -- | Number literal.
   | Literal !Literal

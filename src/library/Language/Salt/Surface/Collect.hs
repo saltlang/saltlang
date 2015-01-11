@@ -25,57 +25,63 @@ import Control.Monad
 import Control.Monad.Symbols
 import Data.Array hiding (accum, elems)
 import Data.HashMap.Strict(HashMap)
-import Data.Map(Map)
---import Data.Monoid
+import Data.Maybe
 import Data.Position
 import Data.Symbol
 import Language.Salt.Frontend
 import Language.Salt.Message
 import Language.Salt.Surface.Common
-import Prelude hiding (elem, exp)
+import Prelude hiding (elem, exp, init)
 
---import qualified Data.ByteString as Strict
 import qualified Data.HashMap.Strict as HashMap
-import qualified Data.Map as Map
 import qualified Language.Salt.Surface.AST as AST
 import qualified Language.Salt.Surface.Syntax as Syntax
 
-type DefScope = HashMap Symbol (Map Visibility [Syntax.Element])
+type Elems = ([Syntax.Element], [Syntax.Element],
+              [Syntax.Element], [Syntax.Element])
+
+type BuilderScope = HashMap Symbol Syntax.Builder
+
+type SyntaxScope = HashMap Symbol Syntax.Syntax
 
 type TruthScope = HashMap Symbol Syntax.Truth
 
-type TempScope = (DefScope, TruthScope, [Syntax.Directive], [AST.Exp])
+type TempScope = (BuilderScope, SyntaxScope, TruthScope, [Syntax.Proof], Elems)
 
 emptyTempScope :: TempScope
-emptyTempScope = (HashMap.empty, HashMap.empty, [], [])
+emptyTempScope = (HashMap.empty, HashMap.empty, HashMap.empty,
+                  [], ([], [], [], []))
 
-makeScope :: TempScope -> Frontend Syntax.Scope
-makeScope (entries, truths, directives, syntaxes) =
+makeScope :: TempScope -> Syntax.Scope
+makeScope (builders, syntax, truths, proofs,
+           (hiddens, privates, protecteds, publics)) =
   let
-    makeScopeEntry :: Map Visibility [Syntax.Element] -> Syntax.Defs
-    makeScopeEntry entry =
-      let
-        (lo, _) = Map.findMin entry
-        (hi, _) = Map.findMax entry
-
-        syntax = Syntax.Syntax { Syntax.syntaxFixity = Syntax.Prefix,
-                                 Syntax.syntaxPrecs = [] }
-      in
-        Syntax.Defs { Syntax.defs = listArray (lo, hi) (Map.elems entry),
-                      Syntax.defsSyntax = syntax }
-
-    defscope = HashMap.map makeScopeEntry entries
-  in do
-    defs <- foldM collectSyntax defscope syntaxes
-    return Syntax.Scope { Syntax.scopeDefs = defs,
-                          Syntax.scopeTruths = truths,
-                          Syntax.scopeDirectives = directives }
+    elems = listArray (Hidden, Public) [hiddens, privates, protecteds, publics]
+  in
+    Syntax.Scope { Syntax.scopeBuilders = builders,
+                   Syntax.scopeSyntax = syntax,
+                   Syntax.scopeTruths = truths,
+                   Syntax.scopeElems = elems,
+                   Syntax.scopeProofs = proofs }
 
 -- | Add a definition into a scope, merging it in with what's already there.
-addDef :: Symbol -> Visibility -> Syntax.Element -> TempScope -> TempScope
-addDef sym vis elem (defs, truths, directives, syntax) =
-  (HashMap.insertWith (Map.unionWith (++)) sym (Map.singleton vis [elem]) defs,
-   truths, directives, syntax)
+addDef :: Visibility -> Syntax.Element -> TempScope -> TempScope
+addDef Hidden elem (builders, syntax, truths, proofs,
+                    (hiddens, privates, protecteds, publics)) =
+  (builders, syntax, truths, proofs,
+   (elem : hiddens, privates, protecteds, publics))
+addDef Private elem (builders, syntax, truths, proofs,
+                     (hiddens, privates, protecteds, publics)) =
+  (builders, syntax, truths, proofs,
+   (hiddens, elem : privates, protecteds, publics))
+addDef Protected elem (builders, syntax, truths, proofs,
+                       (hiddens, privates, protecteds, publics)) =
+  (builders, syntax, truths, proofs,
+   (hiddens, privates, elem : protecteds, publics))
+addDef Public elem (builders, syntax, truths, proofs,
+                    (hiddens, privates, protecteds, publics)) =
+  (builders, syntax, truths, proofs,
+   (hiddens, privates, protecteds, elem : publics))
 
 -- | Collect a pattern, return the name to which the pattern is bound
 -- at the top level.
@@ -302,11 +308,11 @@ collectExp AST.Anon { AST.anonKind = kind, AST.anonSuperTypes = supers,
     collectedSupers <- mapM collectExp supers
     collectedParams <- collectFields params
     collectedContent <- collectScope content
-    return Syntax.Builder { Syntax.builderKind = kind,
-                            Syntax.builderParams = collectedParams,
-                            Syntax.builderSuperTypes = collectedSupers,
-                            Syntax.builderContent = collectedContent,
-                            Syntax.builderPos = pos }
+    return Syntax.Anon { Syntax.anonKind = kind,
+                         Syntax.anonParams = collectedParams,
+                         Syntax.anonSuperTypes = collectedSupers,
+                         Syntax.anonContent = collectedContent,
+                         Syntax.anonPos = pos }
 collectExp (AST.Literal lit) = return (Syntax.Literal lit)
 
 -- | Collect a list of AST fields into a Syntax fields structure (a HashMap
@@ -369,273 +375,7 @@ collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
 --
 -- > syntax id (postfix | infix (left | right | nonassoc) |
 -- >            prec (< | > | ==) id (. id)* )+
-collectSyntax :: HashMap Symbol Syntax.Defs
-              -- ^ The definition scope
-              -> AST.Exp
-              -- ^ The syntax directive expression
-              -> Frontend (HashMap Symbol Syntax.Defs)
-collectSyntax =
-  let
-    -- | Start of the whole syntax statement.
-    --
-    -- > syntax id (postfix | infix (left | right | nonassoc) |
-    -- >        ^   prec (< | > | ==) id (. id)* )+
-    start :: HashMap Symbol Syntax.Defs -> AST.Exp ->
-             Frontend (HashMap Symbol Syntax.Defs)
-    start defs AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym,
-                                                  AST.symPos = sympos},
-                         AST.seqSecond = body } =
-      let
-        -- | Add a precedence relationship to the current scope.
-        addPrec :: HashMap Symbol Syntax.Defs -> Ordering -> AST.Exp ->
-                   Frontend (HashMap Symbol Syntax.Defs)
-        addPrec defs' ord exp =
-          -- Look for the symbol in the scope.
-          case HashMap.lookup sym defs' of
-            -- If we find the definition, update it.
-            Just d @ Syntax.Defs { Syntax.defsSyntax =
-                                      s @ Syntax.Syntax {
-                                        Syntax.syntaxPrecs = precs
-                                      } } ->
-              do
-                -- Convert the expression from AST to Syntax.  We'll
-                -- check its form later.
-                collectedExp <- collectExp exp
-                -- Add the precedence relation to the symbol definition.
-                return $! HashMap.insert sym
-                  d { Syntax.defsSyntax =
-                         s { Syntax.syntaxPrecs =
-                                (ord, collectedExp) : precs } } defs'
-            -- We already reported undefined symbols.
-            Nothing -> return defs'
 
-        -- | Add a fixity to the current scope.  Report an error if
-        -- the symbol already has a fixity other than prefix.
-        addFixity :: HashMap Symbol Syntax.Defs -> Syntax.Fixity -> Position ->
-                     Frontend (HashMap Symbol Syntax.Defs)
-        addFixity defs' fixity pos =
-          -- Look for the symbol in the scope.
-          case HashMap.lookup sym defs' of
-            -- If we find the definition, and its fixity is prefix, update it.
-            Just d @ Syntax.Defs { Syntax.defsSyntax =
-                                      s @ Syntax.Syntax {
-                                        Syntax.syntaxFixity = Syntax.Prefix
-                                      } } ->
-              let
-                newsyntax = s { Syntax.syntaxFixity = fixity }
-              in
-                return $! HashMap.insert sym
-                                         d { Syntax.defsSyntax = newsyntax }
-                                         defs'
-            -- Otherwise report multiple fixities for this symbol.
-            Just _ ->
-              do
-                multipleFixity pos
-                return defs'
-            -- We already reported undefined symbols.
-            Nothing -> return defs'
-
-        -- | Precedence identifier.
-        --
-        -- > syntax id prec (< | > | ==) id (. id)*
-        -- >                             ^
-        precName :: Ordering -> HashMap Symbol Syntax.Defs -> AST.Exp ->
-                    Frontend (HashMap Symbol Syntax.Defs)
-        -- If the top-level expression is a Seq, then there's another
-        -- directive after this one.
-        precName ord defs' AST.Seq { AST.seqFirst = exp,
-                                     AST.seqSecond = rest } =
-          do
-            -- Add the precedence relation
-            newdefs <- addPrec defs' ord exp
-            -- Parse the next directive
-            startDirective newdefs rest
-        -- Otherwise, this is the last directive, so add the precedence relation.
-        precName ord defs' exp = addPrec defs' ord exp
-
-        -- | Precedence relation.
-        --
-        -- > syntax id prec (< | > | ==) id (. id)*
-        -- >                ^
-        precRelation :: HashMap Symbol Syntax.Defs -> AST.Exp ->
-                        Frontend (HashMap Symbol Syntax.Defs)
-        -- If the top-level expression is a Seq, then the first
-        -- expression must be a Sym, which is the relationship.  We
-        -- expect to see a Field or Sym next.
-        precRelation defs' AST.Seq { AST.seqFirst =
-                                        AST.Sym { AST.symName = kindsym,
-                                                  AST.symPos = pos },
-                                     AST.seqSecond = rest } =
-          do
-            kind <- name kindsym
-            -- Get the precedence relationship from the symbol's name.
-            case kind of
-              "<" -> precName LT defs' rest
-              ">" -> precName GT defs' rest
-              "==" -> precName EQ defs' rest
-              -- Not a valid precedence relation.
-              _ ->
-                do
-                  badSyntaxPrec pos
-                  return defs'
-        -- The first expression must be a Sym, or else it's a parse error.
-        precRelation defs' AST.Seq { AST.seqFirst = kind } =
-          do
-            badSyntaxPrec (AST.expPosition kind)
-            return defs'
-        -- The top-level expression must be a Seq, or else it's a parse error.
-        precRelation defs' exp =
-          do
-            badSyntax (AST.expPosition exp)
-            return defs'
-
-        -- | Infix associativity
-        --
-        -- > syntax id infix (left | right | nonassoc) directive*
-        -- >                 ^
-        infixAssoc :: Position -> HashMap Symbol Syntax.Defs -> AST.Exp ->
-                      Frontend (HashMap Symbol Syntax.Defs)
-        infixAssoc fixitypos defs'
-                   AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
-                                                      AST.symPos = pos },
-                             AST.seqSecond = rest } =
-          do
-            kind <- name kindsym
-            -- Get the associativity from the symbol's name, then add
-            -- the infix fixity to the scope, then parse another
-            -- directive with the rest of the expression.
-            case kind of
-              "left" ->
-                do
-                  newdefs <- addFixity defs' (Syntax.Infix Syntax.Left)
-                                       fixitypos
-                  startDirective newdefs rest
-              "right" ->
-                do
-                  newdefs <- addFixity defs' (Syntax.Infix Syntax.Right)
-                                       fixitypos
-                  startDirective newdefs rest
-              "nonassoc" ->
-                do
-                  newdefs <- addFixity defs' (Syntax.Infix Syntax.NonAssoc)
-                                       fixitypos
-                  startDirective newdefs rest
-              -- Not a valid fixity.
-              _ ->
-                do
-                  badSyntaxAssoc pos
-                  return defs'
-        -- If the first expression isn't a Sym, it's a parse error.
-        infixAssoc _ defs' AST.Seq { AST.seqFirst = kind } =
-          do
-            badSyntaxAssoc (AST.expPosition kind)
-            return defs'
-        -- If the top-level expression is a Sym, it must be the
-        -- associativity, and this is the last directive.
-        infixAssoc fixitypos defs' AST.Sym { AST.symName = kindsym,
-                                             AST.symPos = pos } =
-          do
-            kind <- name kindsym
-            -- Get the associativity from the symbol's name, then add
-            -- the infix fixity to the scope.
-            case kind of
-              "left" -> addFixity defs' (Syntax.Infix Syntax.Left) fixitypos
-              "right" -> addFixity defs' (Syntax.Infix Syntax.Right) fixitypos
-              "nonassoc" ->
-                addFixity defs' (Syntax.Infix Syntax.NonAssoc) fixitypos
-              -- Not a valid fixity.
-              _ ->
-                do
-                  badSyntaxAssoc pos
-                  return defs'
-        -- If the top-level expression isn't a Seq or a Sym, then it's
-        -- a parse error.
-        infixAssoc _ defs' exp =
-          do
-            badSyntax (AST.expPosition exp)
-            return defs'
-
-        -- | Start of one directive.
-        --
-        -- > syntax id (postfix | infix (left | right | nonassoc) |
-        -- >            prec (< | > | ==) id (. id)* )+
-        -- >           ^
-        startDirective :: HashMap Symbol Syntax.Defs -> AST.Exp ->
-                          Frontend (HashMap Symbol Syntax.Defs)
-        -- The first expression is a Sym (the kind), and there's more.
-        startDirective defs' AST.Seq { AST.seqFirst =
-                                          AST.Sym { AST.symName = kindsym,
-                                                    AST.symPos = pos },
-                                       AST.seqSecond = rest } =
-          do
-            kind <- name kindsym
-            -- Look at the kind to figure out what to do next.
-            case kind of
-              -- Postfix has no more info, so add it to the scope and
-              -- try to parse another directive.
-              "postfix" ->
-                do
-                  newdefs <- addFixity defs' Syntax.Postfix pos
-                  startDirective newdefs rest
-              -- Infix expects to see an associativity next.
-              "infix" -> infixAssoc pos defs' rest
-              -- Precedence relations expect more content.
-              "prec" -> precRelation defs' rest
-              -- This wasn't a known syntax directive
-              _ ->
-                do
-                  badSyntaxKind pos
-                  return defs'
-        -- If the first expression isn't a Sym, it's a parse error.
-        startDirective defs' AST.Seq { AST.seqFirst = kind } =
-          do
-            badSyntaxKind (AST.expPosition kind)
-            return defs'
-        -- It's ok for the top-level to be a Sym, as long as it's "postfix".
-        startDirective defs' AST.Sym { AST.symName = kindsym,
-                                       AST.symPos = pos } =
-          do
-            kind <- name kindsym
-            case kind of
-              "postfix" -> addFixity defs' Syntax.Postfix pos
-              -- Infixes expect an associativity
-              "infix" ->
-                do
-                  badSyntax pos
-                  return defs'
-              -- Precedence relations expect more
-              "prec" ->
-                do
-                  badSyntax pos
-                  return defs'
-              -- This wasn't a known syntax directive
-              _ ->
-                do
-                  badSyntaxKind pos
-                  return defs'
-        -- If the top-level expression isn't a Seq or a Sym, then it's
-        -- a parse error.
-        startDirective defs' exp =
-          do
-            badSyntax (AST.expPosition exp)
-            return defs'
-      in do
-        -- Check that the symbol is actually defined
-        unless (HashMap.member sym defs) (undefSymbol sym sympos)
-        -- Parse one directive.
-        startDirective defs body
-    -- If the first expression isn't a Sym, then it's a parse error.
-    start defs AST.Seq { AST.seqFirst = kind } =
-      do
-        badSyntaxName (AST.expPosition kind)
-        return defs
-    -- If the top-level expression isn't a Seq, then it's a parse error.
-    start defs exp =
-      do
-        badSyntax (AST.expPosition exp)
-        return defs
-  in
-    start
 
 -- | Collect a definition.
 collectElement :: Visibility
@@ -647,54 +387,89 @@ collectElement :: Visibility
                -> Frontend TempScope
 -- For builder definitions, turn the definition into a 'Def', whose
 -- initializer is an anonymous builder.
-collectElement vis accum AST.Builder { AST.builderName = sym,
-                                       AST.builderKind = kind,
-                                       AST.builderParams = params,
-                                       AST.builderSuperTypes = supers,
-                                       AST.builderContent = AST.Body body,
-                                       AST.builderPos = pos } =
+collectElement vis accum @ (builders, syntax, truths, proofs, elems)
+               AST.Builder { AST.builderName = sym,
+                             AST.builderKind = kind,
+                             AST.builderParams = params,
+                             AST.builderSuperTypes = supers,
+                             AST.builderContent = content,
+                             AST.builderPos = pos } =
   do
     collectedSupers <- mapM collectExp supers
     collectedParams <- collectFields params
-    collectedBody <- collectScope body
-    return $! addDef sym vis
-                     Syntax.Def {
-                       Syntax.defInit =
-                          Just Syntax.Builder {
-                                 Syntax.builderKind = kind,
-                                 Syntax.builderParams = collectedParams,
-                                 Syntax.builderSuperTypes = collectedSupers,
-                                 Syntax.builderContent = collectedBody,
-                                 Syntax.builderPos = pos
-                               },
-                       Syntax.defPos = pos
-                     } accum
--- Defs are the most involved element to collect.  We need to walk
--- down the pattern, creating definitions for every Name we find.  The
--- content of these definitions is a projection of the earlier name
--- bindings.
---
--- We also generate a warning for an uninitialized def without a
--- top-level name binding.
-
+    if HashMap.member sym builders
+      then do
+        duplicateBuilder sym pos
+        return accum
+      else case content of
+        AST.Body body ->
+          do
+            collectedBody <- collectScope body
+            return (HashMap.insert sym
+                      Syntax.Builder {
+                        Syntax.builderKind = kind,
+                        Syntax.builderVisibility = vis,
+                        Syntax.builderParams = collectedParams,
+                        Syntax.builderSuperTypes = collectedSupers,
+                        Syntax.builderContent =
+                          Syntax.Anon { Syntax.anonKind = kind,
+                                        Syntax.anonParams = collectedParams,
+                                        Syntax.anonSuperTypes = collectedSupers,
+                                        Syntax.anonContent = collectedBody,
+                                        Syntax.anonPos = pos },
+                        Syntax.builderPos = pos
+                      } builders, syntax, truths, proofs, elems)
+        AST.Value value ->
+          do
+            collectedValue <- collectExp value
+            return (HashMap.insert sym
+                      Syntax.Builder {
+                        Syntax.builderKind = kind,
+                        Syntax.builderVisibility = vis,
+                        Syntax.builderParams = collectedParams,
+                        Syntax.builderSuperTypes = collectedSupers,
+                        Syntax.builderContent = collectedValue,
+                        Syntax.builderPos = pos
+                      } builders, syntax, truths, proofs, elems)
+-- For Defs and Imports, collect the components and add them to the list of
+-- elements.
+collectElement vis accum AST.Def { AST.defPattern = pat, AST.defInit = init,
+                                   AST.defPos = pos } =
+  do
+    collectedInit <- case init of
+      Just exp -> liftM Just (collectExp exp)
+      Nothing -> return Nothing
+    collectedPat <- collectPattern pat
+    return $! addDef vis Syntax.Def { Syntax.defPattern = collectedPat,
+                                      Syntax.defInit = collectedInit,
+                                      Syntax.defPos = pos } accum
+collectElement vis accum AST.Import { AST.importExp = exp,
+                                      AST.importPos = pos } =
+  do
+    collectedExp <- collectExp exp
+    return $! addDef vis Syntax.Import { Syntax.importExp = collectedExp,
+                                         Syntax.importPos = pos } accum
 -- For Funs, we do the same kind of transformation we did with
 -- Builders: create a 'Def' whose initializer is an anonymous function.
-collectElement vis accum AST.Fun { AST.funName = sym, AST.funCases = cases,
-                                   AST.funPos = pos } =
+collectElement vis accum
+               AST.Fun { AST.funName = sym, AST.funCases = cases,
+                         AST.funPos = pos } =
   do
     collectedCases <- mapM collectCase cases
-    return $! addDef sym vis
-                     Syntax.Def {
-                       Syntax.defInit =
-                          Just Syntax.Abs {
-                                 Syntax.absKind = Lambda,
-                                 Syntax.absCases = collectedCases,
-                                 Syntax.absPos = pos
-                               },
-                       Syntax.defPos = pos
-                     } accum
+    return $! addDef vis Syntax.Def {
+                           Syntax.defPattern =
+                              Syntax.Name { Syntax.nameSym = sym,
+                                            Syntax.namePos = pos },
+                           Syntax.defInit =
+                              Just Syntax.Abs {
+                                     Syntax.absKind = Lambda,
+                                     Syntax.absCases = collectedCases,
+                                     Syntax.absPos = pos
+                                   },
+                           Syntax.defPos = pos
+                         } accum
 -- Truth definitions are a straghtforward translation.
-collectElement vis accum @ (defs, truths, directives, syntax)
+collectElement vis accum @ (builders, syntax, truths, proofs, elems)
                AST.Truth { AST.truthName = sym,
                            AST.truthKind = kind,
                            AST.truthContent = content,
@@ -711,32 +486,269 @@ collectElement vis accum @ (defs, truths, directives, syntax)
                                  Syntax.truthVisibility = vis,
                                  Syntax.truthContent = collectedContent,
                                  Syntax.truthPos = pos }
+          newtruths = HashMap.insert sym truth truths
         in
-          return (defs, HashMap.insert sym truth truths, directives, syntax)
+          return (builders, syntax, newtruths, proofs, elems)
 -- Syntax directives get stashed in a list and processed at the end of the
 -- scope.
-collectElement _ (defs, truths, directives, syntax)
-               AST.Syntax { AST.syntaxExp = exp } =
-  return (defs, truths, directives, exp : syntax)
+collectElement _ (builders, syntax, truths, proofs, elems)
+               AST.Syntax { AST.syntaxExp =
+                              AST.Seq { AST.seqFirst =
+                                           AST.Sym { AST.symName = sym},
+                                        AST.seqSecond = body } } =
+  let
+    -- | Add a precedence relationship to the current scope.
+    addPrec :: HashMap Symbol Syntax.Syntax -> Ordering -> AST.Exp ->
+               Frontend (HashMap Symbol Syntax.Syntax)
+    addPrec syntax' ord exp =
+      -- Look for the symbol in the scope.
+      case HashMap.lookup sym syntax' of
+        -- If we find the definition, update it.
+        Just s @ Syntax.Syntax { Syntax.syntaxPrecs = precs } ->
+          do
+            -- Convert the expression from AST to Syntax.  We'll
+            -- check its form later.
+            collectedExp <- collectExp exp
+            -- Add the precedence relation to the symbol definition.
+            return $! HashMap.insert sym s { Syntax.syntaxPrecs =
+                                               (ord, collectedExp) : precs }
+                                     syntax'
+              -- We already reported undefined symbols.
+        Nothing -> return syntax'
+
+    -- | Add a fixity to the current scope.  Report an error if
+    -- the symbol already has a fixity other than prefix.
+    addFixity :: HashMap Symbol Syntax.Syntax ->
+                 Syntax.Fixity -> Position ->
+                 Frontend (HashMap Symbol Syntax.Syntax)
+    addFixity syntax' fixity pos =
+      -- Look for the symbol in the scope.
+      case HashMap.lookup sym syntax' of
+        -- If we find the definition, and its fixity is prefix, update it.
+        Just s @ Syntax.Syntax { Syntax.syntaxFixity = Syntax.Prefix } ->
+          let
+            newsyntax = s { Syntax.syntaxFixity = fixity }
+          in
+            return $! HashMap.insert sym newsyntax syntax'
+        -- Otherwise report multiple fixities for this symbol.
+        Just _ ->
+          do
+            multipleFixity pos
+            return syntax'
+        -- We already reported undefined symbols.
+        Nothing -> return syntax'
+
+    -- | Precedence identifier.
+    --
+    -- > syntax id prec (< | > | ==) id (. id)
+    -- >                             ^
+    precName :: Ordering -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                Frontend (HashMap Symbol Syntax.Syntax)
+    -- If the top-level expression is a Seq, then there's another
+    -- directive after this one.
+    precName ord syntax' AST.Seq { AST.seqFirst = exp,
+                                   AST.seqSecond = rest } =
+      do
+        -- Add the precedence relation
+        newdefs <- addPrec syntax' ord exp
+        -- Parse the next directive
+        startDirective newdefs rest
+    -- Otherwise, this is the last directive, so add the precedence
+    -- relation.
+    precName ord syntax' exp = addPrec syntax' ord exp
+
+    -- | Precedence relation.
+    --
+    -- > syntax id prec (< | > | ==) id (. id)*
+    -- >                ^
+    precRelation :: HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                    Frontend (HashMap Symbol Syntax.Syntax)
+    -- If the top-level expression is a Seq, then the first
+    -- expression must be a Sym, which is the relationship.  We
+    -- expect to see a Field or Sym next.
+    precRelation syntax'
+                 AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
+                                                    AST.symPos = pos },
+                           AST.seqSecond = rest } =
+      do
+        kind <- name kindsym
+        -- Get the precedence relationship from the symbol's name.
+        case kind of
+          "<" -> precName LT syntax' rest
+          ">" -> precName GT syntax' rest
+          "==" -> precName EQ syntax' rest
+          -- Not a valid precedence relation.
+          _ ->
+            do
+              badSyntaxPrec pos
+              return syntax'
+    -- The first expression must be a Sym, or else it's a parse error.
+    precRelation syntax' AST.Seq { AST.seqFirst = kind } =
+      do
+        badSyntaxPrec (AST.expPosition kind)
+        return syntax'
+    -- The top-level expression must be a Seq, or else it's a parse error.
+    precRelation syntax' exp =
+      do
+        badSyntax (AST.expPosition exp)
+        return syntax'
+
+    -- | Infix associativity
+    --
+    -- > syntax id infix (left | right | nonassoc) directive*
+    -- >                 ^
+    infixAssoc :: Position -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                  Frontend (HashMap Symbol Syntax.Syntax)
+    infixAssoc fixitypos syntax'
+               AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
+                                                  AST.symPos = pos },
+                         AST.seqSecond = rest } =
+      do
+        kind <- name kindsym
+        -- Get the associativity from the symbol's name, then add
+        -- the infix fixity to the scope, then parse another
+        -- directive with the rest of the expression.
+        case kind of
+          "left" ->
+            do
+              newdefs <- addFixity syntax' (Syntax.Infix Syntax.Left)
+                                   fixitypos
+              startDirective newdefs rest
+          "right" ->
+            do
+              newdefs <- addFixity syntax' (Syntax.Infix Syntax.Right)
+                                   fixitypos
+              startDirective newdefs rest
+          "nonassoc" ->
+            do
+              newdefs <- addFixity syntax' (Syntax.Infix Syntax.NonAssoc)
+                                   fixitypos
+              startDirective newdefs rest
+          -- Not a valid fixity.
+          _ ->
+            do
+              badSyntaxAssoc pos
+              return syntax'
+    -- If the first expression isn't a Sym, it's a parse error.
+    infixAssoc _ syntax' AST.Seq { AST.seqFirst = kind } =
+      do
+        badSyntaxAssoc (AST.expPosition kind)
+        return syntax'
+    -- If the top-level expression is a Sym, it must be the
+    -- associativity, and this is the last directive.
+    infixAssoc fixitypos syntax' AST.Sym { AST.symName = kindsym,
+                                           AST.symPos = pos } =
+      do
+        kind <- name kindsym
+        -- Get the associativity from the symbol's name, then add
+        -- the infix fixity to the scope.
+        case kind of
+          "left" -> addFixity syntax' (Syntax.Infix Syntax.Left) fixitypos
+          "right" -> addFixity syntax' (Syntax.Infix Syntax.Right) fixitypos
+          "nonassoc" ->
+            addFixity syntax' (Syntax.Infix Syntax.NonAssoc) fixitypos
+          -- Not a valid fixity.
+          _ ->
+            do
+              badSyntaxAssoc pos
+              return syntax'
+    -- If the top-level expression isn't a Seq or a Sym, then it's
+    -- a parse error.
+    infixAssoc _ syntax' exp =
+      do
+        badSyntax (AST.expPosition exp)
+        return syntax'
+
+    -- | Start of one directive.
+    --
+    -- > syntax id (postfix | infix (left | right | nonassoc) |
+    -- >            prec (< | > | ==) id (. id)* )+
+    -- >           ^
+    startDirective :: HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                      Frontend (HashMap Symbol Syntax.Syntax)
+    -- The first expression is a Sym (the kind), and there's more.
+    startDirective syntax'
+                   AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
+                                                      AST.symPos = pos },
+                             AST.seqSecond = rest } =
+      do
+        kind <- name kindsym
+        -- Look at the kind to figure out what to do next.
+        case kind of
+          -- Postfix has no more info, so add it to the scope and
+          -- try to parse another directive.
+          "postfix" ->
+            do
+              newdefs <- addFixity syntax' Syntax.Postfix pos
+              startDirective newdefs rest
+          -- Infix expects to see an associativity next.
+          "infix" -> infixAssoc pos syntax' rest
+          -- Precedence relations expect more content.
+          "prec" -> precRelation syntax' rest
+          -- This wasn't a known syntax directive
+          _ ->
+            do
+              badSyntaxKind pos
+              return syntax'
+    -- If the first expression isn't a Sym, it's a parse error.
+    startDirective syntax' AST.Seq { AST.seqFirst = kind } =
+      do
+        badSyntaxKind (AST.expPosition kind)
+        return syntax'
+    -- It's ok for the top-level to be a Sym, as long as it's "postfix".
+    startDirective syntax' AST.Sym { AST.symName = kindsym,
+                                     AST.symPos = pos } =
+      do
+        kind <- name kindsym
+        case kind of
+          "postfix" -> addFixity syntax' Syntax.Postfix pos
+          -- Infixes expect an associativity
+          "infix" ->
+            do
+              badSyntax pos
+              return syntax'
+          -- Precedence relations expect more
+          "prec" ->
+            do
+              badSyntax pos
+              return syntax'
+          -- This wasn't a known syntax directive
+          _ ->
+            do
+              badSyntaxKind pos
+              return syntax'
+    -- If the top-level expression isn't a Seq or a Sym, then it's
+    -- a parse error.
+    startDirective syntax' exp =
+      do
+        badSyntax (AST.expPosition exp)
+        return syntax'
+  in do
+    newsyntax <- startDirective syntax body
+    return (builders, newsyntax, truths, proofs, elems)
+-- If the first expression isn't a Sym, then it's a parse error.
+collectElement _ accum AST.Syntax { AST.syntaxExp =
+                                      AST.Seq { AST.seqFirst = kind } } =
+  do
+    badSyntaxName (AST.expPosition kind)
+    return accum
+-- If the top-level expression isn't a Seq, then it's a parse error.
+collectElement _ accum AST.Syntax { AST.syntaxExp = exp } =
+  do
+    badSyntax (AST.expPosition exp)
+    return accum
 -- Proofs and imports get added to directives, and are processed in a
 -- later phase.
-collectElement _ (defs, truths, directives, syntax)
+collectElement _ (builders, syntax, truths, proofs, elems)
                AST.Proof { AST.proofName = sym, AST.proofBody = body,
                            AST.proofPos = pos } =
   do
     collectedName <- collectExp sym
     collectedBody <- collectExp body
-    return (defs, truths,
+    return (builders, syntax, truths,
             Syntax.Proof { Syntax.proofName = collectedName,
                            Syntax.proofBody = collectedBody,
-                           Syntax.proofPos = pos } : directives, syntax)
-collectElement _ (defs, truths, directives, syntax)
-               AST.Import { AST.importExp = exp, AST.importPos = pos } =
-  do
-    collectedExp <- collectExp exp
-    return (defs, truths,
-            Syntax.Import { Syntax.importExp = collectedExp,
-                            Syntax.importPos = pos } : directives, syntax)
+                           Syntax.proofPos = pos } : proofs, elems)
 
 -- | Collect a scope.  This gathers up all the defintions and truths into
 -- HashMaps, and saves the imports and proofs.  Syntax directives then get
@@ -756,7 +768,7 @@ collectScope groups =
       foldM (collectElement vis) accum elems
   in do
     tmpscope <- foldM collectGroup emptyTempScope groups
-    makeScope tmpscope
+    return $! makeScope tmpscope
 
 -- | The Collect phase of the compiler.  Collect consumes an AST and
 -- produces a Syntax structure.
@@ -811,4 +823,4 @@ collect filepos expected AST.AST { AST.astScope = scope } =
     -- Report an error if there was no top-level module definition
     -- with the name of the file.
     unless seen (noTopLevelDef expected filepos)
-    makeScope tmpscope
+    return $! makeScope tmpscope
