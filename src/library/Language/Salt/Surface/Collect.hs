@@ -212,154 +212,6 @@ collectSeq =
   in
     collectSeq' []
 
--- | Collect an expression.
-collectExp :: AST.Exp -> Frontend Syntax.Exp
--- For record values, gather up all the bindings into a HashMap.
-collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
-                        AST.recordPos = pos } =
-  let
-    -- Fold function.  Only build a HashMap.
-    collectValueField :: HashMap FieldName Syntax.Exp -> AST.Field ->
-                         Frontend (HashMap FieldName Syntax.Exp)
-    collectValueField accum AST.Field { AST.fieldName = fname,
-                                        AST.fieldVal = val,
-                                        AST.fieldPos = pos' } =
-      do
-        collectedVal <- collectExp val
-        if HashMap.member fname accum
-          then do
-            duplicateField (fieldSym fname) pos'
-            return accum
-          else return $! HashMap.insert fname collectedVal accum
-  in do
-    collectedFields <- foldM collectValueField HashMap.empty fields
-    return Syntax.Record { Syntax.recordFields = collectedFields,
-                           Syntax.recordPos = pos }
--- For record types, gather up all the names into a Fields structure.
-collectExp AST.Record { AST.recordType = True, AST.recordFields = fields,
-                        AST.recordPos = pos } =
-  do
-    collectedFields <- collectFields fields
-    return Syntax.RecordType { Syntax.recordTypeFields = collectedFields,
-                               Syntax.recordTypePos = pos }
--- For 'Seq's, walk down the right spine and gather up all 'Seq's into a list.
-collectExp e @ AST.Seq { AST.seqPos = pos } =
-  do
-    collectedSeq <- collectSeq e
-    return Syntax.Seq { Syntax.seqExps = collectedSeq, Syntax.seqPos = pos }
--- The remainder of these are straightforward
-collectExp AST.Abs { AST.absKind = kind, AST.absCases = cases,
-                     AST.absPos = pos } =
-  do
-    collectedCases <- mapM collectCase cases
-    return Syntax.Abs { Syntax.absKind = kind,
-                        Syntax.absCases = collectedCases,
-                        Syntax.absPos = pos }
-collectExp AST.Match { AST.matchVal = val, AST.matchCases = cases,
-                       AST.matchPos = pos } =
-  do
-    collectedVal <- collectExp val
-    collectedCases <- mapM collectCase cases
-    return Syntax.Match { Syntax.matchVal = collectedVal,
-                          Syntax.matchCases = collectedCases,
-                          Syntax.matchPos = pos }
-collectExp AST.Ascribe { AST.ascribeVal = val, AST.ascribeType = ty,
-                         AST.ascribePos = pos } =
-  do
-    collectedVal <- collectExp val
-    collectedType <- collectExp ty
-    return Syntax.Ascribe { Syntax.ascribeVal = collectedVal,
-                            Syntax.ascribeType = collectedType,
-                            Syntax.ascribePos = pos }
-collectExp AST.Tuple { AST.tupleFields = fields, AST.tuplePos = pos } =
-  do
-    collectedFields <- mapM collectExp fields
-    return Syntax.Tuple { Syntax.tupleFields = collectedFields,
-                          Syntax.tuplePos = pos }
-collectExp AST.Project { AST.projectVal = val, AST.projectFields = fields,
-                         AST.projectPos = pos } =
-  do
-    collectedVal <- collectExp val
-    return Syntax.Project { Syntax.projectVal = collectedVal,
-                            Syntax.projectName = fields,
-                            Syntax.projectPos = pos }
-collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =
-  return Syntax.Sym { Syntax.symName = sym, Syntax.symPos = pos }
-collectExp AST.With { AST.withVal = val, AST.withArgs = args,
-                      AST.withPos = pos } =
-  do
-    collectedVal <- collectExp val
-    collectedArgs <- collectExp args
-    return Syntax.With { Syntax.withVal = collectedVal,
-                         Syntax.withArgs = collectedArgs,
-                         Syntax.withPos = pos }
-collectExp AST.Where { AST.whereVal = val, AST.whereProp = prop,
-                       AST.wherePos = pos } =
-  do
-    collectedVal <- collectExp val
-    collectedProp <- collectExp prop
-    return Syntax.Where { Syntax.whereVal = collectedVal,
-                          Syntax.whereProp = collectedProp,
-                          Syntax.wherePos = pos }
-collectExp AST.Anon { AST.anonKind = kind, AST.anonSuperTypes = supers,
-                      AST.anonParams = params, AST.anonContent = content,
-                      AST.anonPos = pos } =
-  do
-    collectedSupers <- mapM collectExp supers
-    collectedParams <- collectFields params
-    collectedContent <- collectScope content
-    return Syntax.Anon { Syntax.anonKind = kind,
-                         Syntax.anonParams = collectedParams,
-                         Syntax.anonSuperTypes = collectedSupers,
-                         Syntax.anonContent = collectedContent,
-                         Syntax.anonPos = pos }
-collectExp (AST.Literal lit) = return (Syntax.Literal lit)
-
--- | Collect a list of AST fields into a Syntax fields structure (a HashMap
--- and an ordering), and report duplicates.
-collectFields :: [AST.Field] -> Frontend Syntax.Fields
-collectFields fields =
-  let
-    -- | Fold function.  Builds both a list and a HashMap.
-    collectField :: (HashMap FieldName Syntax.Field, [FieldName]) ->
-                    AST.Field ->
-                    Frontend (HashMap FieldName Syntax.Field, [FieldName])
-    collectField (tab, fields') AST.Field { AST.fieldName = fname,
-                                           AST.fieldVal = val,
-                                           AST.fieldPos = pos } =
-      do
-        collectedVal <- collectExp val
-        if HashMap.member fname tab
-          then do
-            duplicateField (fieldSym fname) pos
-            return (tab, fields')
-          else let
-            field = Syntax.Field { Syntax.fieldVal = collectedVal,
-                                   Syntax.fieldPos = pos }
-          in
-            return (HashMap.insert fname field tab, fname : fields')
-  in do
-    -- Get a HashMap as well as a list of field names.
-    (tab, fieldlist) <- foldM collectField (HashMap.empty, []) fields
-    return Syntax.Fields {
-             -- The list of field names becomes an array.
-             Syntax.fieldsOrder = listArray (1, fromIntegral (length fieldlist))
-                                            fieldlist,
-             -- The HashMap becomes the bindings.
-             Syntax.fieldsBindings = tab
-           }
-
--- | Collect a case.  This is straightforward.
-collectCase :: AST.Case -> Frontend Syntax.Case
-collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
-                       AST.casePos = pos } =
-  do
-    collectedPat <- collectPattern pat
-    collectedBody <- collectExp body
-    return Syntax.Case { Syntax.casePat = collectedPat,
-                         Syntax.caseBody = collectedBody,
-                         Syntax.casePos = pos }
-
 -- | Collect a syntax directive.  This implements a simple recursive
 -- descent parser to parse the syntax directives.
 --
@@ -375,127 +227,9 @@ collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
 --
 -- > syntax id (postfix | infix (left | right | nonassoc) |
 -- >            prec (< | > | ==) id (. id)* )+
-
-
--- | Collect a definition.
-collectElement :: Visibility
-               -- ^ The visibility at which everything is defined.
-               -> TempScope
-               -- ^ The scope into which to accumulate definitions
-               -> AST.Element
-               -- ^ The element to collect
-               -> Frontend TempScope
--- For builder definitions, turn the definition into a 'Def', whose
--- initializer is an anonymous builder.
-collectElement vis accum @ (builders, syntax, truths, proofs, elems)
-               AST.Builder { AST.builderName = sym,
-                             AST.builderKind = kind,
-                             AST.builderParams = params,
-                             AST.builderSuperTypes = supers,
-                             AST.builderContent = content,
-                             AST.builderPos = pos } =
-  do
-    collectedSupers <- mapM collectExp supers
-    collectedParams <- collectFields params
-    if HashMap.member sym builders
-      then do
-        duplicateBuilder sym pos
-        return accum
-      else case content of
-        AST.Body body ->
-          do
-            collectedBody <- collectScope body
-            return (HashMap.insert sym
-                      Syntax.Builder {
-                        Syntax.builderKind = kind,
-                        Syntax.builderVisibility = vis,
-                        Syntax.builderParams = collectedParams,
-                        Syntax.builderSuperTypes = collectedSupers,
-                        Syntax.builderContent =
-                          Syntax.Anon { Syntax.anonKind = kind,
-                                        Syntax.anonParams = collectedParams,
-                                        Syntax.anonSuperTypes = collectedSupers,
-                                        Syntax.anonContent = collectedBody,
-                                        Syntax.anonPos = pos },
-                        Syntax.builderPos = pos
-                      } builders, syntax, truths, proofs, elems)
-        AST.Value value ->
-          do
-            collectedValue <- collectExp value
-            return (HashMap.insert sym
-                      Syntax.Builder {
-                        Syntax.builderKind = kind,
-                        Syntax.builderVisibility = vis,
-                        Syntax.builderParams = collectedParams,
-                        Syntax.builderSuperTypes = collectedSupers,
-                        Syntax.builderContent = collectedValue,
-                        Syntax.builderPos = pos
-                      } builders, syntax, truths, proofs, elems)
--- For Defs and Imports, collect the components and add them to the list of
--- elements.
-collectElement vis accum AST.Def { AST.defPattern = pat, AST.defInit = init,
-                                   AST.defPos = pos } =
-  do
-    collectedInit <- case init of
-      Just exp -> liftM Just (collectExp exp)
-      Nothing -> return Nothing
-    collectedPat <- collectPattern pat
-    return $! addDef vis Syntax.Def { Syntax.defPattern = collectedPat,
-                                      Syntax.defInit = collectedInit,
-                                      Syntax.defPos = pos } accum
-collectElement vis accum AST.Import { AST.importExp = exp,
-                                      AST.importPos = pos } =
-  do
-    collectedExp <- collectExp exp
-    return $! addDef vis Syntax.Import { Syntax.importExp = collectedExp,
-                                         Syntax.importPos = pos } accum
--- For Funs, we do the same kind of transformation we did with
--- Builders: create a 'Def' whose initializer is an anonymous function.
-collectElement vis accum
-               AST.Fun { AST.funName = sym, AST.funCases = cases,
-                         AST.funPos = pos } =
-  do
-    collectedCases <- mapM collectCase cases
-    return $! addDef vis Syntax.Def {
-                           Syntax.defPattern =
-                              Syntax.Name { Syntax.nameSym = sym,
-                                            Syntax.namePos = pos },
-                           Syntax.defInit =
-                              Just Syntax.Abs {
-                                     Syntax.absKind = Lambda,
-                                     Syntax.absCases = collectedCases,
-                                     Syntax.absPos = pos
-                                   },
-                           Syntax.defPos = pos
-                         } accum
--- Truth definitions are a straghtforward translation.
-collectElement vis accum @ (builders, syntax, truths, proofs, elems)
-               AST.Truth { AST.truthName = sym,
-                           AST.truthKind = kind,
-                           AST.truthContent = content,
-                           AST.truthPos = pos } =
-  do
-    collectedContent <- collectExp content
-    if HashMap.member sym truths
-      then do
-        duplicateTruth sym pos
-        return accum
-      else
-        let
-          truth = Syntax.Truth { Syntax.truthKind = kind,
-                                 Syntax.truthVisibility = vis,
-                                 Syntax.truthContent = collectedContent,
-                                 Syntax.truthPos = pos }
-          newtruths = HashMap.insert sym truth truths
-        in
-          return (builders, syntax, newtruths, proofs, elems)
--- Syntax directives get stashed in a list and processed at the end of the
--- scope.
-collectElement _ (builders, syntax, truths, proofs, elems)
-               AST.Syntax { AST.syntaxExp =
-                              AST.Seq { AST.seqFirst =
-                                           AST.Sym { AST.symName = sym},
-                                        AST.seqSecond = body } } =
+collectSyntax :: SyntaxScope -> AST.Exp -> Frontend SyntaxScope
+collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
+                               AST.seqSecond = body } =
   let
     -- | Add a precedence relationship to the current scope.
     addPrec :: HashMap Symbol Syntax.Syntax -> Ordering -> AST.Exp ->
@@ -723,20 +457,423 @@ collectElement _ (builders, syntax, truths, proofs, elems)
       do
         badSyntax (AST.expPosition exp)
         return syntax'
-  in do
-    newsyntax <- startDirective syntax body
-    return (builders, newsyntax, truths, proofs, elems)
+  in
+    startDirective syntax body
 -- If the first expression isn't a Sym, then it's a parse error.
-collectElement _ accum AST.Syntax { AST.syntaxExp =
-                                      AST.Seq { AST.seqFirst = kind } } =
+collectSyntax accum AST.Seq { AST.seqFirst = kind } =
   do
     badSyntaxName (AST.expPosition kind)
     return accum
 -- If the top-level expression isn't a Seq, then it's a parse error.
-collectElement _ accum AST.Syntax { AST.syntaxExp = exp } =
+collectSyntax accum exp =
   do
     badSyntax (AST.expPosition exp)
     return accum
+
+type TempDynamicScope = (SyntaxScope, [Syntax.Proof], [Syntax.Compound])
+
+emptyTempDynamicScope :: TempDynamicScope
+emptyTempDynamicScope = (HashMap.empty, [], [])
+
+collectCompound :: TempDynamicScope -> AST.Compound -> Frontend TempDynamicScope
+-- Add proofs to the list of proofs for the entire dynamic scope.
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Proof { AST.proofName = sym, AST.proofBody = body,
+                                         AST.proofPos = pos }) =
+  do
+    collectedName <- collectExp sym
+    collectedBody <- collectExp body
+    return (syntax, Syntax.Proof { Syntax.proofName = collectedName,
+                                   Syntax.proofBody = collectedBody,
+                                   Syntax.proofPos = pos } : proofs, compounds)
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Syntax { AST.syntaxExp = exp }) =
+  do
+    newsyntax <- collectSyntax syntax exp
+    return (newsyntax, proofs, compounds)
+-- Turn builder definitions into local builder definitions.
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Builder { AST.builderName = sym,
+                                           AST.builderKind = kind,
+                                           AST.builderParams = params,
+                                           AST.builderSuperTypes = supers,
+                                           AST.builderContent = content,
+                                           AST.builderPos = pos }) =
+  do
+    collectedSupers <- mapM collectExp supers
+    collectedParams <- collectFields params
+    case content of
+      AST.Body body ->
+        do
+          collectedBody <- collectScope body
+          return (syntax, proofs,
+                  Syntax.Local {
+                    Syntax.localName = sym,
+                    Syntax.localBuilder =
+                      Syntax.Builder {
+                        Syntax.builderKind = kind,
+                        Syntax.builderVisibility = Public,
+                        Syntax.builderParams = collectedParams,
+                        Syntax.builderSuperTypes = collectedSupers,
+                        Syntax.builderContent =
+                          Syntax.Anon { Syntax.anonKind = kind,
+                                        Syntax.anonParams = collectedParams,
+                                        Syntax.anonSuperTypes = collectedSupers,
+                                        Syntax.anonContent = collectedBody,
+                                        Syntax.anonPos = pos },
+                        Syntax.builderPos = pos
+                      }
+                  } : compounds)
+      AST.Value value ->
+        do
+          collectedValue <- collectExp value
+          return (syntax, proofs,
+                  Syntax.Local {
+                    Syntax.localName = sym,
+                    Syntax.localBuilder =
+                      Syntax.Builder {
+                        Syntax.builderKind = kind,
+                        Syntax.builderVisibility = Public,
+                        Syntax.builderParams = collectedParams,
+                        Syntax.builderSuperTypes = collectedSupers,
+                        Syntax.builderContent = collectedValue,
+                        Syntax.builderPos = pos
+                      }
+                  } : compounds)
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Truth { AST.truthName = sym,
+                                         AST.truthKind = kind,
+                                         AST.truthContent = content,
+                                         AST.truthPos = pos }) =
+  do
+    collectedContent <- collectExp content
+    return (syntax, proofs,
+            Syntax.Dynamic {
+              Syntax.dynamicName = sym,
+              Syntax.dynamicTruth =
+                Syntax.Truth { Syntax.truthKind = kind,
+                               Syntax.truthVisibility = Public,
+                               Syntax.truthContent = collectedContent,
+                               Syntax.truthPos = pos }
+            } : compounds)
+-- For the rest, collect the tree and add it to the statement list.
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Def { AST.defPattern = pat, AST.defInit = init,
+                                       AST.defPos = pos }) =
+  do
+    collectedInit <- case init of
+      Just exp -> liftM Just (collectExp exp)
+      Nothing -> return Nothing
+    collectedPat <- collectPattern pat
+    return (syntax, proofs,
+            Syntax.Element Syntax.Def { Syntax.defPattern = collectedPat,
+                                        Syntax.defInit = collectedInit,
+                                        Syntax.defPos = pos } : compounds)
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Import { AST.importExp = exp,
+                                          AST.importPos = pos }) =
+  do
+    collectedExp <- collectExp exp
+    return (syntax, proofs,
+            Syntax.Element Syntax.Import { Syntax.importExp = collectedExp,
+                                           Syntax.importPos = pos } : compounds)
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Fun { AST.funName = sym, AST.funCases = cases,
+                                       AST.funPos = pos }) =
+  do
+    collectedCases <- mapM collectCase cases
+    return (syntax, proofs,
+            Syntax.Element Syntax.Def {
+                             Syntax.defPattern =
+                               Syntax.Name { Syntax.nameSym = sym,
+                                             Syntax.namePos = pos },
+                             Syntax.defInit =
+                               Just Syntax.Abs {
+                                      Syntax.absKind = Lambda,
+                                      Syntax.absCases = collectedCases,
+                                      Syntax.absPos = pos
+                                    },
+                             Syntax.defPos = pos
+                           } : compounds)
+collectCompound (syntax, proofs, compounds) (AST.Exp exp) =
+  do
+    collectedExp <- collectExp exp
+    return (syntax, proofs, Syntax.Exp collectedExp : compounds)
+
+-- | Collect an expression.
+collectExp :: AST.Exp -> Frontend Syntax.Exp
+-- For a compound statement, construct a dynamic scope from all the statements.
+collectExp AST.Compound { AST.compoundBody = body, AST.compoundPos = pos } =
+  do
+    (syntax, proofs, stms) <- foldM collectCompound emptyTempDynamicScope body
+    return Syntax.Compound { Syntax.compoundSyntax = syntax,
+                             Syntax.compoundProofs = proofs,
+                             Syntax.compoundBody = reverse stms,
+                             Syntax.compoundPos = pos }
+-- For record values, gather up all the bindings into a HashMap.
+collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
+                        AST.recordPos = pos } =
+  let
+    -- Fold function.  Only build a HashMap.
+    collectValueField :: HashMap FieldName Syntax.Exp -> AST.Field ->
+                         Frontend (HashMap FieldName Syntax.Exp)
+    collectValueField accum AST.Field { AST.fieldName = fname,
+                                        AST.fieldVal = val,
+                                        AST.fieldPos = pos' } =
+      do
+        collectedVal <- collectExp val
+        if HashMap.member fname accum
+          then do
+            duplicateField (fieldSym fname) pos'
+            return accum
+          else return $! HashMap.insert fname collectedVal accum
+  in do
+    collectedFields <- foldM collectValueField HashMap.empty fields
+    return Syntax.Record { Syntax.recordFields = collectedFields,
+                           Syntax.recordPos = pos }
+-- For record types, gather up all the names into a Fields structure.
+collectExp AST.Record { AST.recordType = True, AST.recordFields = fields,
+                        AST.recordPos = pos } =
+  do
+    collectedFields <- collectFields fields
+    return Syntax.RecordType { Syntax.recordTypeFields = collectedFields,
+                               Syntax.recordTypePos = pos }
+-- For 'Seq's, walk down the right spine and gather up all 'Seq's into a list.
+collectExp e @ AST.Seq { AST.seqPos = pos } =
+  do
+    collectedSeq <- collectSeq e
+    return Syntax.Seq { Syntax.seqExps = collectedSeq, Syntax.seqPos = pos }
+-- The remainder of these are straightforward
+collectExp AST.Abs { AST.absKind = kind, AST.absCases = cases,
+                     AST.absPos = pos } =
+  do
+    collectedCases <- mapM collectCase cases
+    return Syntax.Abs { Syntax.absKind = kind,
+                        Syntax.absCases = collectedCases,
+                        Syntax.absPos = pos }
+collectExp AST.Match { AST.matchVal = val, AST.matchCases = cases,
+                       AST.matchPos = pos } =
+  do
+    collectedVal <- collectExp val
+    collectedCases <- mapM collectCase cases
+    return Syntax.Match { Syntax.matchVal = collectedVal,
+                          Syntax.matchCases = collectedCases,
+                          Syntax.matchPos = pos }
+collectExp AST.Ascribe { AST.ascribeVal = val, AST.ascribeType = ty,
+                         AST.ascribePos = pos } =
+  do
+    collectedVal <- collectExp val
+    collectedType <- collectExp ty
+    return Syntax.Ascribe { Syntax.ascribeVal = collectedVal,
+                            Syntax.ascribeType = collectedType,
+                            Syntax.ascribePos = pos }
+collectExp AST.Tuple { AST.tupleFields = fields, AST.tuplePos = pos } =
+  do
+    collectedFields <- mapM collectExp fields
+    return Syntax.Tuple { Syntax.tupleFields = collectedFields,
+                          Syntax.tuplePos = pos }
+collectExp AST.Project { AST.projectVal = val, AST.projectFields = fields,
+                         AST.projectPos = pos } =
+  do
+    collectedVal <- collectExp val
+    return Syntax.Project { Syntax.projectVal = collectedVal,
+                            Syntax.projectName = fields,
+                            Syntax.projectPos = pos }
+collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =
+  return Syntax.Sym { Syntax.symName = sym, Syntax.symPos = pos }
+collectExp AST.With { AST.withVal = val, AST.withArgs = args,
+                      AST.withPos = pos } =
+  do
+    collectedVal <- collectExp val
+    collectedArgs <- collectExp args
+    return Syntax.With { Syntax.withVal = collectedVal,
+                         Syntax.withArgs = collectedArgs,
+                         Syntax.withPos = pos }
+collectExp AST.Where { AST.whereVal = val, AST.whereProp = prop,
+                       AST.wherePos = pos } =
+  do
+    collectedVal <- collectExp val
+    collectedProp <- collectExp prop
+    return Syntax.Where { Syntax.whereVal = collectedVal,
+                          Syntax.whereProp = collectedProp,
+                          Syntax.wherePos = pos }
+collectExp AST.Anon { AST.anonKind = kind, AST.anonSuperTypes = supers,
+                      AST.anonParams = params, AST.anonContent = content,
+                      AST.anonPos = pos } =
+  do
+    collectedSupers <- mapM collectExp supers
+    collectedParams <- collectFields params
+    collectedContent <- collectScope content
+    return Syntax.Anon { Syntax.anonKind = kind,
+                         Syntax.anonParams = collectedParams,
+                         Syntax.anonSuperTypes = collectedSupers,
+                         Syntax.anonContent = collectedContent,
+                         Syntax.anonPos = pos }
+collectExp (AST.Literal lit) = return (Syntax.Literal lit)
+
+-- | Collect a list of AST fields into a Syntax fields structure (a HashMap
+-- and an ordering), and report duplicates.
+collectFields :: [AST.Field] -> Frontend Syntax.Fields
+collectFields fields =
+  let
+    -- | Fold function.  Builds both a list and a HashMap.
+    collectField :: (HashMap FieldName Syntax.Field, [FieldName]) ->
+                    AST.Field ->
+                    Frontend (HashMap FieldName Syntax.Field, [FieldName])
+    collectField (tab, fields') AST.Field { AST.fieldName = fname,
+                                           AST.fieldVal = val,
+                                           AST.fieldPos = pos } =
+      do
+        collectedVal <- collectExp val
+        if HashMap.member fname tab
+          then do
+            duplicateField (fieldSym fname) pos
+            return (tab, fields')
+          else let
+            field = Syntax.Field { Syntax.fieldVal = collectedVal,
+                                   Syntax.fieldPos = pos }
+          in
+            return (HashMap.insert fname field tab, fname : fields')
+  in do
+    -- Get a HashMap as well as a list of field names.
+    (tab, fieldlist) <- foldM collectField (HashMap.empty, []) fields
+    return Syntax.Fields {
+             -- The list of field names becomes an array.
+             Syntax.fieldsOrder = listArray (1, fromIntegral (length fieldlist))
+                                            fieldlist,
+             -- The HashMap becomes the bindings.
+             Syntax.fieldsBindings = tab
+           }
+
+-- | Collect a case.  This is straightforward.
+collectCase :: AST.Case -> Frontend Syntax.Case
+collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
+                       AST.casePos = pos } =
+  do
+    collectedPat <- collectPattern pat
+    collectedBody <- collectExp body
+    return Syntax.Case { Syntax.casePat = collectedPat,
+                         Syntax.caseBody = collectedBody,
+                         Syntax.casePos = pos }
+
+
+-- | Collect a definition.
+collectElement :: Visibility
+               -- ^ The visibility at which everything is defined.
+               -> TempScope
+               -- ^ The scope into which to accumulate definitions
+               -> AST.Element
+               -- ^ The element to collect
+               -> Frontend TempScope
+-- For builder definitions, turn the definition into a 'Def', whose
+-- initializer is an anonymous builder.
+collectElement vis accum @ (builders, syntax, truths, proofs, elems)
+               AST.Builder { AST.builderName = sym,
+                             AST.builderKind = kind,
+                             AST.builderParams = params,
+                             AST.builderSuperTypes = supers,
+                             AST.builderContent = content,
+                             AST.builderPos = pos } =
+  do
+    collectedSupers <- mapM collectExp supers
+    collectedParams <- collectFields params
+    if HashMap.member sym builders
+      then do
+        duplicateBuilder sym pos
+        return accum
+      else case content of
+        AST.Body body ->
+          do
+            collectedBody <- collectScope body
+            return (HashMap.insert sym
+                      Syntax.Builder {
+                        Syntax.builderKind = kind,
+                        Syntax.builderVisibility = vis,
+                        Syntax.builderParams = collectedParams,
+                        Syntax.builderSuperTypes = collectedSupers,
+                        Syntax.builderContent =
+                          Syntax.Anon { Syntax.anonKind = kind,
+                                        Syntax.anonParams = collectedParams,
+                                        Syntax.anonSuperTypes = collectedSupers,
+                                        Syntax.anonContent = collectedBody,
+                                        Syntax.anonPos = pos },
+                        Syntax.builderPos = pos
+                      } builders, syntax, truths, proofs, elems)
+        AST.Value value ->
+          do
+            collectedValue <- collectExp value
+            return (HashMap.insert sym
+                      Syntax.Builder {
+                        Syntax.builderKind = kind,
+                        Syntax.builderVisibility = vis,
+                        Syntax.builderParams = collectedParams,
+                        Syntax.builderSuperTypes = collectedSupers,
+                        Syntax.builderContent = collectedValue,
+                        Syntax.builderPos = pos
+                      } builders, syntax, truths, proofs, elems)
+-- For Defs and Imports, collect the components and add them to the list of
+-- elements.
+collectElement vis accum AST.Def { AST.defPattern = pat, AST.defInit = init,
+                                   AST.defPos = pos } =
+  do
+    collectedInit <- case init of
+      Just exp -> liftM Just (collectExp exp)
+      Nothing -> return Nothing
+    collectedPat <- collectPattern pat
+    return $! addDef vis Syntax.Def { Syntax.defPattern = collectedPat,
+                                      Syntax.defInit = collectedInit,
+                                      Syntax.defPos = pos } accum
+collectElement vis accum AST.Import { AST.importExp = exp,
+                                      AST.importPos = pos } =
+  do
+    collectedExp <- collectExp exp
+    return $! addDef vis Syntax.Import { Syntax.importExp = collectedExp,
+                                         Syntax.importPos = pos } accum
+-- For Funs, we do the same kind of transformation we did with
+-- Builders: create a 'Def' whose initializer is an anonymous function.
+collectElement vis accum
+               AST.Fun { AST.funName = sym, AST.funCases = cases,
+                         AST.funPos = pos } =
+  do
+    collectedCases <- mapM collectCase cases
+    return $! addDef vis Syntax.Def {
+                           Syntax.defPattern =
+                              Syntax.Name { Syntax.nameSym = sym,
+                                            Syntax.namePos = pos },
+                           Syntax.defInit =
+                              Just Syntax.Abs {
+                                     Syntax.absKind = Lambda,
+                                     Syntax.absCases = collectedCases,
+                                     Syntax.absPos = pos
+                                   },
+                           Syntax.defPos = pos
+                         } accum
+-- Truth definitions are a straghtforward translation.
+collectElement vis accum @ (builders, syntax, truths, proofs, elems)
+               AST.Truth { AST.truthName = sym,
+                           AST.truthKind = kind,
+                           AST.truthContent = content,
+                           AST.truthPos = pos } =
+  do
+    collectedContent <- collectExp content
+    if HashMap.member sym truths
+      then do
+        duplicateTruth sym pos
+        return accum
+      else
+        let
+          truth = Syntax.Truth { Syntax.truthKind = kind,
+                                 Syntax.truthVisibility = vis,
+                                 Syntax.truthContent = collectedContent,
+                                 Syntax.truthPos = pos }
+          newtruths = HashMap.insert sym truth truths
+        in
+          return (builders, syntax, newtruths, proofs, elems)
+collectElement _ (builders, syntax, truths, proofs, elems)
+               AST.Syntax { AST.syntaxExp = exp } =
+  do
+    newsyntax <- collectSyntax syntax exp
+    return (builders, newsyntax, truths, proofs, elems)
 -- Proofs and imports get added to directives, and are processed in a
 -- later phase.
 collectElement _ (builders, syntax, truths, proofs, elems)

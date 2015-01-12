@@ -75,8 +75,8 @@ data Truth =
     truthPos :: !Position
   }
 
--- | A scope.  Consists of a map from symbols to definition sets
--- represented as 'Defs'.
+-- | A static scope.  Elements are split up by kind, into builder definitions,
+-- syntax directives, truths, proofs, and regular definitions.
 data Scope =
   Scope {
     scopeBuilders :: !(HashMap Symbol Builder),
@@ -148,8 +148,22 @@ data Element =
 data Compound =
     -- | An ordinary expression.
     Exp !Exp
-    -- | A definition.
+    -- | A regular definition.
   | Element !Element
+    -- | A dynamic truth definition.
+  | Dynamic {
+      -- | Name of the truth definition.
+      dynamicName :: !Symbol,
+      -- | The dynamic truth definition.
+      dynamicTruth :: !Truth
+    }
+    -- | A local builder definition.
+  | Local {
+      -- | The name of the builder.
+      localName :: !Symbol,
+      -- | The local builder definition.
+      localBuilder :: !Builder
+    }
 
 -- | A pattern, for pattern match expressions.
 data Pattern =
@@ -211,8 +225,14 @@ data Pattern =
 -- | Expressions.  These represent computed values of any type.
 data Exp =
     -- | An expression that may contain declarations as well as
-    -- expressions.
+    -- expressions.  This structure defines a dynamic scope.  Syntax
+    -- directives and proofs are moved out-of-line, while truths,
+    -- builders, and regular definitions remain in-line.
     Compound {
+      -- | Syntax directives that occurred in the compound expression.
+      compoundSyntax :: !(HashMap Symbol Syntax),
+      -- | Proofs given in the compound expression.
+      compoundProofs :: ![Proof],
       -- | The body of the compound expression.
       compoundBody :: ![Compound],
       -- | The position in source from which this arises.
