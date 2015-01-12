@@ -39,17 +39,18 @@ module Language.Salt.Surface.Syntax(
        ) where
 
 import Data.Array
+import Data.Hashable
+import Data.HashMap.Strict(HashMap)
 import Data.Position
 import Data.Symbol
 import Data.Word
-import Data.HashMap.Strict(HashMap)
 import Language.Salt.Surface.Common
 
 data Assoc = Left | Right | NonAssoc
-  deriving (Ord, Eq)
+  deriving (Ord, Eq, Enum, Show)
 
 data Fixity = Prefix | Infix !Assoc | Postfix
-  deriving (Ord, Eq)
+  deriving (Ord, Eq, Show)
 
 -- | Syntax information for a symbol.
 data Syntax =
@@ -59,6 +60,7 @@ data Syntax =
     -- | Precedence relations.
     syntaxPrecs :: ![(Ordering, Exp)]
   }
+  deriving Eq
 
 -- | Truths.  These are similar to declarations, except that they
 -- affect the proof environment.  These include theorems and
@@ -90,6 +92,7 @@ data Scope =
     -- | Proofs given in this scope.
     scopeProofs :: ![Proof]
   }
+  deriving Eq
 
 -- | A builder definition.
 data Builder =
@@ -390,3 +393,132 @@ data Case =
     -- | The position in source from which this arises.
     casePos :: !Position
   }
+
+instance Eq Truth where
+  Truth { truthKind = kind1, truthVisibility = vis1,
+          truthContent = content1 } ==
+    Truth { truthKind = kind2, truthVisibility = vis2,
+            truthContent = content2 } =
+      kind1 == kind2 && vis1 == vis2 && content1 == content2
+
+instance Eq Builder where
+  Builder { builderKind = kind1, builderVisibility = vis1,
+            builderParams = params1, builderSuperTypes = supers1,
+            builderContent = content1 } ==
+    Builder { builderKind = kind2, builderVisibility = vis2,
+              builderParams = params2, builderSuperTypes = supers2,
+              builderContent = content2 } =
+      kind1 == kind2 && vis1 == vis2 && params1 == params2 &&
+      supers1 == supers2 && content1 == content2
+
+instance Eq Proof where
+  Proof { proofName = name1, proofBody = body1 } ==
+    Proof { proofName = name2, proofBody = body2 } =
+      name1 == name2 && body1 == body2
+
+instance Eq Element where
+  Def { defPattern = pat1, defInit = init1 } ==
+    Def { defPattern = pat2, defInit = init2 } =
+      pat1 == pat2 && init1 == init2
+  Import { importExp = exp1 } == Import { importExp = exp2 } = exp1 == exp2
+  _ == _ = False
+
+instance Eq Compound where
+  Exp exp1 == Exp exp2 = exp1 == exp2
+  Element elem1 == Element elem2 = elem1 == elem2
+  Dynamic { dynamicName = name1, dynamicTruth = truth1 } ==
+    Dynamic { dynamicName = name2, dynamicTruth = truth2 } =
+      name1 == name2 && truth1 == truth2
+  Local { localName = name1, localBuilder = builder1 } ==
+    Local { localName = name2, localBuilder = builder2 } =
+      name1 == name2 && builder1 == builder2
+  _ == _ = False
+
+instance Eq Pattern where
+  Option { optionPats = pats1 } == Option { optionPats = pats2 } =
+    pats1 == pats2
+  Deconstruct { deconstructName = name1, deconstructPat = pat1 } ==
+    Deconstruct { deconstructName = name2, deconstructPat = pat2 } =
+      name1 == name2 && pat1 == pat2
+  Split { splitFields = fields1, splitStrict = strict1 } ==
+    Split { splitFields = fields2, splitStrict = strict2 } =
+      strict1 == strict2 && fields1 == fields2
+  Typed { typedPat = pat1, typedType = ty1 } ==
+    Typed { typedPat = pat2, typedType = ty2 } =
+      pat1 == pat2 && ty1 == ty2
+  As { asName = name1, asPat = pat1 } ==
+    As { asName = name2, asPat = pat2 } =
+      name1 == name2 && pat1 == pat2
+  Name { nameSym = name1 } == Name { nameSym = name2 } = name1 == name2
+  Exact lit1 == Exact lit2 = lit1 == lit2
+  _ == _ = False
+
+instance Eq Exp where
+  Compound { compoundSyntax = syntax1, compoundProofs = proofs1,
+             compoundBody = body1 } ==
+    Compound { compoundSyntax = syntax2, compoundProofs = proofs2,
+               compoundBody = body2 } =
+      syntax1 == syntax2 && proofs1 == proofs2 && body1 == body2
+  Abs { absKind = kind1, absCases = cases1 } ==
+    Abs { absKind = kind2, absCases = cases2 } =
+      kind1 == kind2 && cases1 == cases2
+  Match { matchVal = val1, matchCases = cases1 } ==
+    Match { matchVal = val2, matchCases = cases2 } =
+      val1 == val2 && cases1 == cases2
+  Ascribe { ascribeVal = val1, ascribeType = ty1 } ==
+    Ascribe { ascribeVal = val2, ascribeType = ty2 } =
+      val1 == val2 && ty1 == ty2
+  Seq { seqExps = exps1 } == Seq { seqExps = exps2 } = exps1 == exps2
+  RecordType { recordTypeFields = fields1 } ==
+    RecordType { recordTypeFields = fields2 } =
+      fields1 == fields2
+  Record { recordFields = fields1 } == Record { recordFields = fields2 } =
+    fields1 == fields2
+  Tuple { tupleFields = fields1 } == Tuple { tupleFields = fields2 } =
+    fields1 == fields2
+  Project { projectVal = val1, projectName = names1 } ==
+    Project { projectVal = val2, projectName = names2 } =
+      names1 == names2 && val1 == val2
+  Sym { symName = sym1 } == Sym { symName = sym2 } = sym1 == sym2
+    -- | A with expression.  Represents currying.
+  With { withVal = val1, withArgs = args1 } ==
+    With { withVal = val2, withArgs = args2 } =
+      val1 == val2 && args1 == args2
+    -- | Where expression.  Constructs refinement types.
+  Where { whereVal = val1, whereProp = prop1 } ==
+    Where { whereVal = val2, whereProp = prop2 } =
+      val1 == val2 && prop1 == prop2
+    -- | Builder literal.
+  Anon { anonKind = kind1, anonSuperTypes = supers1,
+         anonParams = fields1, anonContent = content1 } ==
+    Anon { anonKind = kind2, anonSuperTypes = supers2,
+           anonParams = fields2, anonContent = content2 } =
+      kind1 == kind2 && supers1 == supers2 &&
+      fields1 == fields2 && content1 == content2
+  Literal lit1 == Literal lit2 = lit1 == lit2
+  _ == _ = False
+
+instance Eq Entry where
+  Entry { entryPat = pat1 } == Entry { entryPat = pat2 } = pat1 == pat2
+
+instance Eq Fields where
+  Fields { fieldsBindings = bindings1, fieldsOrder = order1 } ==
+    Fields { fieldsBindings = bindings2, fieldsOrder = order2 } =
+      bindings1 == bindings2 && order1 == order2
+
+instance Eq Field where
+  Field { fieldVal = val1 } == Field { fieldVal = val2 } = val1 == val2
+
+instance Eq Case where
+  Case { casePat = pat1, caseBody = body1 } ==
+    Case { casePat = pat2, caseBody = body2 } =
+      pat1 == pat2 && body1 == body2
+
+instance Hashable Assoc where
+  hashWithSalt s = hashWithSalt s . fromEnum
+
+instance Hashable Fixity where
+  hashWithSalt s Prefix = hashWithSalt s (0 :: Int)
+  hashWithSalt s (Infix assoc) =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` assoc
+  hashWithSalt s Postfix = hashWithSalt s (2 :: Int)
