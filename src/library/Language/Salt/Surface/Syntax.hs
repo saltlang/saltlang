@@ -38,6 +38,8 @@ module Language.Salt.Surface.Syntax(
        Case(..)
        ) where
 
+import Control.Monad.Positions
+import Control.Monad.Symbols
 import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
@@ -45,6 +47,10 @@ import Data.Position
 import Data.Symbol
 import Data.Word
 import Language.Salt.Surface.Common
+import Prelude hiding (init, exp)
+import Text.FormatM
+
+import qualified Data.HashMap.Strict as HashMap
 
 data Assoc = Left | Right | NonAssoc
   deriving (Ord, Eq, Enum, Show)
@@ -307,7 +313,7 @@ data Exp =
       -- | The inner expression
       projectVal :: !Exp,
       -- | The name of the field being accessed.
-      projectName :: ![FieldName],
+      projectFields :: ![FieldName],
       -- | The position in source from which this arises.
       projectPos :: !Position
     }
@@ -476,8 +482,8 @@ instance Eq Exp where
     fields1 == fields2
   Tuple { tupleFields = fields1 } == Tuple { tupleFields = fields2 } =
     fields1 == fields2
-  Project { projectVal = val1, projectName = names1 } ==
-    Project { projectVal = val2, projectName = names2 } =
+  Project { projectVal = val1, projectFields = names1 } ==
+    Project { projectVal = val2, projectFields = names2 } =
       names1 == names2 && val1 == val2
   Sym { symName = sym1 } == Sym { symName = sym2 } = sym1 == sym2
     -- | A with expression.  Represents currying.
@@ -522,3 +528,371 @@ instance Hashable Fixity where
   hashWithSalt s (Infix assoc) =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` assoc
   hashWithSalt s Postfix = hashWithSalt s (2 :: Int)
+
+instance Format Assoc where format = string . show
+instance Format Fixity where format = string . show
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m (Ordering, Exp) where
+  formatM (ord, exp) =
+    let
+      orddoc = case ord of
+        LT -> string "<"
+        EQ -> string "=="
+        GT -> string ">"
+    in do
+      expdoc <- formatM exp
+      return $! constructorDoc (string "Prec") [(string "ord", orddoc),
+                                                (string "name", expdoc)]
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m Syntax where
+  formatM Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
+    do
+      precdocs <- mapM formatM precs
+      return $! constructorDoc (string "Syntax")
+                               [(string "fixity", format fixity),
+                                (string "scope", listDoc precdocs)]
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m Truth where
+  formatM Truth { truthVisibility = vis, truthContent = content,
+                  truthKind = kind, truthPos = pos } =
+    do
+      posdoc <- formatM pos
+      contentdoc <- formatM content
+      return (constructorDoc (string "Truth")
+                             [(string "visibility", format vis),
+                              (string "kind", format kind),
+                              (string "pos", posdoc),
+                              (string "content", contentdoc)])
+
+formatMap :: (MonadSymbols m, MonadPositions m, FormatM m key, FormatM m val) =>
+             HashMap key val -> m Doc
+formatMap hashmap =
+  let
+    formatEntry (sym, ent) =
+      do
+        symdoc <- formatM sym
+        entdoc <- formatM ent
+        return $! tupleDoc [symdoc, entdoc]
+  in do
+    entrydocs <- mapM formatEntry (HashMap.toList hashmap)
+    return $! listDoc entrydocs
+
+formatElems :: (MonadSymbols m, MonadPositions m) =>
+               Array Visibility [Element] -> m Doc
+formatElems arr =
+  do
+    hiddendocs <- mapM formatM (arr ! Hidden)
+    privatedocs <- mapM formatM (arr ! Private)
+    protecteddocs <- mapM formatM (arr ! Protected)
+    publicdocs <- mapM formatM (arr ! Public)
+    return $! constructorDoc (string "Elems")
+                             [(string "hidden", listDoc hiddendocs),
+                              (string "private", listDoc privatedocs),
+                              (string "protected", listDoc protecteddocs),
+                              (string "public", listDoc publicdocs)]
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m Scope where
+  formatM Scope { scopeBuilders = builders, scopeSyntax = syntax,
+                  scopeTruths = truths, scopeElems = defs,
+                  scopeProofs = proofs } =
+    do
+      buildersdoc <- formatMap builders
+      syntaxdoc <- formatMap syntax
+      truthsdoc <- formatMap truths
+      elemsdoc <- formatElems defs
+      proofsdoc <- mapM formatM proofs
+      return $! constructorDoc (string "Scope")
+                               [(string "builders", buildersdoc),
+                                (string "syntax", syntaxdoc),
+                                (string "truths", truthsdoc),
+                                (string "elems", elemsdoc),
+                                (string "proofs", listDoc proofsdoc)]
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m Builder where
+  formatM Builder { builderVisibility = vis, builderKind = cls,
+                    builderSuperTypes = supers, builderParams = params,
+                    builderContent = body, builderPos = pos } =
+    do
+      posdoc <- formatM pos
+      superdocs <- mapM formatM supers
+      paramdocs <- formatM params
+      bodydoc <- formatM body
+      return (constructorDoc (string "Builder")
+                             [(string "visibility", format vis),
+                              (string "pos", posdoc),
+                              (string "kind", format cls),
+                              (string "params", paramdocs),
+                              (string "supers", listDoc superdocs),
+                              (string "body", bodydoc)])
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m Proof where
+  formatM Proof { proofName = exp, proofBody = body, proofPos = pos } =
+    do
+      namedoc <- formatM exp
+      posdoc <- formatM pos
+      bodydoc <- formatM body
+      return (constructorDoc (string "Proof")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "body", bodydoc)])
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m Element where
+  formatM Def { defPattern = pat, defInit = Just init, defPos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      initdoc <- formatM init
+      return (constructorDoc (string "Group")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc),
+                              (string "init", initdoc)])
+  formatM Def { defPattern = pat, defInit = Nothing, defPos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      return (constructorDoc (string "Group")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc)])
+  formatM Import { importExp = exp, importPos = pos } =
+    do
+      expdoc <- formatM exp
+      posdoc <- formatM pos
+      return (constructorDoc (string "Import")
+                             [(string "exp", expdoc),
+                              (string "pos", posdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
+  formatM (Exp e) = formatM e
+  formatM (Element e) = formatM e
+  formatM Dynamic { dynamicName = sym, dynamicTruth = truth } =
+    do
+      symdoc <- formatM sym
+      truthdoc <- formatM truth
+      return (constructorDoc (string "Dynamic")
+                             [(string "sym", symdoc),
+                              (string "truth", truthdoc)])
+  formatM Local { localName = sym, localBuilder = builder } =
+    do
+      symdoc <- formatM sym
+      builderdoc <- formatM builder
+      return (constructorDoc (string "Local")
+                             [(string "sym", symdoc),
+                              (string "builder", builderdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
+  formatM Option { optionPats = pats, optionPos = pos } =
+    do
+      posdoc <- formatM pos
+      patsdoc <- mapM formatM pats
+      return (constructorDoc (string "Options")
+                             [(string "pos", posdoc),
+                              (string "patterns", listDoc patsdoc)])
+  formatM Deconstruct { deconstructName = sym, deconstructPat = pat,
+                        deconstructPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      return (constructorDoc (string "Deconstruct")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "pat", patdoc)])
+  formatM Split { splitFields = fields, splitStrict = True, splitPos = pos } =
+    do
+      fieldsdoc <- formatMap fields
+      posdoc <- formatM pos
+      return (constructorDoc (string "Split")
+                             [(string "pos", posdoc),
+                              (string "strict", string "true"),
+                              (string "fields", fieldsdoc)])
+  formatM Split { splitFields = fields, splitStrict = False, splitPos = pos } =
+    do
+      fieldsdoc <- formatMap fields
+      posdoc <- formatM pos
+      return (constructorDoc (string "Split")
+                             [(string "pos", posdoc),
+                              (string "strict", string "false"),
+                              (string "fields", fieldsdoc)])
+  formatM Typed { typedPat = pat, typedType = ty, typedPos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      tydoc <- formatM ty
+      return (constructorDoc (string "Typed")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc),
+                              (string "type", tydoc)])
+  formatM As { asName = sym, asPat = pat, asPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      return (constructorDoc (string "As")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "pat", patdoc)])
+  formatM Name { nameSym = sym, namePos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      return (constructorDoc (string "Name")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc)])
+  formatM (Exact e) = formatM e
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
+  formatM Compound { compoundSyntax = syntax, compoundProofs = proofs,
+                     compoundBody = body, compoundPos = pos } =
+    do
+      syntaxdoc <- formatMap syntax
+      proofsdoc <- mapM formatM proofs
+      posdoc <- formatM pos
+      bodydoc <- mapM formatM body
+      return (constructorDoc (string "Compound")
+                             [(string "pos", posdoc),
+                              (string "syntax", syntaxdoc),
+                              (string "proofs", listDoc proofsdoc),
+                              (string "body", listDoc bodydoc)])
+  formatM Abs { absKind = kind, absCases = cases, absPos = pos } =
+    do
+      posdoc <- formatM pos
+      casedocs <- mapM formatM cases
+      return (constructorDoc (string "Abs")
+                             [(string "pos", posdoc),
+                              (string "kind", format kind),
+                              (string "cases", listDoc casedocs)])
+  formatM Match { matchVal = val, matchCases = cases, matchPos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      casedocs <- mapM formatM cases
+      return (constructorDoc (string "Match")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "cases", listDoc casedocs)])
+  formatM Ascribe { ascribeVal = val, ascribeType = ty, ascribePos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      tydoc <- formatM ty
+      return (constructorDoc (string "Ascribe")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "type", tydoc)])
+  formatM Seq { seqExps = exps, seqPos = pos } =
+    do
+      posdoc <- formatM pos
+      expdocs <- mapM formatM exps
+      return (constructorDoc (string "Seq")
+                             [(string "pos", posdoc),
+                              (string "exps", listDoc expdocs)])
+  formatM Record { recordFields = fields, recordPos = pos } =
+    do
+      posdoc <- formatM pos
+      fielddocs <- formatMap fields
+      return (constructorDoc (string "Record")
+                             [(string "pos", posdoc),
+                              (string "fields", fielddocs)])
+  formatM RecordType { recordTypeFields = fields,
+                       recordTypePos = pos } =
+    do
+      posdoc <- formatM pos
+      fielddocs <- formatM fields
+      return (constructorDoc (string "RecordType")
+                             [(string "pos", posdoc),
+                              (string "fields", fielddocs)])
+  formatM Tuple { tupleFields = fields, tuplePos = pos } =
+    do
+      posdoc <- formatM pos
+      fielddocs <- mapM formatM fields
+      return (constructorDoc (string "Tuple")
+                             [(string "pos", posdoc),
+                              (string "fields", listDoc fielddocs)])
+  formatM Project { projectVal = val, projectFields = fields,
+                    projectPos = pos } =
+    do
+      fielddocs <- mapM formatM fields
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      return (constructorDoc (string "Project")
+                             [(string "fields", listDoc fielddocs),
+                              (string "pos", posdoc),
+                              (string "value", valdoc)])
+  formatM Sym { symName = sym, symPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      return (constructorDoc (string "Sym")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc)])
+  formatM With { withVal = val, withArgs = args, withPos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      argdocs <- formatM args
+      return (constructorDoc (string "With")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "arg", argdocs)])
+  formatM Where { whereVal = val, whereProp = prop, wherePos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      propdoc <- formatM prop
+      return (constructorDoc (string "Where")
+                             [(string "pos", posdoc),
+                              (string "val", valdoc),
+                              (string "prop", propdoc)])
+  formatM Anon { anonKind = cls, anonParams = params, anonContent = body,
+                 anonSuperTypes = supers, anonPos = pos } =
+
+    do
+      posdoc <- formatM pos
+      superdocs <- mapM formatM supers
+      paramdocs <- formatM params
+      bodydoc <- formatM body
+      return (constructorDoc (string "Anon")
+                             [(string "pos", posdoc),
+                              (string "kind", format cls),
+                              (string "params", paramdocs),
+                              (string "supers", listDoc superdocs),
+                              (string "body", bodydoc)])
+  formatM (Literal l) = formatM l
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Entry where
+  formatM Entry { entryPat = pat, entryPos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      return (constructorDoc (string "Entry")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Fields where
+  formatM Fields { fieldsBindings = bindings, fieldsOrder = order } =
+    do
+      bindingsdoc <- formatMap bindings
+      orderdoc <- mapM formatM (elems order)
+      return (constructorDoc (string "Fields")
+                             [(string "bindings", bindingsdoc),
+                              (string "value", listDoc orderdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Field where
+  formatM Field { fieldVal = val, fieldPos = pos } =
+    do
+      posdoc <- formatM pos
+      valdoc <- formatM val
+      return (constructorDoc (string "Field")
+                             [(string "pos", posdoc),
+                              (string "value", valdoc)])
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
+  formatM Case { casePat = pat, caseBody = body, casePos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      bodydoc <- formatM body
+      return (constructorDoc (string "Case")
+                             [(string "pos", posdoc),
+                              (string "pattern", patdoc),
+                              (string "body", bodydoc)])

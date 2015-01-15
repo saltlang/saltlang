@@ -677,7 +677,7 @@ collectExp AST.Project { AST.projectVal = val, AST.projectFields = fields,
   do
     collectedVal <- collectExp val
     return Syntax.Project { Syntax.projectVal = collectedVal,
-                            Syntax.projectName = fields,
+                            Syntax.projectFields = fields,
                             Syntax.projectPos = pos }
 collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =
   return Syntax.Sym { Syntax.symName = sym, Syntax.symPos = pos }
