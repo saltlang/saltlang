@@ -28,6 +28,7 @@ module Language.Salt.Surface.Common(
        literalPosition,
        literalDot,
        recordDoc,
+       tupleDoc,
        constructorDoc,
        listDoc,
        getNodeID
@@ -169,6 +170,9 @@ recordDoc =
     entryDoc (fieldname, fieldval) = fieldname <+> equals <+> fieldval
   in
     nest 2 . parens . punctuate (comma <> linebreak) . map entryDoc
+
+tupleDoc :: [Doc] -> Doc
+tupleDoc = nest 2 . parens . punctuate (comma <> linebreak)
 
 listDoc :: [Doc] -> Doc
 listDoc = nest 2 . brackets . punctuate (comma <> linebreak)
