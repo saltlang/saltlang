@@ -2393,8 +2393,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Field where
   xpickle = xpWrap (\((sym, pos), val) -> Field { fieldName = sym,
-                                                    fieldVal = val,
-                                                    fieldPos = pos },
+                                                  fieldVal = val,
+                                                  fieldPos = pos },
                     \Field { fieldName = sym, fieldVal = val,
                              fieldPos = pos } -> ((sym, pos), val))
                    (xpElem (gxFromString "Field")
