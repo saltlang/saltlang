@@ -44,6 +44,7 @@ import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
 import Data.Position
+import Data.List(sort)
 import Data.Symbol
 import Data.Word
 import Language.Salt.Surface.Common
@@ -68,7 +69,7 @@ data Syntax =
     -- | Precedence relations.
     syntaxPrecs :: ![(Ordering, Exp)]
   }
-  deriving Eq
+  deriving (Ord, Eq)
 
 -- | Truths.  These are similar to declarations, except that they
 -- affect the proof environment.  These include theorems and
@@ -488,11 +489,9 @@ instance Eq Exp where
     Project { projectVal = val2, projectFields = names2 } =
       names1 == names2 && val1 == val2
   Sym { symName = sym1 } == Sym { symName = sym2 } = sym1 == sym2
-    -- | A with expression.  Represents currying.
   With { withVal = val1, withArgs = args1 } ==
     With { withVal = val2, withArgs = args2 } =
       val1 == val2 && args1 == args2
-    -- | Where expression.  Constructs refinement types.
   Where { whereVal = val1, whereProp = prop1 } ==
     Where { whereVal = val2, whereProp = prop2 } =
       val1 == val2 && prop1 == prop2
@@ -522,6 +521,259 @@ instance Eq Case where
     Case { casePat = pat2, caseBody = body2 } =
       pat1 == pat2 && body1 == body2
 
+instance Ord Truth where
+  compare Truth { truthKind = kind1, truthVisibility = vis1,
+                  truthContent = content1 }
+          Truth { truthKind = kind2, truthVisibility = vis2,
+                  truthContent = content2 } =
+    case compare kind1 kind2 of
+      EQ -> case compare vis1 vis2 of
+        EQ -> compare content1 content2
+        out -> out
+      out -> out
+
+instance Ord Scope where
+  compare Scope { scopeBuilders = builders1, scopeSyntax = syntax1,
+                  scopeTruths = truths1, scopeElems = defs1,
+                  scopeProofs = proofs1 }
+          Scope { scopeBuilders = builders2, scopeSyntax = syntax2,
+                  scopeTruths = truths2, scopeElems = defs2,
+                  scopeProofs = proofs2 } =
+    let
+      builderlist1 = sort (HashMap.toList builders1)
+      builderlist2 = sort (HashMap.toList builders2)
+      truthlist1 = sort (HashMap.toList truths1)
+      truthlist2 = sort (HashMap.toList truths2)
+      syntaxlist1 = sort (HashMap.toList syntax1)
+      syntaxlist2 = sort (HashMap.toList syntax2)
+    in
+      case compare builderlist1 builderlist2 of
+        EQ -> case compare syntaxlist1 syntaxlist2 of
+          EQ -> case compare truthlist1 truthlist2 of
+            EQ -> case compare defs1 defs2 of
+              EQ -> compare proofs1 proofs2
+              out -> out
+            out -> out
+          out -> out
+        out -> out
+
+instance Ord Builder where
+  compare Builder { builderKind = kind1, builderVisibility = vis1,
+                    builderParams = params1, builderSuperTypes = supers1,
+                    builderContent = content1 }
+          Builder { builderKind = kind2, builderVisibility = vis2,
+                    builderParams = params2, builderSuperTypes = supers2,
+                    builderContent = content2 } =
+    case compare kind1 kind2 of
+      EQ -> case compare vis1 vis2 of
+        EQ -> case compare params1 params2 of
+          EQ -> case compare supers1 supers2 of
+            EQ -> compare content1 content2
+            out -> out
+          out -> out
+        out -> out
+      out -> out
+
+instance Ord Proof where
+  compare Proof { proofName = name1, proofBody = body1 }
+          Proof { proofName = name2, proofBody = body2 } =
+    case compare name1 name2 of
+      EQ -> compare body1 body2
+      out -> out
+
+instance Ord Element where
+  compare Def { defPattern = pat1, defInit = init1 }
+          Def { defPattern = pat2, defInit = init2 } =
+    case compare pat1 pat2 of
+      EQ -> compare init1 init2
+      out -> out
+  compare Def {} _ = LT
+  compare _ Def {} = GT
+  compare Import { importExp = exp1 } Import { importExp = exp2 } =
+    compare exp1 exp2
+
+instance Ord Compound where
+  compare (Exp exp1) (Exp exp2) = compare exp1 exp2
+  compare (Exp _) _ = LT
+  compare _ (Exp _) = GT
+  compare (Element elem1) (Element elem2) = compare elem1 elem2
+  compare (Element _) _ = LT
+  compare _ (Element _) = GT
+  compare Dynamic { dynamicName = name1, dynamicTruth = truth1 }
+          Dynamic { dynamicName = name2, dynamicTruth = truth2 } =
+    case compare name1 name2 of
+      EQ -> compare truth1 truth2
+      out -> out
+  compare Dynamic {} _ = LT
+  compare _ Dynamic {} = GT
+  compare Local { localName = name1, localBuilder = builder1 }
+          Local { localName = name2, localBuilder = builder2 } =
+    case compare name1 name2 of
+      EQ -> compare builder1 builder2
+      out -> out
+
+instance Ord Pattern where
+  compare Option { optionPats = pats1 } Option { optionPats = pats2 } =
+    compare pats1 pats2
+  compare Option {} _ = LT
+  compare _ Option {} = GT
+  compare Deconstruct { deconstructName = name1, deconstructPat = pat1 }
+          Deconstruct { deconstructName = name2, deconstructPat = pat2 } =
+    case compare name1 name2 of
+      EQ -> compare pat1 pat2
+      out -> out
+  compare Deconstruct {} _ = LT
+  compare _ Deconstruct {} = GT
+  compare Split { splitFields = fields1, splitStrict = strict1 }
+          Split { splitFields = fields2, splitStrict = strict2 } =
+    let
+      fieldlist1 = sort (HashMap.toList fields1)
+      fieldlist2 = sort (HashMap.toList fields2)
+    in
+      case compare strict1 strict2 of
+        EQ -> compare fieldlist1 fieldlist2
+        out -> out
+  compare Split {} _ = LT
+  compare _ Split {} = GT
+  compare Typed { typedPat = pat1, typedType = ty1 }
+          Typed { typedPat = pat2, typedType = ty2 } =
+    case compare pat1 pat2 of
+      EQ -> compare ty1 ty2
+      out -> out
+  compare Typed {} _ = LT
+  compare _ Typed {} = GT
+  compare As { asName = name1, asPat = pat1 }
+          As { asName = name2, asPat = pat2 } =
+    case compare name1 name2 of
+      EQ -> compare pat1 pat2
+      out -> out
+  compare As {} _ = LT
+  compare _ As {} = GT
+  compare Name { nameSym = name1 } Name { nameSym = name2 } =
+    compare name1 name2
+  compare Name {} _ = LT
+  compare _ Name {} = GT
+  compare (Exact lit1) (Exact lit2) = compare lit1 lit2
+
+instance Ord Exp where
+  compare Compound { compoundSyntax = syntax1, compoundProofs = proofs1,
+                     compoundBody = body1 }
+          Compound { compoundSyntax = syntax2, compoundProofs = proofs2,
+                     compoundBody = body2 } =
+    let
+      syntaxlist1 = sort (HashMap.toList syntax1)
+      syntaxlist2 = sort (HashMap.toList syntax2)
+    in case compare syntaxlist1 syntaxlist2 of
+      EQ -> case compare proofs1 proofs2 of
+        EQ -> compare body1 body2
+        out -> out
+      out -> out
+  compare Compound {} _ = LT
+  compare _ Compound {} = GT
+  compare Abs { absKind = kind1, absCases = cases1 }
+          Abs { absKind = kind2, absCases = cases2 } =
+    case compare kind1 kind2 of
+      EQ -> compare cases1 cases2
+      out -> out
+  compare Abs {} _ = LT
+  compare _ Abs {} = GT
+  compare Match { matchVal = val1, matchCases = cases1 }
+          Match { matchVal = val2, matchCases = cases2 } =
+    case compare val1 val2 of
+      EQ -> compare cases1 cases2
+      out -> out
+  compare Match {} _ = LT
+  compare _ Match {} = GT
+  compare Ascribe { ascribeVal = val1, ascribeType = ty1 }
+          Ascribe { ascribeVal = val2, ascribeType = ty2 } =
+    case compare val1 val2 of
+      EQ -> compare ty1 ty2
+      out -> out
+  compare Ascribe {} _ = LT
+  compare _ Ascribe {} = GT
+  compare Seq { seqExps = exps1 } Seq { seqExps = exps2 } = compare exps1 exps2
+  compare Seq {} _ = LT
+  compare _ Seq {} = GT
+  compare RecordType { recordTypeFields = fields1 }
+          RecordType { recordTypeFields = fields2 } =
+    compare fields1 fields2
+  compare RecordType {} _ = LT
+  compare _ RecordType {} = GT
+  compare Record { recordFields = fields1 } Record { recordFields = fields2 } =
+    let
+      fieldlist1 = sort (HashMap.toList fields1)
+      fieldlist2 = sort (HashMap.toList fields2)
+    in
+      compare fieldlist1 fieldlist2
+  compare Record {} _ = LT
+  compare _ Record {} = GT
+  compare Tuple { tupleFields = fields1 } Tuple { tupleFields = fields2 } =
+    compare fields1 fields2
+  compare Tuple {} _ = LT
+  compare _ Tuple {} = GT
+  compare Project { projectVal = val1, projectFields = names1 }
+          Project { projectVal = val2, projectFields = names2 } =
+    case compare names1 names2 of
+      EQ -> compare val1 val2
+      out -> out
+  compare Project {} _ = LT
+  compare _ Project {} = GT
+  compare Sym { symName = sym1 } Sym { symName = sym2 } = compare sym1 sym2
+  compare Sym {} _ = LT
+  compare _ Sym {} = GT
+  compare With { withVal = val1, withArgs = args1 }
+          With { withVal = val2, withArgs = args2 } =
+    case compare val1 val2 of
+      EQ -> compare args1 args2
+      out -> out
+  compare With {} _ = LT
+  compare _ With {} = GT
+  compare Where { whereVal = val1, whereProp = prop1 }
+          Where { whereVal = val2, whereProp = prop2 } =
+    case compare val1 val2 of
+      EQ -> compare prop1 prop2
+      out -> out
+  compare Where {} _ = LT
+  compare _ Where {} = GT
+  compare Anon { anonKind = kind1, anonSuperTypes = supers1,
+                 anonParams = fields1, anonContent = content1 }
+          Anon { anonKind = kind2, anonSuperTypes = supers2,
+                 anonParams = fields2, anonContent = content2 } =
+    case compare kind1 kind2 of
+      EQ -> case compare supers1 supers2 of
+        EQ -> case compare fields1 fields2 of
+          EQ -> compare content1 content2
+          out -> out
+        out -> out
+      out -> out
+  compare Anon {} _ = LT
+  compare _ Anon {} = GT
+  compare (Literal lit1) (Literal lit2) = compare lit1 lit2
+
+instance Ord Entry where
+  compare Entry { entryPat = pat1 } Entry { entryPat = pat2 } =
+    compare pat1 pat2
+
+instance Ord Fields where
+  compare Fields { fieldsBindings = bindings1, fieldsOrder = order1 }
+          Fields { fieldsBindings = bindings2, fieldsOrder = order2 } =
+    let
+      binds1 = map (\sym -> (sym, HashMap.lookup sym bindings1)) (elems order1)
+      binds2 = map (\sym -> (sym, HashMap.lookup sym bindings2)) (elems order2)
+    in
+      compare binds1 binds2
+
+instance Ord Field where
+  compare Field { fieldVal = val1 } Field { fieldVal = val2 } =
+    compare val1 val2
+
+instance Ord Case where
+  compare Case { casePat = pat1, caseBody = body1 }
+          Case { casePat = pat2, caseBody = body2 } =
+    case compare pat1 pat2 of
+      EQ -> compare body1 body2
+      out -> out
+
 instance Hashable Assoc where
   hashWithSalt s = hashWithSalt s . fromEnum
 
@@ -530,6 +782,128 @@ instance Hashable Fixity where
   hashWithSalt s (Infix assoc) =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` assoc
   hashWithSalt s Postfix = hashWithSalt s (2 :: Int)
+
+instance Hashable Syntax where
+  hashWithSalt s Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
+    s `hashWithSalt` fixity `hashWithSalt` precs
+
+instance Hashable Truth where
+  hashWithSalt s Truth { truthKind = kind, truthVisibility = vis,
+                         truthContent = content } =
+    s `hashWithSalt` kind `hashWithSalt` vis `hashWithSalt` content
+
+instance Hashable Scope where
+  hashWithSalt s Scope { scopeBuilders = builders, scopeSyntax = syntax,
+                         scopeTruths = truths, scopeElems = defs,
+                         scopeProofs = proofs } =
+    let
+      builderlist = sort (HashMap.toList builders)
+      truthlist = sort (HashMap.toList truths)
+      syntaxlist = sort (HashMap.toList syntax)
+    in
+      s `hashWithSalt` builderlist `hashWithSalt` syntaxlist `hashWithSalt`
+      truthlist `hashWithSalt` elems defs `hashWithSalt` proofs
+
+instance Hashable Builder where
+  hashWithSalt s Builder { builderKind = kind, builderVisibility = vis,
+                           builderParams = params, builderSuperTypes = supers,
+                           builderContent = content } =
+    s `hashWithSalt` kind `hashWithSalt` vis `hashWithSalt`
+    params `hashWithSalt` supers `hashWithSalt` content
+
+instance Hashable Proof where
+  hashWithSalt s Proof { proofName = sym, proofBody = body } =
+    s `hashWithSalt` sym `hashWithSalt` body
+
+instance Hashable Element where
+  hashWithSalt s Def { defPattern = pat, defInit = init } =
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` pat `hashWithSalt` init
+  hashWithSalt s Import { importExp = exp } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` exp
+
+instance Hashable Compound where
+  hashWithSalt s (Exp exp) = s `hashWithSalt` (0 :: Int) `hashWithSalt` exp
+  hashWithSalt s (Element e) =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` e
+  hashWithSalt s Dynamic { dynamicName = sym, dynamicTruth = truth } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` sym `hashWithSalt` truth
+  hashWithSalt s Local { localName = sym, localBuilder = builder } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` sym `hashWithSalt` builder
+
+instance Hashable Pattern where
+  hashWithSalt s Option { optionPats = pats } =
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` pats
+  hashWithSalt s Deconstruct { deconstructName = sym, deconstructPat = pat } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` sym `hashWithSalt` pat
+  hashWithSalt s Split { splitFields = fields, splitStrict = strict } =
+    let
+      fieldlist = sort (HashMap.toList fields)
+    in
+      s `hashWithSalt` (2 :: Int) `hashWithSalt` fieldlist `hashWithSalt` strict
+  hashWithSalt s Typed { typedPat = pat, typedType = ty } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` pat `hashWithSalt` ty
+  hashWithSalt s As { asName = sym, asPat = pat } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` sym `hashWithSalt` pat
+  hashWithSalt s Name { nameSym = sym } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` sym
+  hashWithSalt s (Exact lit) = s `hashWithSalt` (6 :: Int) `hashWithSalt` lit
+
+instance Hashable  Exp where
+  hashWithSalt s Compound { compoundSyntax = syntax, compoundProofs = proofs,
+                            compoundBody = body } =
+    let
+      syntaxlist = sort (HashMap.toList syntax)
+    in
+      s `hashWithSalt` (1 :: Int) `hashWithSalt` syntaxlist `hashWithSalt`
+      proofs `hashWithSalt` body
+  hashWithSalt s Abs { absKind = kind, absCases = cases } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` kind `hashWithSalt` cases
+  hashWithSalt s Match { matchVal = val, matchCases = cases } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` val `hashWithSalt` cases
+  hashWithSalt s Ascribe { ascribeVal = val, ascribeType = ty } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` val `hashWithSalt` ty
+  hashWithSalt s Seq { seqExps = exps } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` exps
+  hashWithSalt s Record { recordFields = fields } =
+    let
+      fieldlist = sort (HashMap.toList fields)
+    in
+      s `hashWithSalt` (6 :: Int) `hashWithSalt` fieldlist
+  hashWithSalt s RecordType { recordTypeFields = fields } =
+    s `hashWithSalt` (7 :: Int) `hashWithSalt` fields
+  hashWithSalt s Tuple { tupleFields = fields } =
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` fields
+  hashWithSalt s Project { projectVal = val, projectFields = sym } =
+    s `hashWithSalt` (9 :: Int) `hashWithSalt` sym `hashWithSalt` val
+  hashWithSalt s Sym { symName = sym } =
+    s `hashWithSalt` (10 :: Int) `hashWithSalt` sym
+  hashWithSalt s With { withVal = val, withArgs = args } =
+    s `hashWithSalt` (11 :: Int) `hashWithSalt` val `hashWithSalt` args
+  hashWithSalt s Where { whereVal = val, whereProp = prop } =
+    s `hashWithSalt` (12 :: Int) `hashWithSalt` val `hashWithSalt` prop
+  hashWithSalt s Anon { anonKind = cls, anonParams = params,
+                        anonSuperTypes = supers, anonContent = body } =
+    s `hashWithSalt` (13 :: Int) `hashWithSalt` cls `hashWithSalt`
+    params `hashWithSalt` supers `hashWithSalt` body
+  hashWithSalt s (Literal lit) =
+    s `hashWithSalt` (14 :: Int) `hashWithSalt` lit
+
+instance Hashable Entry where
+  hashWithSalt s Entry { entryPat = pat } = s `hashWithSalt` pat
+
+instance Hashable Fields where
+  hashWithSalt s Fields { fieldsBindings = bindings, fieldsOrder = order } =
+    let
+      binds = map (\sym -> (sym, HashMap.lookup sym bindings)) (elems order)
+    in
+      s `hashWithSalt` binds
+
+instance Hashable Field where
+  hashWithSalt s = hashWithSalt s . fieldVal
+
+instance Hashable Case where
+  hashWithSalt s Case { casePat = pat, caseBody = body } =
+    s `hashWithSalt` pat `hashWithSalt` body
 
 instance Format Assoc where format = string . show
 instance Format Fixity where format = string . show
