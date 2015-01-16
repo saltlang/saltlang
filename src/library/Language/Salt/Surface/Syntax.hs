@@ -47,8 +47,10 @@ import Data.Position
 import Data.Symbol
 import Data.Word
 import Language.Salt.Surface.Common
-import Prelude hiding (init, exp)
+import Prelude hiding (init, exp, Either(..))
 import Text.FormatM
+import Text.XML.Expat.Pickle
+import Text.XML.Expat.Tree(NodeG)
 
 import qualified Data.HashMap.Strict as HashMap
 
@@ -896,3 +898,609 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
                              [(string "pos", posdoc),
                               (string "pattern", patdoc),
                               (string "body", bodydoc)])
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler (Attributes tag text) Assoc where
+  xpickle = xpAlt fromEnum
+                  [xpWrap (const Left, const ())
+                          (xpAttrFixed (gxFromString "assoc")
+                                       (gxFromString "Left")),
+                   xpWrap (const Right, const ())
+                          (xpAttrFixed (gxFromString "assoc")
+                                       (gxFromString "Right")),
+                   xpWrap (const NonAssoc, const ())
+                          (xpAttrFixed (gxFromString "assoc")
+                                       (gxFromString "NonAssoc"))]
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler (Attributes tag text) Fixity where
+  xpickle =
+    let
+      picker Prefix = 0
+      picker (Infix _) = 1
+      picker Postfix = 2
+
+      unpackInfix (Infix a) = ((), Just a)
+      unpackInfix _ = error "Can't unpack"
+
+      packInfix ((), Just a) = Infix a
+      packInfix _ = error "Need associativity for infix"
+    in
+      xpAlt picker [xpWrap (const Prefix, const ((), Nothing))
+                           (xpPair (xpAttrFixed (gxFromString "fixity")
+                                                (gxFromString "Prefix"))
+                                   (xpOption xpZero)),
+                    xpWrap (packInfix, unpackInfix)
+                           (xpPair (xpAttrFixed (gxFromString "fixity")
+                                                (gxFromString "Infix"))
+                                   (xpOption xpickle)),
+                    xpWrap (const Postfix, const ((), Nothing))
+                           (xpPair (xpAttrFixed (gxFromString "fixity")
+                                                (gxFromString "Postfix"))
+                                   (xpOption xpZero))]
+
+precPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] (Ordering, Exp)
+precPickler = xpElem (gxFromString "prec")
+                     (xpAttr (gxFromString "order") xpPrim) xpickle
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Syntax where
+  xpickle =
+    xpWrap (\(fixity, precs) -> Syntax { syntaxFixity = fixity,
+                                         syntaxPrecs = precs },
+            \Syntax { syntaxFixity = fixity, syntaxPrecs = precs } ->
+            (fixity, precs))
+           (xpElem (gxFromString "Syntax") xpickle (xpList precPickler))
+
+mapPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler (Attributes tag text) key,
+               XmlPickler [NodeG [] tag text] val,
+               Hashable key, Eq key) =>
+              PU [NodeG [] tag text] (HashMap key val)
+mapPickler = xpWrap (HashMap.fromList, HashMap.toList)
+                    (xpElemNodes (gxFromString "Map")
+                                 (xpList (xpElem (gxFromString "entry")
+                                                 xpickle xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Truth where
+  xpickle =
+    xpWrap (\((vis, kind, pos), body) ->
+             Truth { truthVisibility = vis, truthContent = body,
+                     truthKind = kind, truthPos = pos },
+            \Truth { truthVisibility = vis, truthKind = kind,
+                    truthContent = body, truthPos = pos } ->
+              ((vis, kind, pos), body))
+           (xpElem (gxFromString "Truth") (xpTriple xpickle xpickle xpickle)
+                   (xpElemNodes (gxFromString "type") xpickle))
+
+defsPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] (Array Visibility [Element])
+defsPickler =
+  xpWrap (\(hiddens, privates, protecteds, publics) ->
+           listArray (Hidden, Public) [hiddens, privates, protecteds, publics],
+          \arr -> (arr ! Hidden, arr ! Private, arr ! Protected, arr ! Public))
+         (xpElemNodes (gxFromString "defs")
+                      (xp4Tuple (xpElemNodes (gxFromString "hidden")
+                                             (xpList xpickle))
+                                (xpElemNodes (gxFromString "private")
+                                             (xpList xpickle))
+                                (xpElemNodes (gxFromString "protected")
+                                             (xpList xpickle))
+                                (xpElemNodes (gxFromString "public")
+                                             (xpList xpickle))))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Scope where
+  xpickle =
+    xpWrap (\(builders, syntax, truths, defs, proofs) ->
+             Scope { scopeBuilders = builders, scopeSyntax = syntax,
+                     scopeTruths = truths, scopeElems = defs,
+                     scopeProofs = proofs },
+            \Scope { scopeBuilders = builders, scopeSyntax = syntax,
+                     scopeTruths = truths, scopeElems = defs,
+                     scopeProofs = proofs } ->
+            (builders, syntax, truths, defs, proofs))
+           (xpElemNodes (gxFromString "Scope")
+                        (xp5Tuple mapPickler mapPickler mapPickler
+                                  defsPickler (xpList xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Builder where
+  xpickle =
+    xpWrap (\((vis, kind, pos), (params, supers, body)) ->
+             Builder { builderVisibility = vis, builderKind = kind,
+                       builderParams = params, builderSuperTypes = supers,
+                       builderContent = body, builderPos = pos },
+            \Builder { builderVisibility = vis, builderKind = kind,
+                       builderParams = params, builderSuperTypes = supers,
+                       builderContent = body, builderPos = pos } ->
+            ((vis, kind, pos), (params, supers, body)))
+           (xpElem (gxFromString "Builder")
+                   (xpTriple xpickle xpickle xpickle)
+                   (xpTriple (xpElemNodes (gxFromString "params") xpickle)
+                             (xpElemNodes (gxFromString "supers") xpickle)
+                             (xpElemNodes (gxFromString "body") xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Proof where
+  xpickle = xpWrap (\(pos, (pname, body)) -> Proof { proofName = pname,
+                                                     proofBody = body,
+                                                     proofPos = pos },
+                    \Proof { proofName = pname, proofBody = body,
+                             proofPos = pos } -> (pos, (pname, body)))
+                   (xpElem (gxFromString "Proof") xpickle
+                           (xpPair (xpElemNodes (gxFromString "name") xpickle)
+                                   (xpElemNodes (gxFromString "type") xpickle)))
+
+defPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Element
+defPickler =
+  let
+    revfunc Def { defPattern = pat, defInit = init, defPos = pos } =
+      (pos, (pat, init))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (pat, init)) -> Def { defPattern = pat, defInit = init,
+                                         defPos = pos }, revfunc)
+           (xpElem (gxFromString "Def") xpickle
+                   (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
+                           (xpOption (xpElemNodes (gxFromString "init")
+                                                  xpickle))))
+
+importPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Element
+importPickler =
+  let
+    revfunc Import { importExp = exp, importPos = pos } = (pos, exp)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, exp) -> Import { importExp = exp, importPos = pos }, revfunc)
+           (xpElem (gxFromString "Import") xpickle
+                   (xpElemNodes (gxFromString "name") xpickle))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Element where
+  xpickle =
+    let
+      picker Def {} = 0
+      picker Import {} = 1
+    in
+      xpAlt picker [ defPickler, importPickler ]
+
+expPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Compound
+expPickler =
+  let
+    revfunc (Exp e) = e
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Exp, revfunc) (xpElemNodes (gxFromString "Exp") xpickle)
+
+elementPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Compound
+elementPickler =
+  let
+    revfunc (Element e) = e
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Element, revfunc) (xpElemNodes (gxFromString "Element") xpickle)
+
+dynamicPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Compound
+dynamicPickler =
+  let
+    revfunc (Dynamic { dynamicName = sym, dynamicTruth = truth }) = (sym, truth)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(sym, truth) -> Dynamic { dynamicName = sym,
+                                       dynamicTruth = truth }, revfunc)
+           (xpElem (gxFromString "Dynamic") xpickle xpickle)
+
+localPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Compound
+localPickler =
+  let
+    revfunc (Local { localName = sym, localBuilder = builder }) = (sym, builder)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(sym, builder) -> Local { localName = sym,
+                                       localBuilder = builder }, revfunc)
+           (xpElem (gxFromString "Local") xpickle xpickle)
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Compound where
+  xpickle =
+    let
+      picker (Exp _) = 0
+      picker (Element _) = 1
+      picker Dynamic {} = 2
+      picker Local {} = 3
+    in
+      xpAlt picker [expPickler, elementPickler, dynamicPickler, localPickler]
+
+optionPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text) =>
+                 PU [NodeG [] tag text] Pattern
+optionPickler =
+  let
+    revfunc Option { optionPats = pats, optionPos = pos } = (pos, pats)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, pats) -> Option { optionPats = pats,
+                                     optionPos = pos }, revfunc)
+           (xpElem (gxFromString "Option") xpickle
+                   (xpElemNodes (gxFromString "patterns") xpickle))
+
+deconstructPickler :: (GenericXMLString tag, Show tag,
+                       GenericXMLString text, Show text) =>
+                      PU [NodeG [] tag text] Pattern
+deconstructPickler =
+  let
+    revfunc Deconstruct { deconstructName = sym, deconstructPat = pat,
+                          deconstructPos = pos } =
+      ((sym, pos), pat)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((sym, pos), pat) -> Deconstruct { deconstructName = sym,
+                                                 deconstructPat = pat,
+                                                 deconstructPos = pos },
+            revfunc)
+           (xpElem (gxFromString "Deconstruct") (xpPair xpickle xpickle)
+                   (xpElemNodes (gxFromString "pattern") xpickle))
+
+splitPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Pattern
+splitPickler =
+  let
+    revfunc Split { splitStrict = strict, splitFields = fields,
+                    splitPos = pos } =
+      ((strict, pos), fields)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((strict, pos), fields) -> Split { splitStrict = strict,
+                                                splitFields = fields,
+                                                splitPos = pos }, revfunc)
+           (xpElem (gxFromString "Split")
+                   (xpPair (xpAttr (gxFromString "strict") xpPrim) xpickle)
+                   (xpElemNodes (gxFromString "fields") mapPickler))
+
+typedPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Pattern
+typedPickler =
+  let
+    revfunc Typed { typedPat = pat, typedType = ty, typedPos = pos } =
+      (pos, (pat, ty))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (pat, ty)) -> Typed { typedPat = pat, typedType = ty,
+                                         typedPos = pos }, revfunc)
+           (xpElem (gxFromString "Typed") xpickle
+                   (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
+                           (xpElemNodes (gxFromString "type") xpickle)))
+
+asPickler :: (GenericXMLString tag, Show tag,
+              GenericXMLString text, Show text) =>
+             PU [NodeG [] tag text] Pattern
+asPickler =
+  let
+    revfunc As { asName = sym, asPat = pat, asPos = pos } = ((sym, pos), pat)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((sym, pos), pat) -> As { asName = sym, asPat = pat,
+                                        asPos = pos }, revfunc)
+           (xpElem (gxFromString "As") (xpPair xpickle xpickle)
+                   (xpElemNodes (gxFromString "pattern") xpickle))
+
+namePickler :: (GenericXMLString tag, Show tag,
+              GenericXMLString text, Show text) =>
+             PU [NodeG [] tag text] Pattern
+namePickler =
+  let
+    revfunc Name { nameSym = sym, namePos = pos } = (sym, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(sym, pos) -> Name { nameSym = sym, namePos = pos }, revfunc)
+           (xpElemAttrs (gxFromString "Name") (xpPair xpickle xpickle))
+
+exactPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Pattern
+exactPickler =
+  let
+    revfunc (Exact v) = v
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Exact, revfunc) (xpElemNodes (gxFromString "Exact") xpickle)
+
+compoundPickler :: (GenericXMLString tag, Show tag,
+                    GenericXMLString text, Show text) =>
+                   PU [NodeG [] tag text] Exp
+compoundPickler =
+  let
+    revfunc Compound { compoundSyntax = syntax, compoundProofs = proofs,
+                       compoundBody = body, compoundPos = pos } =
+      (pos, (syntax, proofs, body))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (syntax, proofs, body)) ->
+             Compound { compoundSyntax = syntax, compoundProofs = proofs,
+                        compoundBody = body, compoundPos = pos }, revfunc)
+           (xpElem (gxFromString "Compound") xpickle
+                   (xpTriple (xpElemNodes (gxFromString "syntax")
+                                          mapPickler)
+                             (xpElemNodes (gxFromString "proofs")
+                                          (xpList xpickle))
+                             (xpElemNodes (gxFromString "body")
+                                          (xpList xpickle))))
+
+absPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Exp
+absPickler =
+  let
+    revfunc Abs { absKind = kind, absCases = cases, absPos = pos } =
+      ((kind, pos), cases)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((kind, pos), cases) -> Abs { absKind = kind, absCases = cases,
+                                           absPos = pos }, revfunc)
+           (xpElem (gxFromString "Abs") (xpPair xpickle xpickle)
+                   (xpElemNodes (gxFromString "fields") xpickle))
+
+matchPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Exp
+matchPickler =
+  let
+    revfunc Match { matchVal = val, matchCases = cases, matchPos = pos } =
+      (pos, (val, cases))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (val, cases)) -> Match { matchVal = val, matchCases = cases,
+                                            matchPos = pos }, revfunc)
+           (xpElem (gxFromString "Match") xpickle
+                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
+                           (xpElemNodes (gxFromString "cases") xpickle)))
+
+ascribePickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Exp
+ascribePickler =
+  let
+    revfunc Ascribe { ascribeVal = val, ascribeType = ty, ascribePos = pos } =
+      (pos, (val, ty))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (val, ty)) -> Ascribe { ascribeVal = val,
+                                           ascribeType = ty,
+                                           ascribePos = pos }, revfunc)
+           (xpElem (gxFromString "Ascribe") xpickle
+                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
+                           (xpElemNodes (gxFromString "type") xpickle)))
+
+seqPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Exp
+seqPickler =
+  let
+    revfunc Seq { seqExps = exps, seqPos = pos } = (pos, exps)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, exps) -> Seq { seqExps = exps, seqPos = pos }, revfunc)
+           (xpElem (gxFromString "Seq") xpickle (xpList xpickle))
+
+recordPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Exp
+recordPickler =
+  let
+    revfunc Record { recordFields = fields, recordPos = pos } = (pos, fields)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, fields) -> Record { recordFields = fields,
+                                       recordPos = pos }, revfunc)
+           (xpElem (gxFromString "Record") xpickle
+                   (xpElemNodes (gxFromString "fields") mapPickler))
+
+recordTypePickler :: (GenericXMLString tag, Show tag,
+                      GenericXMLString text, Show text) =>
+                     PU [NodeG [] tag text] Exp
+recordTypePickler =
+  let
+    revfunc RecordType { recordTypeFields = fields,
+                         recordTypePos = pos } = (pos, fields)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, fields) -> RecordType { recordTypeFields = fields,
+                                           recordTypePos = pos }, revfunc)
+           (xpElem (gxFromString "Record") xpickle
+                   (xpElemNodes (gxFromString "fields") xpickle))
+
+tuplePickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Exp
+tuplePickler =
+  let
+    revfunc Tuple { tupleFields = fields, tuplePos = pos } = (pos, fields)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, fields) -> Tuple { tupleFields = fields,
+                                      tuplePos = pos }, revfunc)
+           (xpElem (gxFromString "Record") xpickle
+                   (xpElemNodes (gxFromString "fields") xpickle))
+
+projectPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Exp
+projectPickler =
+  let
+    revfunc Project { projectFields = fields, projectVal = val,
+                      projectPos = pos } = (pos, (fields, val))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (fields, val)) -> Project { projectFields = fields,
+                                                 projectVal = val,
+                                                 projectPos = pos }, revfunc)
+           (xpElem (gxFromString "Project") xpickle
+                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
+                           (xpElemNodes (gxFromString "fields") xpickle)))
+
+symPickler :: (GenericXMLString tag, Show tag,
+              GenericXMLString text, Show text) =>
+             PU [NodeG [] tag text] Exp
+symPickler =
+  let
+    revfunc Sym { symName = sym, symPos = pos } = (sym, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(sym, pos) -> Sym { symName = sym, symPos = pos }, revfunc)
+           (xpElemAttrs (gxFromString "Sym") (xpPair xpickle xpickle))
+
+withPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Exp
+withPickler =
+  let
+    revfunc With { withVal = val, withArgs = args, withPos = pos } =
+      (pos, (val, args))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (val, args)) -> With { withVal = val, withArgs = args,
+                                          withPos = pos }, revfunc)
+           (xpElem (gxFromString "With") xpickle
+                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
+                           (xpElemNodes (gxFromString "args") xpickle)))
+
+wherePickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Exp
+wherePickler =
+  let
+    revfunc Where { whereVal = val, whereProp = prop, wherePos = pos } =
+      (pos, (val, prop))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pos, (val, prop)) -> Where { whereVal = val, whereProp = prop,
+                                           wherePos = pos }, revfunc)
+           (xpElem (gxFromString "Where") xpickle
+                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
+                           (xpElemNodes (gxFromString "prop") xpickle)))
+
+anonPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Exp
+anonPickler =
+  let
+    revfunc Anon { anonKind = kind, anonParams = params, anonContent = body,
+                   anonSuperTypes = supers, anonPos = pos } =
+      ((kind, pos), (params, supers, body))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((kind, pos), (params, supers, body)) ->
+             Anon { anonKind = kind, anonParams = params, anonContent = body,
+                    anonSuperTypes = supers, anonPos = pos }, revfunc)
+           (xpElem (gxFromString "Anon")
+                   (xpPair xpickle xpickle)
+                   (xpTriple (xpElemNodes (gxFromString "params") xpickle)
+                             (xpElemNodes (gxFromString "supers") xpickle)
+                             (xpElemNodes (gxFromString "body") xpickle)))
+
+literalPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Exp
+literalPickler =
+  let
+    revfunc (Literal v) = v
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Literal, revfunc) (xpElemNodes (gxFromString "Literal") xpickle)
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Exp where
+  xpickle =
+    let
+      picker Compound {} = 0
+      picker Abs {} = 1
+      picker Match {} = 2
+      picker Ascribe {} = 3
+      picker Seq {} = 4
+      picker Record {} = 5
+      picker RecordType {} = 6
+      picker Tuple {} = 7
+      picker Project {} = 8
+      picker Sym {} = 9
+      picker With {} = 10
+      picker Where {} = 11
+      picker Anon {} = 12
+      picker (Literal _) = 13
+    in
+      xpAlt picker [compoundPickler, absPickler, matchPickler, ascribePickler,
+                    seqPickler, recordPickler, recordTypePickler, tuplePickler,
+                    projectPickler, symPickler, withPickler, wherePickler,
+                    anonPickler, literalPickler]
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Pattern where
+  xpickle =
+    let
+      picker Option {} = 0
+      picker Deconstruct {} = 1
+      picker Split {} = 2
+      picker Typed {} = 3
+      picker As {} = 4
+      picker Name {} = 5
+      picker (Exact _) = 6
+    in
+      xpAlt picker [optionPickler, deconstructPickler, splitPickler,
+                    typedPickler, asPickler, namePickler, exactPickler]
+
+makeArray :: [a] -> Array Word a
+makeArray l = listArray (1, fromIntegral (length l)) l
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Entry where
+  xpickle = xpWrap (\(pos, pat) -> Entry { entryPat = pat, entryPos = pos },
+                    \Entry { entryPat = pat, entryPos = pos } -> (pos, pat))
+                   (xpElem (gxFromString "Entry") xpickle xpickle)
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Fields where
+  xpickle = xpWrap (\(bindings, order) ->
+                     Fields { fieldsBindings = bindings,
+                              fieldsOrder = makeArray order },
+                    \Fields { fieldsBindings = bindings,
+                              fieldsOrder = order } -> (bindings, elems order))
+                   (xpElemNodes (gxFromString "Fields")
+                                (xpPair mapPickler (xpList xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Field where
+  xpickle = xpWrap (\(pos, val) -> Field { fieldVal = val, fieldPos = pos },
+                    \Field { fieldVal = val, fieldPos = pos } -> (pos, val))
+                   (xpElem (gxFromString "Field") xpickle xpickle)
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Case where
+  xpickle = xpWrap (\(pos, (pat, exp)) -> Case { casePat = pat,
+                                                 caseBody = exp,
+                                                 casePos = pos },
+                    \Case { casePat = pat, caseBody = body, casePos = pos } ->
+                      (pos, (pat, body)))
+                   (xpElem (gxFromString "Case") xpickle
+                           (xpPair (xpElemNodes (gxFromString "pattern")
+                                                xpickle)
+                                   (xpElemNodes (gxFromString "body")
+                                                xpickle)))
