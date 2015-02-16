@@ -51,7 +51,8 @@ module Language.Salt.Message(
        cannotFindFile,
        cannotFindComponent,
        cannotAccessFile,
-       cannotAccessComponent
+       cannotAccessComponent,
+       badComponentName
        ) where
 
 import Control.Monad.Messages
@@ -214,6 +215,11 @@ data Message =
       -- | The position at which the file or component was referenced.
       cannotAccessPos :: !Position
     }
+  | BadComponentName {
+      badComponentNameExpected :: !Strict.ByteString,
+      badComponentNameActual :: !Strict.ByteString,
+      badComponentNamePos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -341,6 +347,11 @@ instance Hashable Message where
                                 cannotAccessPos = pos } =
     s `hashWithSalt` (28 :: Int) `hashWithSalt` cname `hashWithSalt`
     filename `hashWithSalt` msg `hashWithSalt` pos
+  hashWithSalt s BadComponentName { badComponentNameExpected = expected,
+                                    badComponentNameActual = actual,
+                                    badComponentNamePos = pos } =
+    s `hashWithSalt` (29 :: Int) `hashWithSalt`
+    expected `hashWithSalt` actual `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -372,6 +383,7 @@ instance Msg.Message Message where
   severity DuplicateBuilder {} = Msg.Error
   severity CannotFind {} = Msg.Error
   severity CannotAccess {} = Msg.Error
+  severity BadComponentName {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
   position BadEscape { badEscPos = pos } = Just pos
@@ -402,6 +414,7 @@ instance Msg.Message Message where
   position DuplicateBuilder { duplicateBuilderPos = pos } = Just pos
   position CannotFind { cannotFindPos = pos } = Just pos
   position CannotAccess { cannotAccessPos = pos } = Just pos
+  position BadComponentName { badComponentNamePos = pos } = Just pos
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -451,6 +464,7 @@ instance Msg.Message Message where
     string "Cannot access file " <+> dquoted (bytestring fname)
   brief CannotAccess { cannotAccessName = Just cname } =
     string "Cannot access component" <+> bytestring cname
+  brief BadComponentName {} = string "Component name mismatch"
 
   details LongCharLiteral {} =
     Just $! string "Use a string literal to represent multiple characters"
@@ -464,13 +478,19 @@ instance Msg.Message Message where
   details BadSyntaxRef {} = Just $! string "Expected a name here"
   details CannotAccess { cannotAccessName = Nothing,
                          cannotAccessMsg = msg } =
-    Just $! string "Error while accessing file:" <+> bytestring msg
+    Just $! string "Error while accessing file:" </> bytestring msg
   details CannotAccess { cannotAccessName = Just _,
                          cannotAccessFileName = fname,
                          cannotAccessMsg = msg } =
-    Just $! string "Error while accessing file" <+>
-            dquoted (bytestring fname) <+> colon <+>
-            bytestring msg
+    Just $! fillSep [ string "Error while accessing file",
+                      dquoted (bytestring fname) <> colon,
+                      bytestring msg ]
+  details BadComponentName { badComponentNameExpected = expected,
+                             badComponentNameActual = actual } =
+    Just $! fillSep [ string "Expected component named",
+                      bytestring expected <> comma,
+                      string "but actual name is",
+                      bytestring actual ]
   details _ = Nothing
 
   highlighting HardTabs {} = Msg.Background
@@ -761,3 +781,16 @@ cannotAccessComponent cname fname msg pos =
                          cannotAccessFileName = fname,
                          cannotAccessMsg = msg,
                          cannotAccessPos = pos }
+
+badComponentName :: MonadMessages Message m =>
+                    Strict.ByteString
+                 -- ^ The expected name.
+                 -> Strict.ByteString
+                 -- ^ The actual name.
+                 -> Position
+                 -- ^ The position of the component statement.
+                 -> m ()
+badComponentName expected actual pos =
+  message BadComponentName { badComponentNameExpected = expected,
+                             badComponentNameActual = actual,
+                             badComponentNamePos = pos }
