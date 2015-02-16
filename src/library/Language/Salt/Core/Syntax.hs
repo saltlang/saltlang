@@ -892,18 +892,12 @@ instance Traversable (Comp b) where
   traverse f c @ End { endCmd = cmd } =
     (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
   traverse _ (BadComp p) = pure (BadComp p)
-{-
-liftpos :: Pos
-liftpos = internal "Monad transformer lift"
--}
+
 injectpos :: Position
 injectpos = internal "Monad return"
 
-substpos :: Position
-substpos = internal "Monad substitution"
-
 instance MonadTrans (Pattern b) where
-  lift m = Constant m
+  lift = Constant
 
 instance Bound (Pattern b) where
   b @ Deconstruct { deconstructBinds = binds } >>>= f =
@@ -973,7 +967,7 @@ termSubstComp :: (a -> Comp c b) -> a -> Term c b
 termSubstComp f sym =
   case f sym of
     End { endCmd = Eval { evalTerm = term } } -> term
-    body -> Comp { compBody = body, compPos = substpos }
+    body @ Seq { seqPos = pos } -> Comp { compBody = body, compPos = pos }
 
 cmdSubstComp :: (a -> Comp c b) -> Cmd c a -> Cmd c b
 cmdSubstComp f c @ Value { valTerm = term } =
