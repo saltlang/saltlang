@@ -28,6 +28,7 @@ module Language.Salt.Surface.AST(
        TruthKind(..),
        Visibility(..),
        AST(..),
+       Component(..),
        Use(..),
        Group(..),
        Content(..),
@@ -69,12 +70,22 @@ import qualified Data.ByteString.UTF8 as Strict
 -- | Type of an AST.
 data AST =
   AST {
+    astComponent :: !(Maybe Component),
     -- | The headers.
     astUses :: ![Use],
     -- | The top-level scope.
     astScope :: ![Element]
   }
   deriving (Ord, Eq)
+
+-- | A component statement.
+data Component =
+  Component {
+    -- | The component name.
+    componentName :: ![Symbol],
+    -- | The position in source from which this arises.
+    componentPos :: !Position
+  }
 
 -- | Use directives.  These import content from another file.
 data Use =
@@ -451,6 +462,10 @@ expPosition (Literal l) = literalPosition l
 casePosition :: Case -> Position
 casePosition Case { casePos = pos } = pos
 
+instance Eq Component where
+  Component { componentName = name1 } == Component { componentName = name2 } =
+    name1 == name2
+
 instance Eq Use where
   Use { useName = name1 } == Use { useName = name2 } = name1 == name2
 
@@ -565,6 +580,11 @@ instance Eq Case where
   Case { caseBody = body1, casePat = pat1 } ==
     Case { caseBody = body2, casePat = pat2 } =
       body1 == body2 && pat1 == pat2
+
+instance Ord Component where
+  compare Component { componentName = name1 }
+          Component { componentName = name2 } =
+    compare name1 name2
 
 instance Ord Use where
   compare Use { useName = name1 } Use { useName = name2 } =
@@ -791,8 +811,12 @@ instance Ord Case where
         out -> out
 
 instance Hashable AST where
-  hashWithSalt s AST { astUses = uses, astScope = scope } =
-    s `hashWithSalt` uses `hashWithSalt` scope
+  hashWithSalt s AST { astComponent = component, astUses = uses,
+                       astScope = scope } =
+    s `hashWithSalt` component `hashWithSalt` uses `hashWithSalt` scope
+
+instance Hashable Component where
+  hashWithSalt s Component { componentName = cname } = s `hashWithSalt` cname
 
 instance Hashable Use where
   hashWithSalt s Use { useName = uname } = s `hashWithSalt` uname
@@ -889,15 +913,34 @@ instance Hashable Entry where
   hashWithSalt s (Unnamed e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
 
 astDot :: MonadSymbols m => AST -> m Doc
-astDot AST { astUses = uses, astScope = scope } =
+astDot AST { astComponent = Just component, astUses = uses, astScope = scope } =
   let
     astedge (_, nodename) = string "\"ast\":scope" <>
                             string "-> " <> dquoted (string nodename)
     astnode = string ("\"ast\" [ label = \"AST | <uses> uses | " ++
                       "<scope> scope\" shape = \"record\" ]")
   in do
-    (usecontents, _) <- runStateT (mapM useDot uses) 0
-    (contents, _) <- runStateT (mapM elementDot scope) 0
+    (componentcontents, aftercomponent) <- runStateT (componentDot component) 0
+    (usecontents, afteruses) <- runStateT (mapM useDot uses) aftercomponent
+    (contents, _) <- runStateT (mapM elementDot scope) afteruses
+    return (string "digraph g " <>
+            braces (line <>
+                    fst componentcontents <$>
+                    vcat (map fst usecontents) <$>
+                    vcat (map fst contents) <$>
+                    astnode <$>
+                    astedge componentcontents <$>
+                    vcat (map astedge usecontents) <$>
+                    vcat (map astedge contents) <> line))
+astDot AST { astComponent = Nothing, astUses = uses, astScope = scope } =
+  let
+    astedge (_, nodename) = string "\"ast\":scope" <>
+                            string "-> " <> dquoted (string nodename)
+    astnode = string ("\"ast\" [ label = \"AST | <uses> uses | " ++
+                      "<scope> scope\" shape = \"record\" ]")
+  in do
+    (usecontents, afteruses) <- runStateT (mapM useDot uses) 0
+    (contents, _) <- runStateT (mapM elementDot scope) afteruses
     return (string "digraph g " <>
             braces (line <>
                     vcat (map fst usecontents) <$>
@@ -905,6 +948,17 @@ astDot AST { astUses = uses, astScope = scope } =
                     astnode <$>
                     vcat (map astedge usecontents) <$>
                     vcat (map astedge contents) <> line))
+
+componentDot :: MonadSymbols m => Component -> StateT Word m (Doc, String)
+componentDot Component { componentName = cname } =
+  do
+    unames <- mapM formatM cname
+    nodeid <- getNodeID
+    return (dquoted (string nodeid) <+>
+            brackets (string "label = " <>
+                      dquoted (string "Component | " <>
+                               punctuate dot unames) <$>
+                      string "shape = \"record\"") <> char ';', nodeid)
 
 useDot :: MonadSymbols m => Use -> StateT Word m (Doc, String)
 useDot Use { useName = uname } =
@@ -1486,7 +1540,17 @@ caseDot Case { casePat = pat, caseBody = body } =
             string " -> " <> dquoted (string bodyname), nodeid)
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m AST where
-  formatM AST { astUses = uses, astScope = scope } =
+  formatM AST { astComponent = Just component,
+                astUses = uses, astScope = scope } =
+    do
+      componentdoc <- formatM component
+      usesdoc <- liftM listDoc (mapM formatM uses)
+      scopedoc <- liftM listDoc (mapM formatM scope)
+      return (constructorDoc (string "AST")
+                             [(string "component", componentdoc),
+                              (string "uses", usesdoc),
+                              (string "scope", scopedoc)])
+  formatM AST { astComponent = Nothing, astUses = uses, astScope = scope } =
     do
       usesdoc <- liftM listDoc (mapM formatM uses)
       scopedoc <- liftM listDoc (mapM formatM scope)
@@ -1494,6 +1558,15 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m AST where
                              [(string "uses", usesdoc),
                               (string "scope", scopedoc)])
 
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Component where
+  formatM Component { componentName = cname, componentPos = pos } =
+    do
+      posdoc <- formatM pos
+      unames <- mapM formatM cname
+      return (constructorDoc (string "Component")
+                             [(string "pos", posdoc),
+                              (string "name", punctuate dot unames)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Use where
   formatM Use { useName = uname, usePos = pos } =
@@ -1831,11 +1904,26 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] AST where
   xpickle =
-    xpWrap (\(uses, scope) -> AST { astUses = uses, astScope = scope },
-            \AST { astUses = uses, astScope = scope } -> (uses, scope))
+    xpWrap (\(component, uses, scope) -> AST { astComponent = component,
+                                               astUses = uses,
+                                               astScope = scope },
+            \AST { astComponent = component, astUses = uses,
+                   astScope = scope } -> (component, uses, scope))
            (xpElemNodes (gxFromString "AST")
-                        (xpPair (xpElemNodes (gxFromString "uses") xpickle)
-                                (xpElemNodes (gxFromString "scope") xpickle)))
+                        (xpTriple (xpOption (xpElemNodes
+                                              (gxFromString "component")
+                                              xpickle))
+                                  (xpElemNodes (gxFromString "uses") xpickle)
+                                  (xpElemNodes (gxFromString "scope") xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Component where
+  xpickle = xpWrap (\(pos, cname) -> Component { componentName = cname,
+                                                 componentPos = pos },
+                    \Component { componentName = cname,
+                                 componentPos = pos } -> (pos, cname))
+                   (xpElem (gxFromString "Use") xpickle
+                           (xpElemNodes (gxFromString "name") xpickle))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Use where

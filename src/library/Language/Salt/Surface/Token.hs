@@ -118,6 +118,8 @@ data Token =
   | Use !Position
   -- | The text 'syntax'
   | Syntax !Position
+  -- | The text 'component'
+  | Component !Position
   -- | The end-of-file token
   | EOF
     deriving (Ord, Eq)
@@ -164,6 +166,7 @@ position (Fun pos) = pos
 position (Import pos) = pos
 position (Use pos) = pos
 position (Syntax pos) = pos
+position (Component pos) = pos
 position EOF = error "Can't take position of EOF"
 
 keywords :: [(Strict.ByteString, Position -> Token)]
@@ -195,7 +198,8 @@ keywords = [
     (Strict.fromString "fun", Fun),
     (Strict.fromString "import", Import),
     (Strict.fromString "use", Use),
-    (Strict.fromString "syntax", Syntax)
+    (Strict.fromString "syntax", Syntax),
+    (Strict.fromString "component", Component)
   ]
 
 idPickler :: (GenericXMLString tag, Show tag,
@@ -609,14 +613,24 @@ usePickler =
     xpWrap (Use, revfunc) (xpElemAttrs (gxFromString "Use") xpickle)
 
 syntaxPickler :: (GenericXMLString tag, Show tag,
-               GenericXMLString text, Show text) =>
-              PU [NodeG [] tag text] Token
+                  GenericXMLString text, Show text) =>
+                 PU [NodeG [] tag text] Token
 syntaxPickler =
   let
     revfunc (Syntax pos) = pos
     revfunc _ = error $! "Can't convert to Syntax"
   in
     xpWrap (Syntax, revfunc) (xpElemAttrs (gxFromString "Syntax") xpickle)
+
+componentPickler :: (GenericXMLString tag, Show tag,
+                     GenericXMLString text, Show text) =>
+                    PU [NodeG [] tag text] Token
+componentPickler =
+  let
+    revfunc (Component pos) = pos
+    revfunc _ = error $! "Can't convert to Component"
+  in
+    xpWrap (Component, revfunc) (xpElemAttrs (gxFromString "Component") xpickle)
 
 eofPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -670,6 +684,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Import _) = 39
       picker (Use _) = 40
       picker (Syntax _) = 41
+      picker (Component _) = 42
     in
       xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
                     charPickler,equalPickler, ellipsisPickler, barPickler,
@@ -682,7 +697,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                     proofPickler, withPickler, wherePickler, asPickler,
                     privatePickler, protectedPickler, publicPickler,
                     matchPickler, letPickler, funPickler, importPickler,
-                    usePickler, syntaxPickler ]
+                    usePickler, syntaxPickler, componentPickler ]
 
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos doc =
@@ -745,3 +760,4 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (Import pos) = addPosition pos (string "keyword \"import\"")
   formatM (Use pos) = addPosition pos (string "keyword \"use\"")
   formatM (Syntax pos) = addPosition pos (string "keyword \"syntax\"")
+  formatM (Component pos) = addPosition pos (string "keyword \"component\"")

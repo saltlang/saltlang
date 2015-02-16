@@ -94,6 +94,7 @@ import qualified Language.Salt.Message as Message
        IMPORT { Token.Import _ }
        USE { Token.Use _ }
        SYNTAX { Token.Syntax _ }
+       COMPONENT { Token.Component _ }
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
        INSTANCE
@@ -105,8 +106,28 @@ import qualified Language.Salt.Message as Message
 
 %%
 
-top_level: use_list def_list
-             { AST { astUses = reverse $1, astScope = reverse $2 } }
+top_level: component use_list def_list
+             { AST { astComponent = $1, astUses = reverse $2,
+                     astScope = reverse $3 } }
+
+component: COMPONENT qual_id SEMICOLON
+             {% let
+                   (qualname, _) = $2
+                in do
+                  pos <- span (Token.position $1) (Token.position $3)
+                  return $! Just Component { componentName = reverse qualname,
+                                             componentPos = pos }
+             }
+         | COMPONENT qual_id
+             {% let
+                   (qualname, qualpos) = $2
+                in do
+                  pos <- span (Token.position $1) qualpos
+                  return $! Just Component { componentName = reverse qualname,
+                                             componentPos = pos }
+             }
+         |
+             { Nothing }
 
 use_list: use_list USE qual_id SEMICOLON
             {% let
