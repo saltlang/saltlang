@@ -40,20 +40,19 @@ import Control.Monad.SourceLoader
 import Control.Monad.State
 import Control.Monad.Symbols
 import Control.Monad.Writer
+import Data.Symbol
 import Language.Salt.Surface.Syntax
-
-import Data.ByteString as Strict
 
 -- | Monad class providing functionality for the Collect phase.
 class Monad m => MonadCollect m where
-  -- | Get access to the scope defined in a component.
-  addComponent :: Strict.ByteString
+  -- | Finish collecting a component
+  addComponent :: [Symbol]
                -- ^ The component name.
                -> Scope
                -- ^ The component body.
                -> m ()
   -- | Check if a component exists.
-  componentExists :: Strict.ByteString
+  componentExists :: [Symbol]
                   -- ^ The component name
                   -> m Bool
 

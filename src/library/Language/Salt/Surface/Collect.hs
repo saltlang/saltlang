@@ -15,24 +15,33 @@
 -- Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 -- 02110-1301 USA
 {-# OPTIONS_GHC -Wall -Werror #-}
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
 
 module Language.Salt.Surface.Collect(
-       collect
+       collectComponent,
+       collectFile
        ) where
 
 import Control.Monad
+import Control.Monad.Collect
+import Control.Monad.Genpos
+import Control.Monad.Loader.Class
+import Control.Monad.Messages
 import Control.Monad.Symbols
 import Data.Array hiding (accum, elems)
 import Data.HashMap.Strict(HashMap)
 import Data.Maybe
 import Data.Position
 import Data.Symbol
-import Language.Salt.Frontend
 import Language.Salt.Message
 import Language.Salt.Surface.Common
 import Prelude hiding (elem, exp, init)
+import System.FilePath
+import System.IO.Error
 
+import qualified Data.ByteString as Strict
+import qualified Data.ByteString.UTF8 as Strict
+import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.HashMap.Strict as HashMap
 import qualified Language.Salt.Surface.AST as AST
 import qualified Language.Salt.Surface.Syntax as Syntax
@@ -64,6 +73,9 @@ makeScope (builders, syntax, truths, proofs,
                    Syntax.scopeElems = elems,
                    Syntax.scopeProofs = proofs }
 
+emptyScope :: Syntax.Scope
+emptyScope = makeScope emptyTempScope
+
 -- | Add a definition into a scope, merging it in with what's already there.
 addDef :: Visibility -> Syntax.Element -> TempScope -> TempScope
 addDef Hidden elem (builders, syntax, truths, proofs,
@@ -85,7 +97,8 @@ addDef Public elem (builders, syntax, truths, proofs,
 
 -- | Collect a pattern, return the name to which the pattern is bound
 -- at the top level.
-collectNamedPattern :: AST.Pattern -> Frontend (Maybe Symbol, Syntax.Pattern)
+collectNamedPattern :: (MonadMessages Message m, MonadSymbols m) =>
+                       AST.Pattern -> m (Maybe Symbol, Syntax.Pattern)
 -- For an as-pattern, bind the field with that name to its own
 -- name, and further deconstruct the pattern.
 collectNamedPattern AST.As { AST.asName = sym, AST.asPat = pat,
@@ -116,8 +129,9 @@ collectNamedPattern pat =
     return (Nothing, collectedPat)
 
 -- | Collect an entry
-collectEntry :: HashMap Symbol Syntax.Entry ->
-                AST.Entry -> Frontend (HashMap Symbol Syntax.Entry)
+collectEntry :: (MonadMessages Message m, MonadSymbols m) =>
+                HashMap Symbol Syntax.Entry ->
+                AST.Entry -> m (HashMap Symbol Syntax.Entry)
 -- For a named entry, use the name as the index and the pattern as
 -- the pattern.
 collectEntry accum AST.Named { AST.namedSym = sym, AST.namedVal = pat,
@@ -154,7 +168,8 @@ collectEntry accum (AST.Unnamed pat) =
           namelessField (AST.patternPosition pat)
           return accum
 
-collectPattern :: AST.Pattern -> Frontend Syntax.Pattern
+collectPattern :: (MonadMessages Message m, MonadSymbols m) =>
+                  AST.Pattern -> m Syntax.Pattern
 -- For split, collect all fields into a HashMap.
 collectPattern AST.Split { AST.splitFields = fields, AST.splitStrict = strict,
                            AST.splitPos = pos } =
@@ -196,10 +211,12 @@ collectPattern (AST.Exact l) = return (Syntax.Exact l)
 
 -- | Collect a bunch of 'Seq's by walking down the spine and converting
 -- it into a list.
-collectSeq :: AST.Exp -> Frontend [Syntax.Exp]
+collectSeq :: (MonadMessages Message m, MonadSymbols m) =>
+              AST.Exp -> m [Syntax.Exp]
 collectSeq =
   let
-    collectSeq' :: [Syntax.Exp] -> AST.Exp -> Frontend [Syntax.Exp]
+    collectSeq' :: (MonadMessages Message m, MonadSymbols m) =>
+                   [Syntax.Exp] -> AST.Exp -> m [Syntax.Exp]
     collectSeq' accum AST.Seq { AST.seqFirst = first,
                                 AST.seqSecond = second @ AST.Seq {} } =
       do
@@ -227,13 +244,15 @@ collectSeq =
 --
 -- > syntax id (postfix | infix (left | right | nonassoc) |
 -- >            prec (< | > | ==) id (. id)* )+
-collectSyntax :: SyntaxScope -> AST.Exp -> Frontend SyntaxScope
+collectSyntax :: (MonadMessages Message m, MonadSymbols m) =>
+                 SyntaxScope -> AST.Exp -> m SyntaxScope
 collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
                                AST.seqSecond = body } =
   let
     -- | Add a precedence relationship to the current scope.
-    addPrec :: HashMap Symbol Syntax.Syntax -> Ordering -> AST.Exp ->
-               Frontend (HashMap Symbol Syntax.Syntax)
+    addPrec :: (MonadMessages Message m, MonadSymbols m) =>
+               HashMap Symbol Syntax.Syntax -> Ordering -> AST.Exp ->
+               m (HashMap Symbol Syntax.Syntax)
     addPrec syntax' ord exp =
       -- Look for the symbol in the scope.
       case HashMap.lookup sym syntax' of
@@ -252,9 +271,10 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
 
     -- | Add a fixity to the current scope.  Report an error if
     -- the symbol already has a fixity other than prefix.
-    addFixity :: HashMap Symbol Syntax.Syntax ->
+    addFixity :: (MonadMessages Message m, MonadSymbols m) =>
+                 HashMap Symbol Syntax.Syntax ->
                  Syntax.Fixity -> Position ->
-                 Frontend (HashMap Symbol Syntax.Syntax)
+                 m (HashMap Symbol Syntax.Syntax)
     addFixity syntax' fixity pos =
       -- Look for the symbol in the scope.
       case HashMap.lookup sym syntax' of
@@ -276,8 +296,9 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
     --
     -- > syntax id prec (< | > | ==) id (. id)
     -- >                             ^
-    precName :: Ordering -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
-                Frontend (HashMap Symbol Syntax.Syntax)
+    precName :: (MonadMessages Message m, MonadSymbols m) =>
+                Ordering -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                m (HashMap Symbol Syntax.Syntax)
     -- If the top-level expression is a Seq, then there's another
     -- directive after this one.
     precName ord syntax' AST.Seq { AST.seqFirst = exp,
@@ -295,8 +316,9 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
     --
     -- > syntax id prec (< | > | ==) id (. id)*
     -- >                ^
-    precRelation :: HashMap Symbol Syntax.Syntax -> AST.Exp ->
-                    Frontend (HashMap Symbol Syntax.Syntax)
+    precRelation :: (MonadMessages Message m, MonadSymbols m) =>
+                    HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                    m (HashMap Symbol Syntax.Syntax)
     -- If the top-level expression is a Seq, then the first
     -- expression must be a Sym, which is the relationship.  We
     -- expect to see a Field or Sym next.
@@ -331,8 +353,9 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
     --
     -- > syntax id infix (left | right | nonassoc) directive*
     -- >                 ^
-    infixAssoc :: Position -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
-                  Frontend (HashMap Symbol Syntax.Syntax)
+    infixAssoc :: (MonadMessages Message m, MonadSymbols m) =>
+                  Position -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                  m (HashMap Symbol Syntax.Syntax)
     infixAssoc fixitypos syntax'
                AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
                                                   AST.symPos = pos },
@@ -398,8 +421,9 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
     -- > syntax id (postfix | infix (left | right | nonassoc) |
     -- >            prec (< | > | ==) id (. id)* )+
     -- >           ^
-    startDirective :: HashMap Symbol Syntax.Syntax -> AST.Exp ->
-                      Frontend (HashMap Symbol Syntax.Syntax)
+    startDirective :: (MonadMessages Message m, MonadSymbols m) =>
+                      HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                      m (HashMap Symbol Syntax.Syntax)
     -- The first expression is a Sym (the kind), and there's more.
     startDirective syntax'
                    AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
@@ -475,10 +499,12 @@ type TempDynamicScope = (SyntaxScope, [Syntax.Proof], [Syntax.Compound])
 emptyTempDynamicScope :: TempDynamicScope
 emptyTempDynamicScope = (HashMap.empty, [], [])
 
-collectCompound :: TempDynamicScope -> AST.Compound -> Frontend TempDynamicScope
+collectCompound :: (MonadMessages Message m, MonadSymbols m) =>
+                   TempDynamicScope -> AST.Compound -> m TempDynamicScope
 -- Add proofs to the list of proofs for the entire dynamic scope.
 collectCompound (syntax, proofs, compounds)
-                (AST.Element AST.Proof { AST.proofName = sym, AST.proofBody = body,
+                (AST.Element AST.Proof { AST.proofName = sym,
+                                         AST.proofBody = body,
                                          AST.proofPos = pos }) =
   do
     collectedName <- collectExp sym
@@ -601,7 +627,8 @@ collectCompound (syntax, proofs, compounds) (AST.Exp exp) =
     return (syntax, proofs, Syntax.Exp collectedExp : compounds)
 
 -- | Collect an expression.
-collectExp :: AST.Exp -> Frontend Syntax.Exp
+collectExp :: (MonadMessages Message m, MonadSymbols m) =>
+              AST.Exp -> m Syntax.Exp
 -- For a compound statement, construct a dynamic scope from all the statements.
 collectExp AST.Compound { AST.compoundBody = body, AST.compoundPos = pos } =
   do
@@ -615,8 +642,9 @@ collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
                         AST.recordPos = pos } =
   let
     -- Fold function.  Only build a HashMap.
-    collectValueField :: HashMap FieldName Syntax.Exp -> AST.Field ->
-                         Frontend (HashMap FieldName Syntax.Exp)
+    collectValueField :: (MonadMessages Message m, MonadSymbols m) =>
+                         HashMap FieldName Syntax.Exp -> AST.Field ->
+                         m (HashMap FieldName Syntax.Exp)
     collectValueField accum AST.Field { AST.fieldName = fname,
                                         AST.fieldVal = val,
                                         AST.fieldPos = pos' } =
@@ -713,13 +741,15 @@ collectExp (AST.Literal lit) = return (Syntax.Literal lit)
 
 -- | Collect a list of AST fields into a Syntax fields structure (a HashMap
 -- and an ordering), and report duplicates.
-collectFields :: [AST.Field] -> Frontend Syntax.Fields
+collectFields :: (MonadMessages Message m, MonadSymbols m) =>
+                 [AST.Field] -> m Syntax.Fields
 collectFields fields =
   let
     -- | Fold function.  Builds both a list and a HashMap.
-    collectField :: (HashMap FieldName Syntax.Field, [FieldName]) ->
+    collectField :: (MonadMessages Message m, MonadSymbols m) =>
+                    (HashMap FieldName Syntax.Field, [FieldName]) ->
                     AST.Field ->
-                    Frontend (HashMap FieldName Syntax.Field, [FieldName])
+                    m (HashMap FieldName Syntax.Field, [FieldName])
     collectField (tab, fields') AST.Field { AST.fieldName = fname,
                                            AST.fieldVal = val,
                                            AST.fieldPos = pos } =
@@ -746,7 +776,8 @@ collectFields fields =
            }
 
 -- | Collect a case.  This is straightforward.
-collectCase :: AST.Case -> Frontend Syntax.Case
+collectCase :: (MonadMessages Message m, MonadSymbols m) =>
+               AST.Case -> m Syntax.Case
 collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
                        AST.casePos = pos } =
   do
@@ -758,13 +789,14 @@ collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
 
 
 -- | Collect a definition.
-collectElement :: Visibility
+collectElement :: (MonadMessages Message m, MonadSymbols m) =>
+                  Visibility
                -- ^ The visibility at which everything is defined.
                -> TempScope
                -- ^ The scope into which to accumulate definitions
                -> AST.Element
                -- ^ The element to collect
-               -> Frontend TempScope
+               -> m TempScope
 -- For builder definitions, turn the definition into a 'Def', whose
 -- initializer is an anonymous builder.
 collectElement vis accum @ (builders, syntax, truths, proofs, elems)
@@ -890,16 +922,18 @@ collectElement _ (builders, syntax, truths, proofs, elems)
 -- | Collect a scope.  This gathers up all the defintions and truths into
 -- HashMaps, and saves the imports and proofs.  Syntax directives then get
 -- parsed and used to update definitions.
-collectScope :: AST.Scope -> Frontend Syntax.Scope
+collectScope :: (MonadMessages Message m, MonadSymbols m) =>
+                AST.Scope -> m Syntax.Scope
 collectScope groups =
   let
     -- | Collect a group.  This rolls all elements of the group into the
     -- temporary scope, with the group's visibility.
-    collectGroup :: TempScope
+    collectGroup :: (MonadMessages Message m, MonadSymbols m) =>
+                    TempScope
                  -- ^ The 'Scope' into which to accumulate.
                  -> AST.Group
                  -- ^ The group
-                 -> Frontend TempScope
+                 -> m TempScope
     collectGroup accum AST.Group { AST.groupVisibility = vis,
                                    AST.groupElements = elems } =
       foldM (collectElement vis) accum elems
@@ -932,32 +966,166 @@ collectScope groups =
 -- * Multiple truth definitions with the same names.
 -- * Malformed syntax directives.
 -- * Undefined symbols in syntax directives.
-collect :: Position
-        -- ^ Position corresponding to this entire file.
-        -> Symbol
-        -- ^ The name of a module that is expected to appear at the top level.
-        -> AST.AST
-        -- ^ The 'AST' to collect.
-        -> Frontend Syntax.Scope
-collect filepos expected AST.AST { AST.astScope = scope } =
+collectAST :: (MonadMessages Message m, MonadSymbols m) =>
+              Position
+           -- ^ Position corresponding to this entire file.
+           -> Maybe [Symbol]
+           -- ^ The name of a module that is expected to appear at the
+           -- top level.
+           -> AST.AST
+           -- ^ The 'AST' to collect.
+           -> m Syntax.Scope
+collectAST filepos expected AST.AST { AST.astComponent = component,
+                                      AST.astScope = scope } =
   let
+    -- Grab the component name out of a Maybe Component
+    actual =
+      do
+        val <- component
+        return $! AST.componentName val
+
     -- We expect to see a module with the same name as the file (minus
     -- the .salt extension).  Track whether or not we've seen it.
-    collect' :: (TempScope, Bool) -> AST.Element ->
-                Frontend (TempScope, Bool)
-    collect' (accum, _) elem @ AST.Builder { AST.builderKind = Module,
-                                             AST.builderName = modname }
-      | modname == expected =
-        do
-          collected <- collectElement Public accum elem
-          return (collected, True)
-    collect' (accum, seen) elem =
+    collectWithExpected :: (MonadMessages Message m, MonadSymbols m) =>
+                           Symbol -> m Syntax.Scope
+    collectWithExpected defname =
+      let
+        collect' (accum, _) elem @ AST.Builder { AST.builderName = modname }
+          -- If we see the def we're looking for, save it as public.
+          | modname == defname =
+            do
+              collected <- collectElement Public accum elem
+              return (collected, True)
+        collect' (accum, seen) elem =
+          -- Otherwise, make it hidden
+          do
+            collected <- collectElement Hidden accum elem
+            return (collected, seen)
+      in do
+        (tmpscope, seen) <- foldM collect' (emptyTempScope, False) scope
+        -- Report an error if there was no top-level module definition
+        -- with the name of the file.
+        unless seen (noTopLevelDef defname filepos)
+        return $! makeScope tmpscope
+
+  in case (expected, actual) of
+    (Just expected', _) ->
+      -- We have an expected component name.  Get the expected
+      -- definition from that, and assert that the actual component
+      -- name is the same.
+      let
+        defname = last expected'
+      in do
+        unless (expected == actual) (badComponentName expected' actual filepos)
+        collectWithExpected defname
+    (Nothing, Just actual') ->
+      -- We have no expected component name, but do have an actual
+      -- one.  Get the expected definition name from the actual one.
+      let
+        defname = last actual'
+      in
+        collectWithExpected defname
+    (Nothing, Nothing) ->
+      -- We don't have anything.  There is no expected definition
+      -- name, and everything at the top level is public.
       do
-        collected <- collectElement Hidden accum elem
-        return (collected, seen)
+        accum <- foldM (collectElement Public) emptyTempScope scope
+        return $! makeScope accum
+
+collectComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
+                     MonadMessages Message m, MonadGenpos m,
+                     MonadCollect m, MonadSymbols m) =>
+                    (Strict.ByteString -> Lazy.ByteString -> m (Maybe AST.AST))
+                 -- ^ The parsing function to use.
+                 -> [Symbol]
+                 -- ^ The name of the component to collect.
+                 -> Position
+                 -- ^ The position at which the reference to this
+                 -- component occurred.
+                 -> m ()
+collectComponent parseFunc cname pos =
+  let
+    pathSepBStr = Strict.fromString [pathSeparator]
+    extSepBStr = Strict.fromString [extSeparator]
+
+    componentFileName =
+      do
+        bstrs <- mapM name cname
+        return $! Strict.concat [ Strict.intercalate pathSepBStr bstrs,
+                                  extSepBStr, "salt" ]
+
+    collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
+      collectComponent parseFunc uname upos
+
+    loadAndCollect =
+      do
+        fname <- componentFileName
+        fpos <- file fname
+        -- Call the loader to get the file contents.
+        loaded <- load fname
+        case loaded of
+        -- If an error occurs while loading, report it.
+          Left err ->
+            let
+              errstr = Strict.fromString $! ioeGetErrorString err
+            in do
+              if isDoesNotExistError err
+                then cannotFindComponent cname pos
+                else cannotAccessComponent cname fname errstr pos
+              addComponent cname emptyScope
+          Right content ->
+            -- Otherwise, continue
+            do
+              res <- parseFunc fname content
+              case res of
+                Just ast @ AST.AST { AST.astUses = uses } ->
+                  do
+                    mapM_ collectUse uses
+                    scope <- collectAST fpos (Just cname) ast
+                    addComponent cname scope
+                Nothing -> addComponent cname emptyScope
   in do
-    (tmpscope, seen) <- foldM collect' (emptyTempScope, False) scope
-    -- Report an error if there was no top-level module definition
-    -- with the name of the file.
-    unless seen (noTopLevelDef expected filepos)
-    return $! makeScope tmpscope
+    done <- componentExists cname
+    unless done loadAndCollect
+    return ()
+
+collectFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
+                MonadMessages Message m, MonadGenpos m,
+                MonadCollect m, MonadSymbols m) =>
+               (Strict.ByteString -> Lazy.ByteString -> m (Maybe AST.AST))
+            -- ^ The parsing function to use.
+            -> Strict.ByteString
+            -- ^ The name of the component to collect.
+            -> Position
+            -- ^ The position at which the reference to this
+            -- component occurred.
+            -> m (Maybe Syntax.Scope)
+collectFile parseFunc fname pos =
+  let
+    collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
+      collectComponent parseFunc uname upos
+  in do
+    fpos <- file fname
+    -- Call the loader to get the file contents.
+    loaded <- load fname
+    case loaded of
+    -- If an error occurs while loading, report it.
+      Left err ->
+        let
+          errstr = Strict.fromString $! ioeGetErrorString err
+        in do
+          if isDoesNotExistError err
+            then cannotFindFile fname pos
+            else cannotAccessFile fname errstr pos
+          return Nothing
+      Right content ->
+        -- Otherwise, continue
+        do
+          res <- parseFunc fname content
+          case res of
+            Just ast @ AST.AST { AST.astUses = uses } ->
+              do
+                mapM_ collectUse uses
+                scope <- collectAST fpos Nothing ast
+                return $! Just scope
+            Nothing -> return Nothing

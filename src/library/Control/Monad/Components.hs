@@ -45,13 +45,12 @@ import Control.Monad.State
 import Control.Monad.Symbols
 import Control.Monad.Writer
 import Data.HashTable.IO(BasicHashTable)
+import Data.Symbol
 import Language.Salt.Surface.Syntax
 
-import qualified Data.ByteString as Strict
-import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.HashTable.IO as HashTable
 
-type Table = BasicHashTable Strict.ByteString Scope
+type Table = BasicHashTable [Symbol] Scope
 
 newtype ComponentsT m a = ComponentsT { unpackComponentsT :: ReaderT Table m a }
 
@@ -76,15 +75,14 @@ mapComponentsT :: (Monad m, Monad n) =>
                   (m a -> n b) -> ComponentsT m a -> ComponentsT n b
 mapComponentsT f = ComponentsT . mapReaderT f . unpackComponentsT
 
-component' :: MonadIO m => Strict.ByteString -> ReaderT Table m Scope
+component' :: MonadIO m => [Symbol] -> ReaderT Table m Scope
 component' cname =
   do
     tab <- ask
     res <- liftIO (HashTable.lookup tab cname)
     case res of
       Just out -> return out
-      Nothing -> error $! "Looking up nonexistent component " ++
-                          Strict.toString cname
+      Nothing -> error $! "Looking up nonexistent component"
 
 instance Monad m => Monad (ComponentsT m) where
   return = ComponentsT . return

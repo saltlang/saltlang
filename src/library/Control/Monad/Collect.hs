@@ -46,12 +46,12 @@ import Control.Monad.Symbols
 import Control.Monad.Writer
 import Data.HashTable.IO(BasicHashTable)
 import Data.Maybe
+import Data.Symbol
 import Language.Salt.Surface.Syntax
 
-import qualified Data.ByteString as Strict
 import qualified Data.HashTable.IO as HashTable
 
-type Table = BasicHashTable Strict.ByteString Scope
+type Table = BasicHashTable [Symbol] Scope
 
 newtype CollectT m a = CollectT { unpackCollectT :: ReaderT Table m a }
 
@@ -76,13 +76,13 @@ mapCollectT :: (Monad m, Monad n) =>
                (m a -> n b) -> CollectT m a -> CollectT n b
 mapCollectT f = CollectT . mapReaderT f . unpackCollectT
 
-addComponent' :: MonadIO m => Strict.ByteString -> Scope -> ReaderT Table m ()
+addComponent' :: MonadIO m => [Symbol] -> Scope -> ReaderT Table m ()
 addComponent' cname component=
   do
     tab <- ask
     liftIO (HashTable.insert tab cname component)
 
-componentExists' :: MonadIO m => Strict.ByteString -> ReaderT Table m Bool
+componentExists' :: MonadIO m => [Symbol] -> ReaderT Table m Bool
 componentExists' cname =
   do
     tab <- ask

@@ -137,7 +137,7 @@ Library
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
-                        hashtables
+                        hashtables, filepath
   build-tools:          alex, happy
   hs-source-dirs:       src/library
   exposed-modules:
@@ -148,7 +148,7 @@ Library
                         Language.Salt.Frontend
                         Language.Salt.Message
                         Language.Salt.Surface.AST
---                        Language.Salt.Surface.Collect
+                        Language.Salt.Surface.Collect
                         Language.Salt.Surface.Common
                         Language.Salt.Surface.Lexer
                         Language.Salt.Surface.Parser

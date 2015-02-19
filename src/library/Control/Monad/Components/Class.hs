@@ -40,14 +40,13 @@ import Control.Monad.SourceLoader
 import Control.Monad.State
 import Control.Monad.Symbols
 import Control.Monad.Writer
+import Data.Symbol
 import Language.Salt.Surface.Syntax
-
-import Data.ByteString as Strict
 
 -- | Monad class providing access to components.
 class Monad m => MonadComponents m where
   -- | Get access to the scope defined in a component.
-  component :: Strict.ByteString
+  component :: [Symbol]
             -- ^ The component name.
             -> m Scope
 
