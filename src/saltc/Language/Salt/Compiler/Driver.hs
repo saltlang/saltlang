@@ -38,7 +38,7 @@ import System.IO
 
 -- | Run the compiler with the given options.
 run :: Options -> IO ()
-run opts @ Options { optInputFiles = inputs, optStages = stages } =
+run opts @ Options { optInputs = inputs, optStages = stages } =
   case bounds stages of
     (Lexer, Lexer) ->
       let

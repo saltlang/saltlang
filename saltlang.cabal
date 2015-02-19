@@ -119,7 +119,7 @@ Executable saltc
   default-language:     Haskell2010
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
-                        hexpat, hexpat-pickle, array, saltlang
+                        hexpat, hexpat-pickle, array, saltlang, filepath
   hs-source-dirs:       src/saltc
   main-is:              Language/Salt/Compiler/Main.hs
 
