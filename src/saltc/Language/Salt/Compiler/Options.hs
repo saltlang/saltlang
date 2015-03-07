@@ -315,7 +315,10 @@ options strargs =
 
           destdir = case destDirArg of
             Default -> Nothing
-            Single dir -> Just $! Strict.fromString dir
+            Single "" -> Nothing
+            Single dir
+              | isPathSeparator (last dir) -> Just $! Strict.fromString dir
+              | otherwise -> Just $! Strict.fromString $! dir ++ [pathSeparator]
             Multiple -> error "Should not see Multiple at end of arg parsing"
 
           srcdirs = case srcDirsArg of
