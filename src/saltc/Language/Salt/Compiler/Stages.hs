@@ -73,12 +73,24 @@ createLazyBytestringArtifact fname builder =
       Just err ->
         cannotCreateFile fname (Strict.fromString $! ioeGetErrorString err)
 
+tokensExt :: Strict.ByteString
+tokensExt = Strict.fromString $! extSeparator : "tokens"
+
+astExt :: Strict.ByteString
+astExt = Strict.fromString $! extSeparator : "ast"
+
+xmlExt :: Strict.ByteString
+xmlExt = Strict.fromString $! extSeparator : "xml"
+
+dotExt :: Strict.ByteString
+dotExt = Strict.fromString $! extSeparator : "dot"
+
 printTextTokens :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
                     MonadArtifacts Strict.ByteString m) =>
                    Strict.ByteString -> [Token] -> m ()
 printTextTokens fname tokens =
   let
-    tokfile = Strict.append fname (Strict.fromString (extSeparator : "tokens"))
+    tokfile = Strict.append fname tokensExt
     doc tokdocs = vcat (string "Tokens for" <+> bytestring fname <>
                         colon : tokdocs) <> line
   in do
@@ -90,8 +102,7 @@ printXMLTokens :: (MonadArtifacts Strict.ByteString m,
                   Strict.ByteString -> [Token] -> m ()
 printXMLTokens fname tokens =
   let
-    xmlfile = Strict.append fname (Strict.fromString (extSeparator : "tokens" ++
-                                                      extSeparator : "xml" ))
+    xmlfile = Strict.concat [fname, tokensExt, xmlExt ]
     pickler = xpRoot (xpElem (Strict.fromString "tokens")
                              (xpAttrFixed (Strict.fromString "filename")
                                           fname)
@@ -113,7 +124,7 @@ printTextAST :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
                 Strict.ByteString -> AST -> m ()
 printTextAST fname ast =
   let
-    astfile = Strict.append fname (Strict.fromString (extSeparator : "ast"))
+    astfile = Strict.append fname astExt
   in do
     astdoc <- formatM ast
     createArtifact astfile (buildOptimal 120 False astdoc)
@@ -123,8 +134,7 @@ printDotAST :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m,
                 Strict.ByteString -> AST -> m ()
 printDotAST fname ast =
   let
-    dotfile = Strict.append fname (Strict.fromString (extSeparator : "ast" ++
-                                                      extSeparator : "dot"))
+    dotfile = Strict.concat [fname, astExt, dotExt]
   in do
     astdoc <- astDot ast
     createArtifact dotfile (buildFast astdoc)
@@ -133,8 +143,7 @@ printXMLAST :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m) =>
                Strict.ByteString -> AST -> m ()
 printXMLAST fname ast =
   let
-    xmlfile = Strict.append fname (Strict.fromString (extSeparator : "ast" ++
-                                                      extSeparator : "xml"))
+    xmlfile = Strict.concat [fname, astExt, xmlExt]
     pickler = xpRoot (xpElem (Strict.fromString "file")
                              (xpAttrFixed (Strict.fromString "name") fname)
                              xpickle)
