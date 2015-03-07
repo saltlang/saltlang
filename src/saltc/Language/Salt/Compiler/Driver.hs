@@ -20,6 +20,7 @@ module Language.Salt.Compiler.Driver(
        run
        ) where
 
+import Control.Monad.FileArtifacts
 import Control.Monad.Frontend
 import Control.Monad.Messages
 import Data.Array
@@ -30,6 +31,8 @@ import Language.Salt.Surface.Token
 import Prelude hiding (lex)
 import System.IO
 
+import qualified Data.ByteString as Strict
+
 -- Later on, have some sort of compiler products structure.  Also,
 -- have run call a compile function that generates compiler products.
 
@@ -38,19 +41,36 @@ import System.IO
 
 -- | Run the compiler with the given options.
 run :: Options -> IO ()
-run opts @ Options { optInputs = inputs, optStages = stages } =
-  case bounds stages of
+run opts @ Options { optInputs = inputs, optStages = stages,
+                     optDistDir = distdiropt } =
+  let
+    distdir = case distdiropt of
+      Just val -> val
+      Nothing -> Strict.empty
+  in case bounds stages of
     (Lexer, Lexer) ->
       let
-        front = putMessagesT stderr Error (lex opts inputs)
+        msgs = runFileArtifactsT (lex opts inputs) distdir
+        front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords
         return ()
     (Lexer, Parser) ->
       let
-        msgs = parse opts inputs
+        msgs = runFileArtifactsT (parse opts inputs) distdir
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords
         return ()
+{-
+    (Lexer, Collect) ->
+      let
+        coll = collect opts
+        loader = runCollectT coll
+        msgs = runSourceLoaderT loader srcdirs
+        front = putMessagesT stderr Error msgs
+      in do
+        _ <- runFrontendT front keywords
+        return ()
+-}
     (_, _) -> error "Stages array does not begin with Lexer"

@@ -28,6 +28,8 @@ import Data.Monoid hiding (All)
 import System.Console.GetOpt
 import System.FilePath
 
+import Data.ByteString.UTF8 as Strict
+
 version :: String
 version = "saltc compiler, development version\n"
 
@@ -36,16 +38,16 @@ data Options =
   Options {
     -- | Input. Might be file names or components, depending on
     -- 'optComponents'.
-    optInputs :: ![String],
+    optInputs :: ![Strict.ByteString],
     -- | An array of all stages to run, and which structures to save.
     optStages :: !(Array Stage Save),
     -- | Whether inputs are file names or component names.
     optComponents :: !Bool,
     -- | Soruce directories to search.
-    optSrcDirs :: ![String],
+    optSrcDirs :: ![Strict.ByteString],
     -- | Output directory to use, or @Nothing@ if there is no output
     -- directory.
-    optDistDir :: !(Maybe String)
+    optDistDir :: !(Maybe Strict.ByteString)
   }
   deriving Show
 
@@ -313,13 +315,14 @@ options strargs =
 
           destdir = case destDirArg of
             Default -> Nothing
-            Single dir -> Just dir
+            Single dir -> Just $! Strict.fromString dir
             Multiple -> error "Should not see Multiple at end of arg parsing"
 
           srcdirs = case srcDirsArg of
-            [] -> [""]
-            dirs -> dirs
+            [] -> [Strict.fromString ""]
+            dirs -> map Strict.fromString dirs
         in
           Right Options { optStages = listArray (firstStage, thisLast) stages,
-                          optInputs = unmatched, optComponents = components,
-                          optSrcDirs = srcdirs, optDistDir = destdir }
+                          optInputs = map Strict.fromString unmatched,
+                          optComponents = components, optSrcDirs = srcdirs,
+                          optDistDir = destdir }
