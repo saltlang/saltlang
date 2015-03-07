@@ -57,18 +57,17 @@ newtype CollectT m a = CollectT { unpackCollectT :: ReaderT Table m a }
 
 type Collect = CollectT IO
 
-runCollectT :: Monad m =>
+runCollectT :: MonadIO m =>
                CollectT m a
             -- ^ The @CollectT@ monad transformer to execute.
-            -> Table
-            -- ^ The components table to use.
             -> m a
-runCollectT c = runReaderT (unpackCollectT c)
+runCollectT c =
+  do
+    tab <- liftIO HashTable.new
+    runReaderT (unpackCollectT c) tab
 
 runCollect :: Collect a
            -- ^ The @Collect@ monad to execute.
-           -> Table
-           -- ^ The components table to use.
            -> IO a
 runCollect = runCollectT
 
