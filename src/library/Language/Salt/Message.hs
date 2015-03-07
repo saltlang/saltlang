@@ -52,7 +52,9 @@ module Language.Salt.Message(
        cannotFindComponent,
        cannotAccessFile,
        cannotAccessComponent,
-       badComponentName
+       badComponentName,
+       cannotCreateFile,
+       cannotCreateArtifact
        ) where
 
 import Control.Monad.Messages
@@ -220,6 +222,15 @@ data Message =
       badComponentNameActual :: !(Maybe Strict.ByteString),
       badComponentNamePos :: !Position
     }
+    -- | Error creating an artifact.
+  | CannotCreate {
+      -- | The name of the file or component being accessed.
+      cannotCreateName :: !(Maybe Strict.ByteString),
+      -- | Whether the name is a raw file name or a component name.
+      cannotCreateFileName :: !Strict.ByteString,
+      -- | Error message given by the operating system.
+      cannotCreateMsg :: !Strict.ByteString
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -352,6 +363,11 @@ instance Hashable Message where
                                     badComponentNamePos = pos } =
     s `hashWithSalt` (29 :: Int) `hashWithSalt`
     expected `hashWithSalt` actual `hashWithSalt` pos
+  hashWithSalt s CannotCreate { cannotCreateName = cname,
+                                cannotCreateFileName = filename,
+                                cannotCreateMsg = msg } =
+    s `hashWithSalt` (30 :: Int) `hashWithSalt`
+    cname `hashWithSalt` filename `hashWithSalt` msg
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -384,6 +400,7 @@ instance Msg.Message Message where
   severity CannotFind {} = Msg.Error
   severity CannotAccess {} = Msg.Error
   severity BadComponentName {} = Msg.Error
+  severity CannotCreate {} = Msg.Error
 
   position BadChars { badCharsPos = pos } = Just pos
   position BadEscape { badEscPos = pos } = Just pos
@@ -415,6 +432,7 @@ instance Msg.Message Message where
   position CannotFind { cannotFindPos = pos } = Just pos
   position CannotAccess { cannotAccessPos = pos } = Just pos
   position BadComponentName { badComponentNamePos = pos } = Just pos
+  position CannotCreate {} = Nothing
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -461,10 +479,15 @@ instance Msg.Message Message where
     hsep [ string "Cannot locate component", bytestring cname ]
   brief CannotAccess { cannotAccessName = Nothing,
                        cannotAccessFileName = fname } =
-    string "Cannot access file " <+> dquoted (bytestring fname)
+    string "Cannot access file" <+> dquoted (bytestring fname)
   brief CannotAccess { cannotAccessName = Just cname } =
     string "Cannot access component" <+> bytestring cname
   brief BadComponentName {} = string "Component name mismatch"
+  brief CannotCreate { cannotCreateName = Nothing,
+                       cannotCreateFileName = fname } =
+    string "Cannot create file" <+> dquoted (bytestring fname)
+  brief CannotCreate { cannotCreateName = Just cname } =
+    string "Cannot create file for" <+> bytestring cname
 
   details LongCharLiteral {} =
     Just $! string "Use a string literal to represent multiple characters"
@@ -496,6 +519,15 @@ instance Msg.Message Message where
     Just $! fillSep [ string "Expected component named",
                       bytestring expected <> comma,
                       string "but no component declaration present" ]
+  details CannotCreate { cannotCreateName = Nothing,
+                         cannotCreateMsg = msg } =
+    Just $! string "Error while creating file:" </> bytestring msg
+  details CannotCreate { cannotCreateName = Just _,
+                         cannotCreateFileName = fname,
+                         cannotCreateMsg = msg } =
+    Just $! fillSep [ string "Error while creating file",
+                      dquoted (bytestring fname) <> colon,
+                      bytestring msg ]
   details _ = Nothing
 
   highlighting HardTabs {} = Msg.Background
@@ -815,3 +847,31 @@ badComponentName expected actual pos =
               badComponentNameActual = actualBstr,
               badComponentNamePos = pos
             }
+
+cannotCreateFile :: MonadMessages Message m =>
+                    Strict.ByteString
+                 -- ^ The name of the file (minus any prefix path).
+                 -> Strict.ByteString
+                 -- ^ The OS-provided error message.
+                 -> m ()
+cannotCreateFile fname msg =
+  message CannotCreate { cannotCreateName = Nothing,
+                         cannotCreateFileName = fname,
+                         cannotCreateMsg = msg }
+
+-- | Report error creating artifact.
+cannotCreateArtifact :: (MonadMessages Message m, MonadSymbols m) =>
+                        [Symbol]
+                     -- ^ The name of the artifact.
+                     -> Strict.ByteString
+                     -- ^ The name of the file (minus any prefix path).
+                     -> Strict.ByteString
+                     -- ^ The OS-provided error message.
+                     -> m ()
+cannotCreateArtifact cname fname msg =
+  do
+    bstrs <- mapM name cname
+    message CannotCreate { cannotCreateName =
+                              Just $! Strict.intercalate "." bstrs,
+                           cannotCreateFileName = fname,
+                           cannotCreateMsg = msg }
