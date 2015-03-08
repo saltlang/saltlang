@@ -20,6 +20,7 @@ module Language.Salt.Compiler.Driver(
        run
        ) where
 
+import Control.Monad.Collect
 import Control.Monad.FileArtifacts
 import Control.Monad.Frontend
 import Control.Monad.Messages
@@ -66,15 +67,13 @@ run opts @ Options { optInputs = inputs, optStages = stages,
       in do
         _ <- runFrontendT front keywords
         return ()
-{-
     (Lexer, Collect) ->
       let
-        coll = collect opts
-        loader = runCollectT coll
+        artifacts = runCollectT (collect opts inputs)
+        loader = runFileArtifactsT artifacts distdir
         msgs = runSourceLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords
         return ()
--}
     (_, _) -> error "Stages array does not begin with Lexer"
