@@ -84,6 +84,12 @@ component' cname =
       Just out -> return out
       Nothing -> error $! "Looking up nonexistent component"
 
+components' :: MonadIO m => ReaderT Table m [([Symbol], Scope)]
+components' =
+  do
+    tab <- ask
+    liftIO (HashTable.toList tab)
+
 instance Monad m => Monad (ComponentsT m) where
   return = ComponentsT . return
   s >>= f = ComponentsT $ unpackComponentsT s >>= unpackComponentsT . f
@@ -101,6 +107,7 @@ instance Functor (ComponentsT m) where
 
 instance MonadIO m => MonadComponents (ComponentsT m) where
   component = ComponentsT . component'
+  components = ComponentsT components'
 
 instance MonadIO m => MonadIO (ComponentsT m) where
   liftIO = ComponentsT . liftIO

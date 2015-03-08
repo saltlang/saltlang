@@ -49,58 +49,78 @@ class Monad m => MonadComponents m where
   component :: [Symbol]
             -- ^ The component name.
             -> m Scope
+  -- | Get all components that have been defined.
+  components :: m [([Symbol], Scope)]
 
 instance MonadComponents m => MonadComponents (CommentBufferT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (CommentsT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (ContT c m) where
   component = lift . component
+  components = lift components
 
 instance (MonadComponents m, Error e) => MonadComponents (ErrorT e m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (GenposT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (GensymT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (KeywordsT tok m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (ListT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (MemoryLoaderT info m) where
   component = lift . component
+  components = lift components
 
 instance (MonadComponents m, Monoid msgs) =>
          MonadComponents (MessagesT msgs msg m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (PositionsT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (ReaderT r m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (SkipCommentsT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (SourceFilesT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (SourceLoaderT m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (StateT s m) where
   component = lift . component
+  components = lift components
 
 instance MonadComponents m => MonadComponents (SymbolsT m) where
   component = lift . component
+  components = lift components
 
 instance (MonadComponents m, Monoid w) => MonadComponents (WriterT w m) where
   component = lift . component
+  components = lift components
