@@ -453,7 +453,8 @@ instance Msg.Message Message where
   brief NewlineInString {} = string "Unescaped newline in string literal"
   brief ParseError {} = string "Syntax error"
   brief NoTopLevelDef { noTopLevelDefName = namestr } =
-    string "Expected top-level definition" <+> bytestring namestr
+    string "Expected a top-level definition named" <+>
+    dquoted (bytestring namestr)
   brief DuplicateField { duplicateFieldName = namestr } =
     string "Duplicate field name" <+> bytestring namestr
   brief NamelessField {} = string "Field binding has no name"
