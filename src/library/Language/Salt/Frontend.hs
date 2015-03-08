@@ -21,9 +21,11 @@ module Language.Salt.Frontend(
        ) where
 
 import Control.Monad.Messages
+import Control.Monad.SourceLoader
 import Language.Salt.Message
 import Language.Salt.Surface.Token
 
 import qualified Control.Monad.Frontend as Frontend
 
-type Frontend = MessagesT [Message] Message (Frontend.Frontend Token)
+type Frontend = SourceLoaderT (MessagesT [Message] Message
+                                         (Frontend.Frontend Token))
