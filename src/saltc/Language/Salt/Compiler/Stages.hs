@@ -27,17 +27,20 @@ import Blaze.ByteString.Builder
 import Control.Monad
 import Control.Monad.Artifacts.Class
 import Control.Monad.FileArtifacts
+import Control.Monad.Genpos
+import Control.Monad.Gensym
 import Control.Monad.Messages
-import Control.Monad.Positions
 import Control.Monad.Symbols
 import Control.Monad.Trans
-import Data.Array
+import Data.Array hiding (accum)
+import Data.Symbol
 import Language.Salt.Compiler.Options
 import Language.Salt.Frontend
 import Language.Salt.Message
 import Language.Salt.Surface.AST
 import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
+import Language.Salt.Surface.Collect
 import Language.Salt.Surface.Token
 import Prelude hiding (lex)
 import System.IO.Error
@@ -46,7 +49,7 @@ import Text.Format hiding (Options, concat)
 import Text.FormatM hiding (Options)
 import Text.XML.Expat.Pickle
 
-import qualified Data.ByteString as Strict
+import qualified Data.ByteString as Strict hiding (drop, break)
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Text.XML.Expat.Format as XML
@@ -161,32 +164,84 @@ printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
     when savedot (printDotAST fname ast)
     when savexml (printXMLAST fname ast)
 
+getComponentName :: Strict.ByteString -> FileArtifactsT Frontend [Symbol]
+getComponentName =
+  let
+    getComponentName' :: [Symbol] -> Strict.ByteString ->
+                         FileArtifactsT Frontend [Symbol]
+    getComponentName' accum bstr
+      | Strict.null bstr = return $! reverse accum
+      | otherwise =
+        let
+          (first, rest) = Strict.break (== '.') bstr
+        in do
+          sym <- symbol first
+          if Strict.null rest
+            then return $! reverse (sym : accum)
+            else getComponentName' (sym : accum) (Strict.drop 1 rest)
+  in
+    getComponentName' []
+
 -- | Just run the lexer, without the parser.
 lex :: Options
     -- ^ Compiler options.
     -> [Strict.ByteString]
     -- ^ Files to lex.
     -> FileArtifactsT Frontend ()
-lex Options { optStages = stages } =
+lex Options { optStages = stages, optComponents = True } =
+  let
+    lexOnlyFile :: Strict.ByteString -> FileArtifactsT Frontend ()
+    lexOnlyFile =
+      case stages ! Lexer of
+        Save { saveText = False, saveXML = False } ->
+          \namestr ->
+            do
+              cname <- getComponentName namestr
+              pos <- cmdLine
+              (fname, input) <- loadComponent cname pos
+              case input of
+                Nothing -> return ()
+                Just content ->
+                  lift (runLexerNoTokens lexRemaining fname content)
+        save ->
+          \namestr ->
+            do
+              cname <- getComponentName namestr
+              pos <- cmdLine
+              (fname, input) <- loadComponent cname pos
+              case input of
+                Nothing -> return ()
+                Just content ->
+                  do
+                    (_, toks) <- lift (runLexer lexRemaining fname content)
+                    printTokens save fname toks
+  in
+    mapM_ lexOnlyFile
+lex Options { optStages = stages, optComponents = False } =
   let
     lexOnlyFile :: Strict.ByteString -> FileArtifactsT Frontend ()
     lexOnlyFile =
       case stages ! Lexer of
         Save { saveText = False, saveXML = False } ->
           \fname ->
-            let
-              fnamestr = Strict.toString fname
-            in do
-              input <- liftIO (Lazy.readFile fnamestr)
-              lift (runLexerNoTokens lexRemaining fname input)
+            do
+              pos <- cmdLine
+              input <- loadFile fname pos
+              case input of
+                Nothing -> return ()
+                Just content ->
+                  lift (runLexerNoTokens lexRemaining fname content)
         save ->
           \fname ->
-            let
-              fnamestr = Strict.toString fname
-            in do
-              input <- liftIO (Lazy.readFile fnamestr)
-              (_, toks) <- lift (runLexer lexRemaining fname input)
-              printTokens save fname toks
+            do
+              pos <- cmdLine
+              input <- loadFile fname pos
+              case input of
+                Nothing -> return ()
+                Just content ->
+                  do
+                    (_, toks) <- lift (runLexer lexRemaining fname content)
+                    printTokens save fname toks
   in
     mapM_ lexOnlyFile
 
@@ -196,7 +251,51 @@ parse :: Options
       -> [Strict.ByteString]
       -- ^ Files to parse.
       -> FileArtifactsT Frontend ()
-parse Options { optStages = stages } =
+parse Options { optStages = stages, optComponents = True } =
+  let
+    saveast = stages ! Parser
+
+    parseFile :: Strict.ByteString -> FileArtifactsT Frontend (Maybe AST)
+    parseFile =
+      case stages ! Lexer of
+        Save { saveText = False, saveXML = False } ->
+          \namestr ->
+            do
+              cname <- getComponentName namestr
+              pos <- cmdLine
+              (fname, input) <- loadComponent cname pos
+              case input of
+                Nothing -> return Nothing
+                Just content ->
+                  do
+                    out <- lift (parserNoTokens fname content)
+                    case out of
+                      Just ast ->
+                        do
+                          printAST saveast fname ast
+                          return out
+                      Nothing -> return out
+        savetokens ->
+          \namestr ->
+            do
+              cname <- getComponentName namestr
+              pos <- cmdLine
+              (fname, input) <- loadComponent cname pos
+              case input of
+                Nothing -> return Nothing
+                Just content ->
+                  do
+                    (out, tokens) <- lift (parser fname content)
+                    printTokens savetokens fname tokens
+                    case out of
+                      Just ast ->
+                        do
+                          printAST saveast fname ast
+                          return out
+                      Nothing -> return out
+  in
+    mapM_ parseFile
+parse Options { optStages = stages, optComponents = False } =
   let
     saveast = stages ! Parser
 
@@ -205,31 +304,37 @@ parse Options { optStages = stages } =
       case stages ! Lexer of
         Save { saveText = False, saveXML = False } ->
           \fname ->
-            let
-              fnamestr = Strict.toString fname
-            in do
-              input <- liftIO (Lazy.readFile fnamestr)
-              out <- lift (parserNoTokens fname input)
-              case out of
-                Just ast ->
+            do
+              pos <- cmdLine
+              input <- loadFile fname pos
+              case input of
+                Nothing -> return Nothing
+                Just content ->
                   do
-                    printAST saveast fname ast
-                    return out
-                Nothing -> return out
+                    out <- lift (parserNoTokens fname content)
+                    case out of
+                      Just ast ->
+                        do
+                          printAST saveast fname ast
+                          return out
+                      Nothing -> return out
         savetokens ->
           \fname ->
-            let
-              fnamestr = Strict.toString fname
-            in do
-              input <- liftIO (Lazy.readFile fnamestr)
-              (out, tokens) <- lift (parser fname input)
-              printTokens savetokens fname tokens
-              case out of
-                Just ast ->
+            do
+              pos <- cmdLine
+              input <- loadFile fname pos
+              case input of
+                Nothing -> return Nothing
+                Just content ->
                   do
-                    printAST saveast fname ast
-                    return out
-                Nothing -> return out
+                    (out, tokens) <- lift (parser fname content)
+                    printTokens savetokens fname tokens
+                    case out of
+                      Just ast ->
+                        do
+                          printAST saveast fname ast
+                          return out
+                      Nothing -> return out
   in
     mapM_ parseFile
 {-

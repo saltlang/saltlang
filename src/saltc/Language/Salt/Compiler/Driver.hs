@@ -23,6 +23,7 @@ module Language.Salt.Compiler.Driver(
 import Control.Monad.FileArtifacts
 import Control.Monad.Frontend
 import Control.Monad.Messages
+import Control.Monad.SourceLoader
 import Data.Array
 import Data.Message
 import Language.Salt.Compiler.Options
@@ -42,7 +43,8 @@ import qualified Data.ByteString as Strict
 -- | Run the compiler with the given options.
 run :: Options -> IO ()
 run opts @ Options { optInputs = inputs, optStages = stages,
-                     optDistDir = distdiropt } =
+                     optDistDir = distdiropt,
+                     optSrcDirs = srcdirs } =
   let
     distdir = case distdiropt of
       Just val -> val
@@ -50,14 +52,16 @@ run opts @ Options { optInputs = inputs, optStages = stages,
   in case bounds stages of
     (Lexer, Lexer) ->
       let
-        msgs = runFileArtifactsT (lex opts inputs) distdir
+        loader = runFileArtifactsT (lex opts inputs) distdir
+        msgs = runSourceLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords
         return ()
     (Lexer, Parser) ->
       let
-        msgs = runFileArtifactsT (parse opts inputs) distdir
+        loader = runFileArtifactsT (parse opts inputs) distdir
+        msgs = runSourceLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords
