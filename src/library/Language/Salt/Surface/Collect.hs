@@ -19,7 +19,9 @@
 
 module Language.Salt.Surface.Collect(
        collectComponent,
-       collectFile
+       collectFile,
+       loadComponent,
+       loadFile
        ) where
 
 import Control.Monad
@@ -1032,6 +1034,40 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
         accum <- foldM (collectElement Public) emptyTempScope scope
         return $! makeScope accum
 
+-- | Load a file containing a component.
+loadComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
+                  MonadMessages Message m, MonadGenpos m, MonadSymbols m) =>
+                 [Symbol]
+              -- ^ The name of the component to load.
+              -> Position
+              -- ^ The position at which the reference to this
+              -- component occurred.
+              -> m (Strict.ByteString, Maybe Lazy.ByteString)
+loadComponent cname pos =
+  let
+    pathSepBStr = Strict.fromString [pathSeparator]
+    saltExt = Strict.fromString $! extSeparator : "salt"
+
+    componentFileName =
+      do
+        bstrs <- mapM name cname
+        return $! Strict.concat [Strict.intercalate pathSepBStr bstrs, saltExt]
+  in do
+    fname <- componentFileName
+    -- Call the loader to get the file contents.
+    loaded <- load fname
+    case loaded of
+    -- If an error occurs while loading, report it.
+      Left err ->
+        let
+          errstr = Strict.fromString $! ioeGetErrorString err
+        in do
+          if isDoesNotExistError err
+            then cannotFindComponent cname pos
+            else cannotAccessComponent cname fname errstr pos
+          return (fname, Nothing)
+      Right content -> return (fname, Just content)
+
 collectComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                      MonadMessages Message m, MonadGenpos m,
                      MonadCollect m, MonadSymbols m) =>
@@ -1045,35 +1081,17 @@ collectComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                  -> m ()
 collectComponent parseFunc cname pos =
   let
-    pathSepBStr = Strict.fromString [pathSeparator]
-    extSepBStr = Strict.fromString [extSeparator]
-
-    componentFileName =
-      do
-        bstrs <- mapM name cname
-        return $! Strict.concat [ Strict.intercalate pathSepBStr bstrs,
-                                  extSepBStr, "salt" ]
-
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
       collectComponent parseFunc uname upos
 
     loadAndCollect =
       do
-        fname <- componentFileName
+        (fname, loaded) <- loadComponent cname pos
         fpos <- file fname
         -- Call the loader to get the file contents.
-        loaded <- load fname
         case loaded of
-        -- If an error occurs while loading, report it.
-          Left err ->
-            let
-              errstr = Strict.fromString $! ioeGetErrorString err
-            in do
-              if isDoesNotExistError err
-                then cannotFindComponent cname pos
-                else cannotAccessComponent cname fname errstr pos
-              addComponent cname emptyScope
-          Right content ->
+          Nothing -> addComponent cname emptyScope
+          Just content ->
             -- Otherwise, continue
             do
               res <- parseFunc fname content
@@ -1088,6 +1106,31 @@ collectComponent parseFunc cname pos =
     done <- componentExists cname
     unless done loadAndCollect
     return ()
+
+-- | Load a file containing a component
+loadFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
+             MonadMessages Message m, MonadGenpos m) =>
+            Strict.ByteString
+         -- ^ The name of the file.
+         -> Position
+         -- ^ The position at which the reference to this
+         -- file occurred.
+         -> m (Maybe Lazy.ByteString)
+loadFile fname pos =
+  do
+    -- Call the loader to get the file contents.
+    loaded <- load fname
+    case loaded of
+    -- If an error occurs while loading, report it.
+      Left err ->
+        let
+          errstr = Strict.fromString $! ioeGetErrorString err
+        in do
+          if isDoesNotExistError err
+            then cannotFindFile fname pos
+            else cannotAccessFile fname errstr pos
+          return Nothing
+      Right content -> return (Just content)
 
 collectFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                 MonadMessages Message m, MonadGenpos m,
@@ -1107,18 +1150,10 @@ collectFile parseFunc fname pos =
   in do
     fpos <- file fname
     -- Call the loader to get the file contents.
-    loaded <- load fname
+    loaded <- loadFile fname pos
     case loaded of
-    -- If an error occurs while loading, report it.
-      Left err ->
-        let
-          errstr = Strict.fromString $! ioeGetErrorString err
-        in do
-          if isDoesNotExistError err
-            then cannotFindFile fname pos
-            else cannotAccessFile fname errstr pos
-          return Nothing
-      Right content ->
+      Nothing -> return Nothing
+      Just content ->
         -- Otherwise, continue
         do
           res <- parseFunc fname content
@@ -1127,5 +1162,5 @@ collectFile parseFunc fname pos =
               do
                 mapM_ collectUse uses
                 scope <- collectAST fpos Nothing ast
-                return $! Just scope
+                return (Just scope)
             Nothing -> return Nothing
