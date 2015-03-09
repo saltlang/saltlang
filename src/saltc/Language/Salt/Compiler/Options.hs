@@ -198,9 +198,11 @@ setSaveText = mempty { saveText = True }
 
 keepText :: Maybe String -> Args
 keepText Nothing = mempty { argTokensSave = setSaveText,
-                            argASTSave = setSaveText }
+                            argASTSave = setSaveText,
+                            argSurfaceSave = setSaveText }
 keepText (Just "all") =
-  mempty { argTokensSave = setSaveText, argASTSave = setSaveText }
+  mempty { argTokensSave = setSaveText, argASTSave = setSaveText,
+           argSurfaceSave = setSaveText }
 keepText (Just "tokens") =
   mempty { argTokensSave = setSaveText }
 keepText (Just "ast") =
@@ -216,9 +218,11 @@ setSaveXML = mempty { saveXML = True }
 
 keepXML :: Maybe String -> Args
 keepXML Nothing = mempty { argTokensSave = setSaveXML,
-                            argASTSave = setSaveXML }
+                           argASTSave = setSaveXML,
+                           argSurfaceSave = setSaveXML }
 keepXML (Just "all") =
-  mempty { argTokensSave = setSaveXML, argASTSave = setSaveXML }
+  mempty { argTokensSave = setSaveXML, argASTSave = setSaveXML,
+           argSurfaceSave = setSaveXML }
 keepXML (Just "tokens") =
   mempty { argTokensSave = setSaveXML }
 keepXML (Just "ast") =
@@ -233,9 +237,10 @@ setSaveDot :: Save
 setSaveDot = mempty { saveDot = True }
 
 keepDot :: Maybe String -> Args
-keepDot Nothing = mempty { argTokensSave = setSaveDot,
-                           argASTSave = setSaveDot }
-keepDot (Just "all") = mempty { argASTSave = setSaveDot }
+keepDot Nothing = mempty { argASTSave = setSaveDot,
+                           argSurfaceSave = setSaveDot }
+keepDot (Just "all") = mempty { argASTSave = setSaveDot,
+                                argSurfaceSave = setSaveDot }
 keepDot (Just "tokens") =
   Error { errMsgs = ["tokens have no graphviz representation"],
           errDistDir = False, errLastStage = False }

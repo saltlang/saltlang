@@ -20,13 +20,15 @@
 module Language.Salt.Compiler.Stages(
        lex,
        parse,
-       collect
+       collect,
+       dumpSurface
        ) where
 
 import Blaze.ByteString.Builder
 import Control.Monad
 import Control.Monad.Artifacts.Class
 import Control.Monad.Collect
+import Control.Monad.Components
 import Control.Monad.FileArtifacts
 import Control.Monad.Genpos
 import Control.Monad.Gensym
@@ -39,10 +41,11 @@ import Data.Symbol
 import Language.Salt.Compiler.Options
 import Language.Salt.Frontend
 import Language.Salt.Message
-import Language.Salt.Surface.AST
+import Language.Salt.Surface.AST(AST, astDot)
+import Language.Salt.Surface.Collect
 import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
-import Language.Salt.Surface.Collect
+import Language.Salt.Surface.Syntax(Scope)
 import Language.Salt.Surface.Token
 import Prelude hiding (lex)
 import System.IO.Error
@@ -83,6 +86,9 @@ tokensExt = Strict.fromString $! extSeparator : "tokens"
 
 astExt :: Strict.ByteString
 astExt = Strict.fromString $! extSeparator : "ast"
+
+surfaceExt :: Strict.ByteString
+surfaceExt = Strict.fromString $! extSeparator : "surface"
 
 xmlExt :: Strict.ByteString
 xmlExt = Strict.fromString $! extSeparator : "xml"
@@ -165,6 +171,37 @@ printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
     when savetxt (printTextAST fname ast)
     when savedot (printDotAST fname ast)
     when savexml (printXMLAST fname ast)
+
+printTextSurface :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
+                     MonadArtifacts Strict.ByteString m) =>
+                    Strict.ByteString -> Scope -> m ()
+printTextSurface fname scope =
+  let
+    surfacefile = Strict.append fname surfaceExt
+  in do
+    surfacedoc <- formatM scope
+    createArtifact surfacefile (buildOptimal 120 False surfacedoc)
+
+printXMLSurface :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m) =>
+                   Strict.ByteString -> Scope -> m ()
+printXMLSurface fname scope =
+  let
+    xmlfile = Strict.concat [fname, surfaceExt, xmlExt]
+    pickler = xpRoot (xpElem (Strict.fromString "file")
+                             (xpAttrFixed (Strict.fromString "name") fname)
+                             xpickle)
+    xmltree = XML.indent 2 (pickleTree pickler ((), scope))
+  in
+    createLazyBytestringArtifact xmlfile (XML.format xmltree)
+
+printSurface :: (MonadIO m, MonadPositions m, MonadSymbols m,
+                 MonadMessages Message m, MonadArtifacts Strict.ByteString m) =>
+                Save -> Strict.ByteString -> Scope -> m ()
+printSurface Save { saveXML = savexml, saveText = savetxt }
+             fname ast =
+  do
+    when savetxt (printTextSurface fname ast)
+    when savexml (printXMLSurface fname ast)
 
 getComponentName :: MonadGensym m =>
                     Strict.ByteString -> m [Symbol]
@@ -363,13 +400,29 @@ parse Options { optStages = stages, optComponents = False } names
       pos <- cmdLine
       mapM_ (parseFile pos) names
 
+dumpSurface :: Options -> ComponentsT (FileArtifactsT Frontend) ()
+dumpSurface Options { optStages = stages } =
+  let
+    savesurface = stages ! Collect
+
+    mapfun :: ([Symbol], Scope) -> ComponentsT (FileArtifactsT Frontend) ()
+    mapfun (cname, scope) =
+      do
+        fname <- componentFileName cname
+        printSurface savesurface fname scope
+  in if saveXML savesurface || saveText savesurface
+    then do
+      comps <- components
+      mapM_ mapfun comps
+    else return ()
+
 -- | Run the collect phase.
 collect :: Options
         -- ^ Compiler options
         -> [Strict.ByteString]
         -- ^ Inputs to parse.
         -> CollectT (FileArtifactsT Frontend) ()
-collect Options { optStages = stages, optComponents = components } names
+collect Options { optStages = stages, optComponents = compnames } names
   | saveText (stages ! Lexer) || saveXML (stages ! Lexer) =
     let
       savetokens = stages ! Lexer
@@ -389,7 +442,7 @@ collect Options { optStages = stages, optComponents = components } names
             Nothing -> return out
     in do
       pos <- cmdLine
-      if components
+      if compnames
         then do
           cnames <- mapM getComponentName names
           mapM_ (collectComponent parseFile pos) cnames
@@ -411,7 +464,7 @@ collect Options { optStages = stages, optComponents = components } names
             Nothing -> return out
     in do
       pos <- cmdLine
-      if components
+      if compnames
         then do
           cnames <- mapM getComponentName names
           mapM_ (collectComponent parseFile pos) cnames

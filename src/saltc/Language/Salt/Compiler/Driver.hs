@@ -69,7 +69,8 @@ run opts @ Options { optInputs = inputs, optStages = stages,
         return ()
     (Lexer, Collect) ->
       let
-        artifacts = runCollectT (collect opts inputs)
+        artifacts = runCollectTComponentsT (collect opts inputs)
+                                           (const $! dumpSurface opts)
         loader = runFileArtifactsT artifacts distdir
         msgs = runSourceLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
