@@ -20,6 +20,7 @@
 module Language.Salt.Surface.Collect(
        collectComponent,
        collectFile,
+       componentFileName,
        loadComponent,
        loadFile
        ) where
@@ -30,6 +31,7 @@ import Control.Monad.Genpos
 import Control.Monad.Loader.Class
 import Control.Monad.Messages
 import Control.Monad.Symbols
+import Control.Monad.Trans
 import Data.Array hiding (accum, elems)
 import Data.HashMap.Strict(HashMap)
 import Data.Maybe
@@ -224,6 +226,12 @@ collectSeq =
       do
         collectedFirst <- collectExp first
         collectSeq' (collectedFirst : accum) second
+    collectSeq' accum AST.Seq { AST.seqFirst = first,
+                                AST.seqSecond = second } =
+      do
+        collectedFirst <- collectExp first
+        collectedSecond <- collectExp second
+        return $! reverse (collectedSecond : collectedFirst : accum)
     collectSeq' accum e =
       do
         collectedExp <- collectExp e
@@ -1034,8 +1042,22 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
         accum <- foldM (collectElement Public) emptyTempScope scope
         return $! makeScope accum
 
+-- | Get the file name for a component.
+componentFileName :: MonadSymbols m =>
+                     [Symbol]
+                  -- ^ The component name to convert.
+                  -> m Strict.ByteString
+                  -- ^ The file name for this component.
+componentFileName cname =
+  let
+    pathSepBStr = Strict.fromString [pathSeparator]
+    saltExt = Strict.fromString $! extSeparator : "salt"
+  in do
+    bstrs <- mapM name cname
+    return $! Strict.concat [Strict.intercalate pathSepBStr bstrs, saltExt]
+
 -- | Load a file containing a component.
-loadComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
+loadComponent :: (MonadIO m, MonadLoader Strict.ByteString Lazy.ByteString m,
                   MonadMessages Message m, MonadGenpos m, MonadSymbols m) =>
                  [Symbol]
               -- ^ The name of the component to load.
@@ -1044,16 +1066,10 @@ loadComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
               -- component occurred.
               -> m (Strict.ByteString, Maybe Lazy.ByteString)
 loadComponent cname pos =
-  let
-    pathSepBStr = Strict.fromString [pathSeparator]
-    saltExt = Strict.fromString $! extSeparator : "salt"
-
-    componentFileName =
-      do
-        bstrs <- mapM name cname
-        return $! Strict.concat [Strict.intercalate pathSepBStr bstrs, saltExt]
-  in do
-    fname <- componentFileName
+  do
+    fname <- componentFileName cname
+    -- XXX Replace this with some sort of progress messages framework
+    liftIO (Strict.putStr (Strict.concat ["Loaded ", fname, "\n"]))
     -- Call the loader to get the file contents.
     loaded <- load fname
     case loaded of
@@ -1070,25 +1086,25 @@ loadComponent cname pos =
 
 collectComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                      MonadMessages Message m, MonadGenpos m,
-                     MonadCollect m, MonadSymbols m) =>
+                     MonadCollect m, MonadSymbols m, MonadIO m) =>
                     (Strict.ByteString -> Lazy.ByteString -> m (Maybe AST.AST))
                  -- ^ The parsing function to use.
-                 -> [Symbol]
-                 -- ^ The name of the component to collect.
                  -> Position
                  -- ^ The position at which the reference to this
                  -- component occurred.
+                 -> [Symbol]
+                 -- ^ The name of the component to collect.
                  -> m ()
-collectComponent parseFunc cname pos =
+collectComponent parseFunc pos cname =
   let
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
-      collectComponent parseFunc uname upos
+      collectComponent parseFunc upos uname
 
     loadAndCollect =
       do
+        -- Call the loader to get the file contents.
         (fname, loaded) <- loadComponent cname pos
         fpos <- file fname
-        -- Call the loader to get the file contents.
         case loaded of
           Nothing -> addComponent cname emptyScope
           Just content ->
@@ -1098,9 +1114,9 @@ collectComponent parseFunc cname pos =
               case res of
                 Just ast @ AST.AST { AST.astUses = uses } ->
                   do
-                    mapM_ collectUse uses
                     scope <- collectAST fpos (Just cname) ast
                     addComponent cname scope
+                    mapM_ collectUse uses
                 Nothing -> addComponent cname emptyScope
   in do
     done <- componentExists cname
@@ -1108,7 +1124,7 @@ collectComponent parseFunc cname pos =
     return ()
 
 -- | Load a file containing a component
-loadFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
+loadFile :: (MonadIO m, MonadLoader Strict.ByteString Lazy.ByteString m,
              MonadMessages Message m, MonadGenpos m) =>
             Strict.ByteString
          -- ^ The name of the file.
@@ -1120,6 +1136,8 @@ loadFile fname pos =
   do
     -- Call the loader to get the file contents.
     loaded <- load fname
+    -- XXX Replace this with some sort of progress messages framework
+    liftIO (Strict.putStr (Strict.concat ["Loaded ", fname, "\n"]))
     case loaded of
     -- If an error occurs while loading, report it.
       Left err ->
@@ -1134,19 +1152,19 @@ loadFile fname pos =
 
 collectFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                 MonadMessages Message m, MonadGenpos m,
-                MonadCollect m, MonadSymbols m) =>
+                MonadCollect m, MonadSymbols m, MonadIO m) =>
                (Strict.ByteString -> Lazy.ByteString -> m (Maybe AST.AST))
             -- ^ The parsing function to use.
-            -> Strict.ByteString
-            -- ^ The name of the component to collect.
             -> Position
             -- ^ The position at which the reference to this
             -- component occurred.
+            -> Strict.ByteString
+            -- ^ The name of the file to collect.
             -> m (Maybe Syntax.Scope)
-collectFile parseFunc fname pos =
+collectFile parseFunc pos fname =
   let
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
-      collectComponent parseFunc uname upos
+      collectComponent parseFunc upos uname
   in do
     fpos <- file fname
     -- Call the loader to get the file contents.
@@ -1160,7 +1178,7 @@ collectFile parseFunc fname pos =
           case res of
             Just ast @ AST.AST { AST.astUses = uses } ->
               do
-                mapM_ collectUse uses
                 scope <- collectAST fpos Nothing ast
+                mapM_ collectUse uses
                 return (Just scope)
             Nothing -> return Nothing
