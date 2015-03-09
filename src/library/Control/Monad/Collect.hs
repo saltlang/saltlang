@@ -22,14 +22,17 @@ module Control.Monad.Collect(
        MonadCollect(..),
        CollectT,
        Collect,
+       runCollectTComponentsT,
        runCollectT,
        mapCollectT,
        runCollect
        ) where
 
 import Control.Applicative
+import Control.Monad.Artifacts.Class
 import Control.Monad.CommentBuffer
 import Control.Monad.Comments
+import Control.Monad.Components
 import Control.Monad.Collect.Class
 import Control.Monad.Cont
 import Control.Monad.Error
@@ -57,6 +60,20 @@ newtype CollectT m a = CollectT { unpackCollectT :: ReaderT Table m a }
 
 type Collect = CollectT IO
 
+runCollectTComponentsT :: MonadIO m =>
+                          CollectT m a
+                       -- ^ The @CollectT@ monad transformer to execute.
+                       -> (a -> ComponentsT m b)
+                       -- ^ The @ComponentsT@ monad transformer to
+                       -- execute with the results of the @CollectT@
+                       -- monad transformer.
+                       -> m b
+runCollectTComponentsT collect comps =
+  do
+    tab <- liftIO HashTable.new
+    res <- runReaderT (unpackCollectT collect) tab
+    runComponentsT (comps res) tab
+
 runCollectT :: MonadIO m =>
                CollectT m a
             -- ^ The @CollectT@ monad transformer to execute.
@@ -76,10 +93,10 @@ mapCollectT :: (Monad m, Monad n) =>
 mapCollectT f = CollectT . mapReaderT f . unpackCollectT
 
 addComponent' :: MonadIO m => [Symbol] -> Scope -> ReaderT Table m ()
-addComponent' cname component=
+addComponent' cname comp =
   do
     tab <- ask
-    liftIO (HashTable.insert tab cname component)
+    liftIO (HashTable.insert tab cname comp)
 
 componentExists' :: MonadIO m => [Symbol] -> ReaderT Table m Bool
 componentExists' cname =
@@ -112,6 +129,11 @@ instance MonadIO m => MonadIO (CollectT m) where
 
 instance MonadTrans CollectT where
   lift = CollectT . lift
+
+instance MonadArtifacts path m => MonadArtifacts path (CollectT m) where
+  artifact path = lift . artifact path
+  artifactBytestring path = lift . artifactBytestring path
+  artifactLazyBytestring path = lift . artifactLazyBytestring path
 
 instance MonadCommentBuffer m => MonadCommentBuffer (CollectT m) where
   startComment = lift startComment

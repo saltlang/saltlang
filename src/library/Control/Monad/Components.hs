@@ -28,6 +28,7 @@ module Control.Monad.Components(
        ) where
 
 import Control.Applicative
+import Control.Monad.Artifacts.Class
 import Control.Monad.CommentBuffer
 import Control.Monad.Comments
 import Control.Monad.Components.Class
@@ -114,6 +115,11 @@ instance MonadIO m => MonadIO (ComponentsT m) where
 
 instance MonadTrans ComponentsT where
   lift = ComponentsT . lift
+
+instance MonadArtifacts path m => MonadArtifacts path (ComponentsT m) where
+  artifact path = lift . artifact path
+  artifactBytestring path = lift . artifactBytestring path
+  artifactLazyBytestring path = lift . artifactLazyBytestring path
 
 instance MonadCommentBuffer m => MonadCommentBuffer (ComponentsT m) where
   startComment = lift startComment
