@@ -22,9 +22,9 @@ module Language.Salt.Compiler.Driver(
 
 import Control.Monad.Collect
 import Control.Monad.FileArtifacts
+import Control.Monad.FileLoader
 import Control.Monad.Frontend
 import Control.Monad.Messages
-import Control.Monad.SourceLoader
 import Data.Array
 import Data.Message
 import Language.Salt.Compiler.Options
@@ -54,7 +54,7 @@ run opts @ Options { optInputs = inputs, optStages = stages,
     (Lexer, Lexer) ->
       let
         loader = runFileArtifactsT (lex opts inputs) distdir
-        msgs = runSourceLoaderT loader srcdirs
+        msgs = runFileLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords
@@ -62,7 +62,7 @@ run opts @ Options { optInputs = inputs, optStages = stages,
     (Lexer, Parser) ->
       let
         loader = runFileArtifactsT (parse opts inputs) distdir
-        msgs = runSourceLoaderT loader srcdirs
+        msgs = runFileLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords
@@ -72,7 +72,7 @@ run opts @ Options { optInputs = inputs, optStages = stages,
         artifacts = runCollectTComponentsT (collect opts inputs)
                                            (const $! dumpSurface opts)
         loader = runFileArtifactsT artifacts distdir
-        msgs = runSourceLoaderT loader srcdirs
+        msgs = runFileLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
       in do
         _ <- runFrontendT front keywords

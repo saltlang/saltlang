@@ -26,6 +26,7 @@ import Control.Monad.CommentBuffer
 import Control.Monad.Comments
 import Control.Monad.Cont
 import Control.Monad.Error
+import Control.Monad.FileLoader
 import Control.Monad.Genpos
 import Control.Monad.Gensym
 import Control.Monad.Keywords
@@ -36,7 +37,6 @@ import Control.Monad.Positions
 import Control.Monad.Reader
 import Control.Monad.SkipComments
 import Control.Monad.SourceFiles
-import Control.Monad.SourceLoader
 import Control.Monad.State
 import Control.Monad.Symbols
 import Control.Monad.Writer
@@ -109,7 +109,7 @@ instance MonadComponents m => MonadComponents (SourceFilesT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (SourceLoaderT m) where
+instance MonadComponents m => MonadComponents (FileLoaderT m) where
   component = lift . component
   components = lift components
 
