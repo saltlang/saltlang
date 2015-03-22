@@ -213,32 +213,6 @@ collectPattern AST.Name { AST.nameSym = sym, AST.namePos = pos } =
   return Syntax.Name { Syntax.nameSym = sym, Syntax.namePos = pos }
 collectPattern (AST.Exact l) = return (Syntax.Exact l)
 
--- | Collect a bunch of 'Seq's by walking down the spine and converting
--- it into a list.
-collectSeq :: (MonadMessages Message m, MonadSymbols m) =>
-              AST.Exp -> m [Syntax.Exp]
-collectSeq =
-  let
-    collectSeq' :: (MonadMessages Message m, MonadSymbols m) =>
-                   [Syntax.Exp] -> AST.Exp -> m [Syntax.Exp]
-    collectSeq' accum AST.Seq { AST.seqFirst = first,
-                                AST.seqSecond = second @ AST.Seq {} } =
-      do
-        collectedFirst <- collectExp first
-        collectSeq' (collectedFirst : accum) second
-    collectSeq' accum AST.Seq { AST.seqFirst = first,
-                                AST.seqSecond = second } =
-      do
-        collectedFirst <- collectExp first
-        collectedSecond <- collectExp second
-        return $! reverse (collectedSecond : collectedFirst : accum)
-    collectSeq' accum e =
-      do
-        collectedExp <- collectExp e
-        return $! reverse (collectedExp : accum)
-  in
-    collectSeq' []
-
 -- | Collect a syntax directive.  This implements a simple recursive
 -- descent parser to parse the syntax directives.
 --
@@ -256,8 +230,13 @@ collectSeq =
 -- >            prec (< | > | ==) id (. id)* )+
 collectSyntax :: (MonadMessages Message m, MonadSymbols m) =>
                  SyntaxScope -> AST.Exp -> m SyntaxScope
-collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
-                               AST.seqSecond = body } =
+-- If it's not a seq, it's a syntax error
+collectSyntax accum AST.Seq { AST.seqPos = pos, AST.seqExps = [_] } =
+  do
+    badSyntax pos
+    return accum
+collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
+                                             body } =
   let
     -- | Add a precedence relationship to the current scope.
     addPrec :: (MonadMessages Message m, MonadSymbols m) =>
@@ -307,35 +286,37 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
     -- > syntax id prec (< | > | ==) id (. id)
     -- >                             ^
     precName :: (MonadMessages Message m, MonadSymbols m) =>
-                Ordering -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                Ordering -> HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                 m (HashMap Symbol Syntax.Syntax)
-    -- If the top-level expression is a Seq, then there's another
-    -- directive after this one.
-    precName ord syntax' AST.Seq { AST.seqFirst = exp,
-                                   AST.seqSecond = rest } =
+    -- If this is the last directive, so add the precedence
+    -- relation.
+    precName ord syntax' [exp] = addPrec syntax' ord exp
+    -- Otherwise, there's another directive after this one.
+    precName ord syntax' (exp : rest) =
       do
         -- Add the precedence relation
         newdefs <- addPrec syntax' ord exp
         -- Parse the next directive
         startDirective newdefs rest
-    -- Otherwise, this is the last directive, so add the precedence
-    -- relation.
-    precName ord syntax' exp = addPrec syntax' ord exp
+    precName _ _ [] = error "Shouldn't see empty list"
 
     -- | Precedence relation.
     --
     -- > syntax id prec (< | > | ==) id (. id)*
     -- >                ^
     precRelation :: (MonadMessages Message m, MonadSymbols m) =>
-                    HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                    HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                     m (HashMap Symbol Syntax.Syntax)
+    -- If the list ends prematurely, it's a parse error
+    precRelation syntax' [e] =
+      do
+        badSyntax (AST.expPosition e)
+        return syntax'
     -- If the top-level expression is a Seq, then the first
     -- expression must be a Sym, which is the relationship.  We
     -- expect to see a Field or Sym next.
-    precRelation syntax'
-                 AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
-                                                    AST.symPos = pos },
-                           AST.seqSecond = rest } =
+    precRelation syntax' (AST.Sym { AST.symName = kindsym,
+                                    AST.symPos = pos } : rest) =
       do
         kind <- name kindsym
         -- Get the precedence relationship from the symbol's name.
@@ -349,27 +330,39 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
               badSyntaxPrec pos
               return syntax'
     -- The first expression must be a Sym, or else it's a parse error.
-    precRelation syntax' AST.Seq { AST.seqFirst = kind } =
+    precRelation syntax' (first : _) =
       do
-        badSyntaxPrec (AST.expPosition kind)
+        badSyntaxPrec (AST.expPosition first)
         return syntax'
-    -- The top-level expression must be a Seq, or else it's a parse error.
-    precRelation syntax' exp =
-      do
-        badSyntax (AST.expPosition exp)
-        return syntax'
+    precRelation _ [] = error "Shouldn't see empty list"
 
     -- | Infix associativity
     --
     -- > syntax id infix (left | right | nonassoc) directive*
     -- >                 ^
     infixAssoc :: (MonadMessages Message m, MonadSymbols m) =>
-                  Position -> HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                  Position -> HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                   m (HashMap Symbol Syntax.Syntax)
-    infixAssoc fixitypos syntax'
-               AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
-                                                  AST.symPos = pos },
-                         AST.seqSecond = rest } =
+    -- If the top-level expression is a Sym, it must be the
+    -- associativity, and this is the last directive.
+    infixAssoc fixitypos syntax' [ AST.Sym { AST.symName = kindsym,
+                                             AST.symPos = pos } ] =
+      do
+        kind <- name kindsym
+        -- Get the associativity from the symbol's name, then add
+        -- the infix fixity to the scope.
+        case kind of
+          "left" -> addFixity syntax' (Syntax.Infix Syntax.Left) fixitypos
+          "right" -> addFixity syntax' (Syntax.Infix Syntax.Right) fixitypos
+          "nonassoc" ->
+            addFixity syntax' (Syntax.Infix Syntax.NonAssoc) fixitypos
+          -- Not a valid fixity.
+          _ ->
+            do
+              badSyntaxAssoc pos
+              return syntax'
+    infixAssoc fixitypos syntax' (AST.Sym { AST.symName = kindsym,
+                                            AST.symPos = pos } : rest) =
       do
         kind <- name kindsym
         -- Get the associativity from the symbol's name, then add
@@ -397,34 +390,11 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
               badSyntaxAssoc pos
               return syntax'
     -- If the first expression isn't a Sym, it's a parse error.
-    infixAssoc _ syntax' AST.Seq { AST.seqFirst = kind } =
+    infixAssoc _ syntax' (first : _) =
       do
-        badSyntaxAssoc (AST.expPosition kind)
+        badSyntaxAssoc (AST.expPosition first)
         return syntax'
-    -- If the top-level expression is a Sym, it must be the
-    -- associativity, and this is the last directive.
-    infixAssoc fixitypos syntax' AST.Sym { AST.symName = kindsym,
-                                           AST.symPos = pos } =
-      do
-        kind <- name kindsym
-        -- Get the associativity from the symbol's name, then add
-        -- the infix fixity to the scope.
-        case kind of
-          "left" -> addFixity syntax' (Syntax.Infix Syntax.Left) fixitypos
-          "right" -> addFixity syntax' (Syntax.Infix Syntax.Right) fixitypos
-          "nonassoc" ->
-            addFixity syntax' (Syntax.Infix Syntax.NonAssoc) fixitypos
-          -- Not a valid fixity.
-          _ ->
-            do
-              badSyntaxAssoc pos
-              return syntax'
-    -- If the top-level expression isn't a Seq or a Sym, then it's
-    -- a parse error.
-    infixAssoc _ syntax' exp =
-      do
-        badSyntax (AST.expPosition exp)
-        return syntax'
+    infixAssoc _ _ [] = error "Shouldn't see empty string here"
 
     -- | Start of one directive.
     --
@@ -432,13 +402,38 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
     -- >            prec (< | > | ==) id (. id)* )+
     -- >           ^
     startDirective :: (MonadMessages Message m, MonadSymbols m) =>
-                      HashMap Symbol Syntax.Syntax -> AST.Exp ->
+                      HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                       m (HashMap Symbol Syntax.Syntax)
+    -- It's ok for the top-level to be a Sym, as long as it's "postfix".
+    startDirective syntax' [ AST.Sym { AST.symName = kindsym,
+                                       AST.symPos = pos } ] =
+      do
+        kind <- name kindsym
+        case kind of
+          "postfix" -> addFixity syntax' Syntax.Postfix pos
+          -- Infixes expect an associativity
+          "infix" ->
+            do
+              badSyntax pos
+              return syntax'
+          -- Precedence relations expect more
+          "prec" ->
+            do
+              badSyntax pos
+              return syntax'
+          -- This wasn't a known syntax directive
+          _ ->
+            do
+              badSyntaxKind pos
+              return syntax'
+    -- If the list ends prematurely, it's a parse error
+    startDirective syntax' [e] =
+      do
+        badSyntax (AST.expPosition e)
+        return syntax'
     -- The first expression is a Sym (the kind), and there's more.
-    startDirective syntax'
-                   AST.Seq { AST.seqFirst = AST.Sym { AST.symName = kindsym,
-                                                      AST.symPos = pos },
-                             AST.seqSecond = rest } =
+    startDirective syntax' (AST.Sym { AST.symName = kindsym,
+                                      AST.symPos = pos } : rest ) =
       do
         kind <- name kindsym
         -- Look at the kind to figure out what to do next.
@@ -459,46 +454,19 @@ collectSyntax syntax AST.Seq { AST.seqFirst = AST.Sym { AST.symName = sym},
               badSyntaxKind pos
               return syntax'
     -- If the first expression isn't a Sym, it's a parse error.
-    startDirective syntax' AST.Seq { AST.seqFirst = kind } =
+    startDirective syntax' (first : _) =
       do
-        badSyntaxKind (AST.expPosition kind)
+        badSyntaxKind (AST.expPosition first)
         return syntax'
-    -- It's ok for the top-level to be a Sym, as long as it's "postfix".
-    startDirective syntax' AST.Sym { AST.symName = kindsym,
-                                     AST.symPos = pos } =
-      do
-        kind <- name kindsym
-        case kind of
-          "postfix" -> addFixity syntax' Syntax.Postfix pos
-          -- Infixes expect an associativity
-          "infix" ->
-            do
-              badSyntax pos
-              return syntax'
-          -- Precedence relations expect more
-          "prec" ->
-            do
-              badSyntax pos
-              return syntax'
-          -- This wasn't a known syntax directive
-          _ ->
-            do
-              badSyntaxKind pos
-              return syntax'
-    -- If the top-level expression isn't a Seq or a Sym, then it's
-    -- a parse error.
-    startDirective syntax' exp =
-      do
-        badSyntax (AST.expPosition exp)
-        return syntax'
+    startDirective _ [] = error "Shouldn't see empty string here"
   in
     startDirective syntax body
 -- If the first expression isn't a Sym, then it's a parse error.
-collectSyntax accum AST.Seq { AST.seqFirst = kind } =
+collectSyntax accum AST.Seq { AST.seqExps = first : _ } =
   do
-    badSyntaxName (AST.expPosition kind)
+    badSyntaxName (AST.expPosition first)
     return accum
--- If the top-level expression isn't a Seq, then it's a parse error.
+-- If it's not a seq, it's a syntax error
 collectSyntax accum exp =
   do
     badSyntax (AST.expPosition exp)
@@ -677,10 +645,10 @@ collectExp AST.Record { AST.recordType = True, AST.recordFields = fields,
     return Syntax.RecordType { Syntax.recordTypeFields = collectedFields,
                                Syntax.recordTypePos = pos }
 -- For 'Seq's, walk down the right spine and gather up all 'Seq's into a list.
-collectExp e @ AST.Seq { AST.seqPos = pos } =
+collectExp AST.Seq { AST.seqExps = exps, AST.seqPos = pos } =
   do
-    collectedSeq <- collectSeq e
-    return Syntax.Seq { Syntax.seqExps = collectedSeq, Syntax.seqPos = pos }
+    collectedExps <- mapM collectExp exps
+    return Syntax.Seq { Syntax.seqExps = collectedExps, Syntax.seqPos = pos }
 -- The remainder of these are straightforward
 collectExp AST.Abs { AST.absKind = kind, AST.absCases = cases,
                      AST.absPos = pos } =

@@ -309,10 +309,8 @@ data Exp =
     -- function call, possibly with inorder symbols.  This is
     -- re-parsed once the inorder symbols are known.
   | Seq {
-      -- | The first expression.
-      seqFirst :: !Exp,
-      -- | The second expression.
-      seqSecond :: !Exp,
+      -- | The expressions in the sequence.
+      seqExps :: ![Exp],
       -- | The position in source from which this arises.
       seqPos :: !Position
     }
@@ -537,9 +535,7 @@ instance Eq Exp where
   Ascribe { ascribeVal = val1, ascribeType = ty1 } ==
     Ascribe { ascribeVal = val2, ascribeType = ty2 } =
     val1 == val2 && ty1 == ty2
-  Seq { seqFirst = first1, seqSecond = second1 } ==
-    Seq { seqFirst = first2, seqSecond = second2 } =
-      first1 == first2 && second1 == second2
+  Seq { seqExps = exps1 } == Seq { seqExps = exps2 } = exps1 == exps2
   Record { recordFields = fields1, recordType = ty1 } ==
     Record { recordFields = fields2, recordType = ty2 } =
       ty1 == ty2 && fields1 == fields2
@@ -729,11 +725,7 @@ instance Ord Exp where
       out -> out
   compare Ascribe {} _ = GT
   compare _ Ascribe {} = LT
-  compare Seq { seqFirst = first1, seqSecond = second1 }
-          Seq { seqFirst = first2, seqSecond = second2 } =
-    case compare first1 first2 of
-      EQ -> compare second1 second2
-      out -> out
+  compare Seq { seqExps = exps1 } Seq { seqExps = exps2 } = compare exps1 exps2
   compare Seq {} _ = GT
   compare _ Seq {} = LT
   compare Record { recordFields = fields1, recordType = ty1 }
@@ -878,8 +870,8 @@ instance Hashable  Exp where
     s `hashWithSalt` (3 :: Int) `hashWithSalt` val `hashWithSalt` cases
   hashWithSalt s Ascribe { ascribeVal = val, ascribeType = ty } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt` val `hashWithSalt` ty
-  hashWithSalt s Seq { seqFirst = first, seqSecond = second } =
-    s `hashWithSalt` (5 :: Int) `hashWithSalt` first `hashWithSalt` second
+  hashWithSalt s Seq { seqExps = exps } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` exps
   hashWithSalt s Record { recordFields = fields, recordType = ty } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt` ty `hashWithSalt` fields
   hashWithSalt s Tuple { tupleFields = fields } =
@@ -1321,21 +1313,21 @@ expDot Ascribe { ascribeVal = val, ascribeType = ty } =
           string " -> " <> dquoted (string valname) <$>
           dquoted (string nodeid) <> string ":type" <>
           string " -> " <> dquoted (string tyname), nodeid)
-expDot Seq { seqFirst = val1, seqSecond = val2 } =
-  do
+expDot Seq { seqExps = exps } =
+  let
+    seqEdge nodeid (_, casename) =
+      dquoted (string nodeid) <> string ":vals" <>
+      string " -> " <> dquoted (string casename)
+  in do
     nodeid <- getNodeID
-    (val1node, val1name) <- expDot val1
-    (val2node, val2name) <- expDot val2
-    return (val1node <$> val2node <$> dquoted (string nodeid) <+>
+    seqContents <- mapM expDot exps
+    return (vcat (map fst seqContents) <$>
             brackets (string "label = " <>
-                      dquoted (string "Ascribe | " <>
-                               string " <val1> value | " <>
-                               string "<val2> value") <$>
+                      dquoted (string "Seq | " <>
+                               string "<vals> values") <$>
                       string "shape = \"record\"") <>
             char ';' <$> dquoted (string nodeid) <> string ":val1" <>
-          string " -> " <> dquoted (string val1name) <$>
-          dquoted (string nodeid) <> string ":val2" <>
-          string " -> " <> dquoted (string val2name), nodeid)
+            vcat (map (seqEdge nodeid) seqContents), nodeid)
 expDot Record { recordType = True, recordFields = fields } =
   let
     fieldEdge nodeid (_, patname) =
@@ -1779,15 +1771,13 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "type", tydoc)])
-  formatM Seq { seqFirst = val1, seqSecond = val2, seqPos = pos } =
+  formatM Seq { seqExps = exps, seqPos = pos } =
     do
       posdoc <- formatM pos
-      val1doc <- formatM val1
-      val2doc <- formatM val2
+      seqdocs <- mapM formatM exps
       return (constructorDoc (string "Seq")
                              [(string "pos", posdoc),
-                              (string "first", val1doc),
-                              (string "second", val2doc)])
+                              (string "exps", listDoc seqdocs)])
   formatM Record { recordType = True, recordFields = fields, recordPos = pos } =
     do
       posdoc <- formatM pos
@@ -2298,14 +2288,12 @@ seqPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] Exp
 seqPickler =
   let
-    revfunc Seq { seqFirst = first, seqSecond = second, seqPos = pos } =
-      (pos, (first, second))
+    revfunc Seq { seqExps = exps, seqPos = pos } = (pos, exps)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (first, second)) -> Seq { seqFirst = first,
-                                             seqSecond = second,
-                                             seqPos = pos }, revfunc)
-           (xpElem (gxFromString "Seq") xpickle (xpPair xpickle xpickle))
+    xpWrap (\(pos, exps) -> Seq { seqExps = exps, seqPos = pos }, revfunc)
+           (xpElem (gxFromString "Seq") xpickle
+                   (xpElemNodes (gxFromString "exps") (xpList xpickle)))
 
 recordPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>

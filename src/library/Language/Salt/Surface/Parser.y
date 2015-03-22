@@ -221,24 +221,27 @@ closed_def: type_builder_kind ID args_opt extends
 
 open_def: type_builder_kind ID args_opt extends EQUAL exp
             {% do
-                 builderpos <- span (snd $1) (expPosition $6)
+                 content <- buildExp $6
+                 builderpos <- span (snd $1) (expPosition content)
                  return Builder { builderKind = fst $1,
                                   builderName = name $2,
                                   builderSuperTypes = reverse $4,
                                   builderParams = reverse $3,
-                                  builderContent = Value $6,
+                                  builderContent = Value content,
                                   builderPos = builderpos }
             }
         | truth_kind ID args_opt EQUAL exp
             {% do
-                 pos <- span (snd $1) (expPosition $5)
+                 content <- buildExp $5
+                 pos <- span (snd $1) (expPosition content)
                  return Truth { truthName = name $2, truthKind = fst $1,
-                                truthContent = $5, truthPos = pos }
+                                truthContent = content, truthPos = pos }
             }
         | PROOF static_exp EQUAL exp
             {% do
-                 pos <- span (Token.position $1) (expPosition $4)
-                 return Proof { proofName = $2, proofBody = $4,
+                 body <- buildExp $4
+                 pos <- span (Token.position $1) (expPosition body)
+                 return Proof { proofName = $2, proofBody = body,
                                 proofPos = pos }
             }
         | IMPORT static_exp
@@ -248,8 +251,9 @@ open_def: type_builder_kind ID args_opt extends EQUAL exp
             }
         | SYNTAX exp
             {% do
-                 pos <- span (Token.position $1) (expPosition $2)
-                 return Syntax { syntaxExp = $2, syntaxPos = pos }
+                 exp <- buildExp $2
+                 pos <- span (Token.position $1) (expPosition exp)
+                 return Syntax { syntaxExp = exp, syntaxPos = pos }
             }
 
 closed_value_def: FUN ID case_list pattern LBRACE stm_list RBRACE
@@ -282,18 +286,21 @@ open_value_def: pattern
                   }
               | pattern EQUAL exp
                   {% do
-                       pos <- span (patternPosition $1) (expPosition $3)
-                       return Def { defPattern = $1, defInit = Just $3,
+                       init <- buildExp $3
+                       pos <- span (patternPosition $1) (expPosition init)
+                       return Def { defPattern = $1, defInit = Just init,
                                     defPos = pos }
                   }
               | FUN ID case_list pattern EQUAL exp
                   {% do
-                       casepos <- span (casePosition (head $3)) (expPosition $6)
-                       funpos <- span (Token.position $1) (expPosition $6)
+                       body <- buildExp $6
+                       casepos <- span (casePosition (head $3))
+                                       (expPosition body)
+                       funpos <- span (Token.position $1) (expPosition body)
                        return Fun { funName = name $2,
                                     funCases =
                                       reverse (Case { casePat = $4,
-                                                      caseBody = $6,
+                                                      caseBody = body,
                                                       casePos = casepos } :
                                                $3),
                                     funPos = funpos }
@@ -347,28 +354,32 @@ args_opt: LPAREN field_list RPAREN
 
 field_list: field_list COMMA ID COLON exp
               {% do
-                   pos <- span (Token.position $3) (expPosition $5)
+                   val <- buildExp $5
+                   pos <- span (Token.position $3) (expPosition val)
                    return (Field { fieldName = FieldName { fieldSym = name $3 },
-                                   fieldVal = $5, fieldPos = pos } : $1)
+                                   fieldVal = val, fieldPos = pos } : $1)
               }
           | ID COLON exp
               {% do
-                   pos <- span (Token.position $1) (expPosition $3)
+                   val <- buildExp $3
+                   pos <- span (Token.position $1) (expPosition val)
                    return [ Field { fieldName = FieldName { fieldSym = name $1 },
-                                    fieldVal = $3, fieldPos = pos } ]
+                                    fieldVal = val, fieldPos = pos } ]
               }
 
 bind_list: bind_list COMMA ID EQUAL exp
              {% do
-                  pos <- span (Token.position $3) (expPosition $5)
+                  val <- buildExp $5
+                  pos <- span (Token.position $3) (expPosition val)
                   return (Field { fieldName = FieldName { fieldSym = name $3 },
-                                  fieldVal = $5, fieldPos = pos } : $1)
+                                  fieldVal = val, fieldPos = pos } : $1)
              }
          | ID EQUAL exp
              {% do
-                  pos <- span (Token.position $1) (expPosition $3)
+                  val <- buildExp $3
+                  pos <- span (Token.position $1) (expPosition val)
                   return [ Field { fieldName = FieldName { fieldSym = name $1 },
-                                   fieldVal = $3, fieldPos = pos } ]
+                                   fieldVal = val, fieldPos = pos } ]
              }
 
 extends: COLON static_exp_list
@@ -416,19 +427,18 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               {% do
                    seqpos <- span (expPosition $1) (Token.position $4)
                    recpos <- span (Token.position $2) (Token.position $4)
-                   return Seq { seqFirst = $1,
-                                seqSecond = Tuple { tupleFields = reverse $3,
-                                                    tuplePos = recpos },
+                   return Seq { seqExps = [$1, Tuple { tupleFields = reverse $3,
+                                                       tuplePos = recpos } ],
                                 seqPos = seqpos }
               }
           | static_exp LPAREN bind_list RPAREN
               {% do
                    seqpos <- span (expPosition $1) (Token.position $4)
                    recpos <- span (Token.position $2) (Token.position $4)
-                   return Seq { seqFirst = $1,
-                                seqSecond = Record { recordFields = reverse $3,
-                                                     recordType = False,
-                                                     recordPos = recpos },
+                   return Seq { seqExps = [$1,
+                                           Record { recordFields = reverse $3,
+                                                    recordType = False,
+                                                    recordPos = recpos } ],
                                 seqPos = seqpos }
               }
           | static_exp DOT ID
@@ -458,38 +468,49 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               { Sym { symName = name $1, symPos = Token.position $1 } }
 
 exp_list: exp_list COMMA exp
-            { $3 : $1 }
+            {% do
+                 exp <- buildExp $3
+                 return (exp : $1)
+            }
         | exp
-            { [ $1 ] }
+            {% do
+                 exp <- buildExp $1
+                 return [ exp ]
+            }
 
 exp: exp WITH exp
        {% do
-            pos <- span (expPosition $1) (expPosition $3)
-            return With { withVal = $1, withArgs = $3, withPos = pos }
+            val <- buildExp $1
+            args <- buildExp $3
+            pos <- span (expPosition val) (expPosition args)
+            return [ With { withVal = val, withArgs = args, withPos = pos } ]
        }
    | exp WHERE exp
        {% do
-            pos <- span (expPosition $1) (expPosition $3)
-            return Where { whereVal = $1, whereProp = $3, wherePos = pos }
+            val <- buildExp $1
+            prop <- buildExp $3
+            pos <- span (expPosition val) (expPosition prop)
+            return [ Where { whereVal = val, whereProp = prop,
+                             wherePos = pos } ]
        }
    | exp AS exp
        {% do
-            pos <- span (expPosition $1) (expPosition $3)
-            return Ascribe { ascribeVal = $1, ascribeType = $3,
-                             ascribePos = pos }
+            val <- buildExp $1
+            ty <- buildExp $3
+            pos <- span (expPosition val) (expPosition ty)
+            return [ Ascribe { ascribeVal = val, ascribeType = ty,
+                               ascribePos = pos } ]
        }
    | exp inner_exp
-       {% do
-            pos <- span (expPosition $1) (expPosition $2)
-            return Seq { seqFirst = $1, seqSecond = $2, seqPos = pos }
-       }
+       { ($2 : $1) }
    | compound_exp
-       { $1 }
+       { [ $1 ] }
 
 compound_exp: MATCH LPAREN exp RPAREN cases
                 {% do
+                     val <- buildExp $3
                      pos <- span (Token.position $1) (casePosition (head $5))
-                     return Match { matchVal = $3, matchCases = reverse $5,
+                     return Match { matchVal = val, matchCases = reverse $5,
                                     matchPos = pos }
                 }
             | abstraction_kind cases
@@ -609,7 +630,10 @@ open_stm: open_def
         | LET open_value_def
             { Element $2 }
         | exp
-            { Exp $1 }
+            {% do
+                 ex <- buildExp $1
+                 return (Exp ex)
+            }
 
 open_stm_list: closed_stm_list open_stm
                  { $2 : $1 }
@@ -618,8 +642,9 @@ open_stm_list: closed_stm_list open_stm
 
 cases: case_list pattern EQUAL exp %prec COLON
          {% do
-              pos <- span (patternPosition $2) (expPosition $4)
-              return (reverse (Case { casePat = $2, caseBody = $4,
+              body <- buildExp $4
+              pos <- span (patternPosition $2) (expPosition body)
+              return (reverse (Case { casePat = $2, caseBody = body,
                                       casePos = pos } : $1))
          }
      | case_list pattern LBRACE stm_list RBRACE %prec COLON
@@ -635,8 +660,9 @@ cases: case_list pattern EQUAL exp %prec COLON
 
 case_list: case_list pattern EQUAL exp BAR
              {% do
-                  pos <- span (patternPosition $2) (expPosition $4)
-                  return (Case { casePat = $2, caseBody = $4,
+                  body <- buildExp $4
+                  pos <- span (patternPosition $2) (expPosition body)
+                  return (Case { casePat = $2, caseBody = body,
                                  casePos = pos } : $1)
              }
          | case_list pattern LBRACE stm_list RBRACE BAR
@@ -676,8 +702,9 @@ pattern: LPAREN option_list RPAREN
            }
        | pattern COLON exp
            {% do
-                pos <- span (patternPosition $1) (expPosition $3)
-                return Typed { typedPat = $1, typedType = $3, typedPos = pos }
+                ty <- buildExp $3
+                pos <- span (patternPosition $1) (expPosition ty)
+                return Typed { typedPat = $1, typedType = ty, typedPos = pos }
            }
        | ID pattern
            {% do
@@ -718,6 +745,16 @@ match_list: match_list COMMA ID EQUAL pattern
 instance Error () where noMsg = ()
 
 type Parser = ErrorT () Lexer
+
+buildExp :: [Exp] -> Parser Exp
+buildExp [] = error "Empty expression sequence, shouldn't happen"
+buildExp [e] = return e
+buildExp revexps =
+  let
+    exps = reverse revexps
+  in do
+    pos <- span (expPosition (head exps)) (expPosition (last exps))
+    return Seq { seqExps = exps, seqPos = pos }
 
 parseError :: Token-> Parser a
 parseError tok =
