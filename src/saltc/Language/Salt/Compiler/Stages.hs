@@ -45,7 +45,7 @@ import Language.Salt.Surface.AST(AST, astDot)
 import Language.Salt.Surface.Collect
 import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
-import Language.Salt.Surface.Syntax(Scope)
+import Language.Salt.Surface.Syntax(Component)
 import Language.Salt.Surface.Token
 import Prelude hiding (lex)
 import System.IO.Error
@@ -174,7 +174,7 @@ printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
 
 printTextSurface :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
                      MonadArtifacts Strict.ByteString m) =>
-                    Strict.ByteString -> Scope -> m ()
+                    Strict.ByteString -> Component -> m ()
 printTextSurface fname scope =
   let
     surfacefile = Strict.append fname surfaceExt
@@ -183,7 +183,7 @@ printTextSurface fname scope =
     createArtifact surfacefile (buildOptimal 120 False surfacedoc)
 
 printXMLSurface :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m) =>
-                   Strict.ByteString -> Scope -> m ()
+                   Strict.ByteString -> Component -> m ()
 printXMLSurface fname scope =
   let
     xmlfile = Strict.concat [fname, surfaceExt, xmlExt]
@@ -196,7 +196,7 @@ printXMLSurface fname scope =
 
 printSurface :: (MonadIO m, MonadPositions m, MonadSymbols m,
                  MonadMessages Message m, MonadArtifacts Strict.ByteString m) =>
-                Save -> Strict.ByteString -> Scope -> m ()
+                Save -> Strict.ByteString -> Component -> m ()
 printSurface Save { saveXML = savexml, saveText = savetxt }
              fname ast =
   do
@@ -405,7 +405,7 @@ dumpSurface Options { optStages = stages } =
   let
     savesurface = stages ! Collect
 
-    mapfun :: ([Symbol], Scope) -> ComponentsT (FileArtifactsT Frontend) ()
+    mapfun :: ([Symbol], Component) -> ComponentsT (FileArtifactsT Frontend) ()
     mapfun (cname, scope) =
       do
         fname <- componentFileName cname

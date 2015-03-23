@@ -54,7 +54,7 @@ import Language.Salt.Surface.Syntax
 
 import qualified Data.HashTable.IO as HashTable
 
-type Table = BasicHashTable [Symbol] Scope
+type Table = BasicHashTable [Symbol] Component
 
 newtype CollectT m a = CollectT { unpackCollectT :: ReaderT Table m a }
 
@@ -92,7 +92,7 @@ mapCollectT :: (Monad m, Monad n) =>
                (m a -> n b) -> CollectT m a -> CollectT n b
 mapCollectT f = CollectT . mapReaderT f . unpackCollectT
 
-addComponent' :: MonadIO m => [Symbol] -> Scope -> ReaderT Table m ()
+addComponent' :: MonadIO m => [Symbol] -> Component -> ReaderT Table m ()
 addComponent' cname comp =
   do
     tab <- ask

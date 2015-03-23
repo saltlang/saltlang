@@ -952,7 +952,7 @@ collectAST :: (MonadMessages Message m, MonadSymbols m) =>
            -- top level.
            -> AST.AST
            -- ^ The 'AST' to collect.
-           -> m Syntax.Scope
+           -> m Syntax.Component
 collectAST filepos expected AST.AST { AST.astComponent = component,
                                       AST.astScope = scope } =
   let
@@ -961,31 +961,6 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
       do
         val <- component
         return $! AST.componentName val
-
-    -- We expect to see a module with the same name as the file (minus
-    -- the .salt extension).  Track whether or not we've seen it.
-    collectWithExpected :: (MonadMessages Message m, MonadSymbols m) =>
-                           Symbol -> m Syntax.Scope
-    collectWithExpected defname =
-      let
-        collect' (accum, _) elem @ AST.Builder { AST.builderName = modname }
-          -- If we see the def we're looking for, save it as public.
-          | modname == defname =
-            do
-              collected <- collectElement Public accum elem
-              return (collected, True)
-        collect' (accum, seen) elem =
-          -- Otherwise, make it hidden
-          do
-            collected <- collectElement Hidden accum elem
-            return (collected, seen)
-      in do
-        (tmpscope, seen) <- foldM collect' (emptyTempScope, False) scope
-        -- Report an error if there was no top-level module definition
-        -- with the name of the file.
-        unless seen (noTopLevelDef defname filepos)
-        return $! makeScope tmpscope
-
   in case (expected, actual) of
     (Just expected', _) ->
       -- We have an expected component name.  Get the expected
@@ -995,20 +970,25 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
         defname = last expected'
       in do
         unless (expected == actual) (badComponentName expected' actual filepos)
-        collectWithExpected defname
+        accum <- foldM (collectElement Public) emptyTempScope scope
+        return Syntax.Component { Syntax.compScope = makeScope accum,
+                                  Syntax.compExpected = Just defname }
     (Nothing, Just actual') ->
       -- We have no expected component name, but do have an actual
       -- one.  Get the expected definition name from the actual one.
       let
         defname = last actual'
-      in
-        collectWithExpected defname
+      in do
+        accum <- foldM (collectElement Public) emptyTempScope scope
+        return Syntax.Component { Syntax.compScope = makeScope accum,
+                                  Syntax.compExpected = Just defname }
     (Nothing, Nothing) ->
       -- We don't have anything.  There is no expected definition
       -- name, and everything at the top level is public.
       do
         accum <- foldM (collectElement Public) emptyTempScope scope
-        return $! makeScope accum
+        return Syntax.Component { Syntax.compScope = makeScope accum,
+                                  Syntax.compExpected = Nothing }
 
 -- | Get the file name for a component.
 componentFileName :: MonadSymbols m =>
@@ -1065,6 +1045,9 @@ collectComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                  -> m ()
 collectComponent parseFunc pos cname =
   let
+    emptyComponent = Syntax.Component { Syntax.compExpected = Nothing,
+                                        Syntax.compScope = emptyScope }
+
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
       collectComponent parseFunc upos uname
 
@@ -1074,7 +1057,7 @@ collectComponent parseFunc pos cname =
         (fname, loaded) <- loadComponent cname pos
         fpos <- file fname
         case loaded of
-          Nothing -> addComponent cname emptyScope
+          Nothing -> addComponent cname emptyComponent
           Just content ->
             -- Otherwise, continue
             do
@@ -1085,7 +1068,7 @@ collectComponent parseFunc pos cname =
                     scope <- collectAST fpos (Just cname) ast
                     addComponent cname scope
                     mapM_ collectUse uses
-                Nothing -> addComponent cname emptyScope
+                Nothing -> addComponent cname emptyComponent
   in do
     done <- componentExists cname
     unless done loadAndCollect
@@ -1128,7 +1111,7 @@ collectFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
             -- component occurred.
             -> Strict.ByteString
             -- ^ The name of the file to collect.
-            -> m (Maybe Syntax.Scope)
+            -> m (Maybe Syntax.Component)
 collectFile parseFunc pos fname =
   let
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =

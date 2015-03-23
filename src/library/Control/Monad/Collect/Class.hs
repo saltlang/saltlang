@@ -48,7 +48,7 @@ class Monad m => MonadCollect m where
   -- | Finish collecting a component
   addComponent :: [Symbol]
                -- ^ The component name.
-               -> Scope
+               -> Component
                -- ^ The component body.
                -> m ()
   -- | Check if a component exists.

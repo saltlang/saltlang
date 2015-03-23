@@ -48,9 +48,9 @@ class Monad m => MonadComponents m where
   -- | Get access to the scope defined in a component.
   component :: [Symbol]
             -- ^ The component name.
-            -> m Scope
+            -> m Component
   -- | Get all components that have been defined.
-  components :: m [([Symbol], Scope)]
+  components :: m [([Symbol], Component)]
 
 instance MonadComponents m => MonadComponents (CommentBufferT m) where
   component = lift . component

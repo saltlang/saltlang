@@ -51,7 +51,7 @@ import Language.Salt.Surface.Syntax
 
 import qualified Data.HashTable.IO as HashTable
 
-type Table = BasicHashTable [Symbol] Scope
+type Table = BasicHashTable [Symbol] Component
 
 newtype ComponentsT m a = ComponentsT { unpackComponentsT :: ReaderT Table m a }
 
@@ -76,7 +76,7 @@ mapComponentsT :: (Monad m, Monad n) =>
                   (m a -> n b) -> ComponentsT m a -> ComponentsT n b
 mapComponentsT f = ComponentsT . mapReaderT f . unpackComponentsT
 
-component' :: MonadIO m => [Symbol] -> ReaderT Table m Scope
+component' :: MonadIO m => [Symbol] -> ReaderT Table m Component
 component' cname =
   do
     tab <- ask
@@ -85,7 +85,7 @@ component' cname =
       Just out -> return out
       Nothing -> error $! "Looking up nonexistent component"
 
-components' :: MonadIO m => ReaderT Table m [([Symbol], Scope)]
+components' :: MonadIO m => ReaderT Table m [([Symbol], Component)]
 components' =
   do
     tab <- ask

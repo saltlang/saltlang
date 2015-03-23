@@ -20,6 +20,7 @@
 -- | Abstract Syntax structure.  This represents the surface language
 -- in a more abstract form than is found in the AST structure.
 module Language.Salt.Surface.Syntax(
+       Component(..),
        Assoc(..),
        Fixity(..),
        Syntax(..),
@@ -39,6 +40,7 @@ module Language.Salt.Surface.Syntax(
        ) where
 
 import Control.Monad.Positions
+import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Array
 import Data.Hashable
@@ -60,6 +62,34 @@ data Assoc = Left | Right | NonAssoc
 
 data Fixity = Prefix | Infix !Assoc | Postfix
   deriving (Ord, Eq, Show)
+
+-- | A component.  Essentially, a scope that may or may not have an
+-- expected definition.
+data Component =
+  Component {
+    -- | The expected definition.
+    compExpected :: !(Maybe Symbol),
+    -- | The top-level scope for this component.
+    compScope :: !Scope
+  }
+
+-- | A static scope.  Elements are split up by kind, into builder definitions,
+-- syntax directives, truths, proofs, and regular definitions.
+data Scope =
+  Scope {
+    -- | All the builders defined in this scope.
+    scopeBuilders :: !(HashMap Symbol Builder),
+    -- | The syntax directives for this scope.
+    scopeSyntax :: !(HashMap Symbol Syntax),
+    -- | The truth environment for this scope.  This contains all
+    -- theorems, axioms, and invariants.
+    scopeTruths :: !(HashMap Symbol Truth),
+    -- | All concrete definitions for this scope.
+    scopeElems :: !(Array Visibility [Element]),
+    -- | Proofs given in this scope.
+    scopeProofs :: ![Proof]
+  }
+  deriving Eq
 
 -- | Syntax information for a symbol.
 data Syntax =
@@ -85,23 +115,6 @@ data Truth =
     -- | The position in source from which this arises.
     truthPos :: !Position
   }
-
--- | A static scope.  Elements are split up by kind, into builder definitions,
--- syntax directives, truths, proofs, and regular definitions.
-data Scope =
-  Scope {
-    scopeBuilders :: !(HashMap Symbol Builder),
-    -- | The syntax directives for this scope.
-    scopeSyntax :: !(HashMap Symbol Syntax),
-    -- | The truth environment for this scope.  This contains all
-    -- theorems, axioms, and invariants.
-    scopeTruths :: !(HashMap Symbol Truth),
-    -- | All concrete definitions for this scope.
-    scopeElems :: !(Array Visibility [Element]),
-    -- | Proofs given in this scope.
-    scopeProofs :: ![Proof]
-  }
-  deriving Eq
 
 -- | A builder definition.
 data Builder =
@@ -403,6 +416,11 @@ data Case =
     casePos :: !Position
   }
 
+instance Eq Component where
+  Component { compExpected = expected1, compScope = scope1 } ==
+    Component { compExpected = expected2, compScope = scope2 } =
+      expected1 == expected2 && scope1 == scope2
+
 instance Eq Truth where
   Truth { truthKind = kind1, truthVisibility = vis1,
           truthContent = content1 } ==
@@ -520,6 +538,13 @@ instance Eq Case where
   Case { casePat = pat1, caseBody = body1 } ==
     Case { casePat = pat2, caseBody = body2 } =
       pat1 == pat2 && body1 == body2
+
+instance Ord Component where
+  compare Component { compExpected = expected1, compScope = scope1 }
+          Component { compExpected = expected2, compScope = scope2 } =
+    case compare expected1 expected2 of
+      EQ -> compare scope1 scope2
+      out -> out
 
 instance Ord Truth where
   compare Truth { truthKind = kind1, truthVisibility = vis1,
@@ -774,6 +799,10 @@ instance Ord Case where
       EQ -> compare body1 body2
       out -> out
 
+instance Hashable Component where
+  hashWithSalt s Component { compExpected = expected, compScope = scope } =
+    s `hashWithSalt` expected `hashWithSalt` scope
+
 instance Hashable Assoc where
   hashWithSalt s = hashWithSalt s . fromEnum
 
@@ -828,7 +857,7 @@ instance Hashable Compound where
   hashWithSalt s Dynamic { dynamicName = sym, dynamicTruth = truth } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` sym `hashWithSalt` truth
   hashWithSalt s Local { localName = sym, localBuilder = builder } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` sym `hashWithSalt` builder
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` sym `hashWithSalt` builder
 
 instance Hashable Pattern where
   hashWithSalt s Option { optionPats = pats } =
@@ -848,7 +877,7 @@ instance Hashable Pattern where
     s `hashWithSalt` (5 :: Int) `hashWithSalt` sym
   hashWithSalt s (Exact lit) = s `hashWithSalt` (6 :: Int) `hashWithSalt` lit
 
-instance Hashable  Exp where
+instance Hashable Exp where
   hashWithSalt s Compound { compoundSyntax = syntax, compoundProofs = proofs,
                             compoundBody = body } =
     let
@@ -904,7 +933,46 @@ instance Hashable Field where
 instance Hashable Case where
   hashWithSalt s Case { casePat = pat, caseBody = body } =
     s `hashWithSalt` pat `hashWithSalt` body
+{-
+precDot :: MonadSymbols m => (Ordering, Exp) -> StateT Word m (Doc, String)
+precDot (ord, exp) =
+  let
+    orddoc = case ord of
+      LT -> string "<"
+      EQ -> string "=="
+      GT -> string ">"
+  in do
+    nodeid <- getNodeID
+    (expnode, expname) <- expDot exp
+    return (expnode <$>
+            dquoted (string nodeid) <+>
+            brackets (string "label = " <>
+                      dquoted (string "Prec | " <>
+                               orddoc <> string " | " <>
+                               string "<exp> exp\"") <$>
+                      string "shape = \"record\"") <>
+            dquoted (string nodeid <> string ":exp") <>
+            string " -> " <> string expname, nodeid)
 
+syntaxDot :: MonadSymbols m => Syntax -> StateT Word m (Doc, String)
+syntaxDot Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
+  let
+    elemEdge nodeid (_, elemname) =
+      dquoted (string nodeid) <> string ":precs" <>
+      string " -> " <> dquoted (string elemname)
+  in do
+    nodeid <- getNodeID
+    precdocs <- mapM precDot precs
+    return (vcat (map fst precdocs) <$>
+            dquoted (string nodeid) <+>
+            brackets (string "label = " <>
+                      dquoted (string "Syntax | " <>
+                               format fixity <> string " | " <>
+                               string "<precs> precs\"") <$>
+                      string "shape = \"record\"") <>
+            dquoted (string nodeid <> string ":value") <>
+            char ';' <$> vcat (map (elemEdge nodeid) precdocs), nodeid)
+-}
 instance Format Assoc where format = string . show
 instance Format Fixity where format = string . show
 
@@ -966,6 +1034,20 @@ formatElems arr =
                               (string "private", listDoc privatedocs),
                               (string "protected", listDoc protecteddocs),
                               (string "public", listDoc publicdocs)]
+
+instance (MonadSymbols m, MonadPositions m) => FormatM m Component where
+  formatM Component { compExpected = Just expected, compScope = scope } =
+    do
+      expecteddoc <- formatM expected
+      scopedoc <- formatM scope
+      return $ constructorDoc (string "Component")
+                              [(string "expected", expecteddoc),
+                               (string "scope", scopedoc)]
+  formatM Component { compExpected = Nothing, compScope = scope } =
+    do
+      scopedoc <- formatM scope
+      return $ constructorDoc (string "Component")
+                              [(string "scope", scopedoc)]
 
 instance (MonadSymbols m, MonadPositions m) => FormatM m Scope where
   formatM Scope { scopeBuilders = builders, scopeSyntax = syntax,
@@ -1367,6 +1449,15 @@ defsPickler =
                                              (xpList xpickle))
                                 (xpElemNodes (gxFromString "public")
                                              (xpList xpickle))))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Component where
+  xpickle =
+    xpWrap (\(expected, scope) -> Component { compExpected = expected,
+                                              compScope = scope },
+            \Component { compExpected = expected,
+                         compScope = scope } -> (expected, scope))
+           (xpElem (gxFromString "Component") (xpOption xpickle) xpickle)
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Scope where
