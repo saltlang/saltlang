@@ -410,11 +410,11 @@ dumpSurface Options { optStages = stages } =
       do
         fname <- componentFileName cname
         printSurface savesurface fname scope
-  in if saveXML savesurface || saveText savesurface
-    then do
-      comps <- components
-      mapM_ mapfun comps
-    else return ()
+  in
+    when (saveXML savesurface || saveText savesurface)
+      (do
+         comps <- components
+         mapM_ mapfun comps)
 
 -- | Run the collect phase.
 collect :: Options
