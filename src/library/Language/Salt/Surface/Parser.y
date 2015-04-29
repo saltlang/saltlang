@@ -27,6 +27,8 @@ import Control.Monad.SourceBuffer hiding (linebreak)
 import Control.Monad.Trans
 import Data.ByteString(ByteString)
 import Data.Either
+import Data.Position.BasicPosition
+import Data.Semigroup((<>))
 import Data.Symbol(Symbol)
 import Data.Typeable
 import Language.Salt.Frontend
@@ -42,6 +44,7 @@ import Text.XML.Expat.Pickle
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
 import qualified Data.ByteString.UTF8 as Strict
+import qualified Data.Position as Position
 import qualified Language.Salt.Surface.Token as Token
 import qualified Language.Salt.Message as Message
 
@@ -111,47 +114,47 @@ top_level: component use_list def_list
                      astScope = reverse $3 } }
 
 component: COMPONENT qual_id SEMICOLON
-             {% let
-                   (qualname, _) = $2
-                in do
-                  pos <- span (Token.position $1) (Token.position $3)
-                  return $! Just Component { componentName = reverse qualname,
-                                             componentPos = pos }
+             { let
+                  pos = Token.position $1 <> Token.position $3
+                  (qualname, _) = $2
+               in
+                  Just Component { componentName = reverse qualname,
+                                   componentPos = pos }
              }
          | COMPONENT qual_id
-             {% let
-                   (qualname, qualpos) = $2
-                in do
-                  pos <- span (Token.position $1) qualpos
-                  return $! Just Component { componentName = reverse qualname,
-                                             componentPos = pos }
+             { let
+                 pos = Token.position $1 <> qualpos
+                 (qualname, qualpos) = $2
+               in
+                  Just Component { componentName = reverse qualname,
+                                   componentPos = pos }
              }
          |
              { Nothing }
 
 use_list: use_list USE qual_id SEMICOLON
-            {% let
-                 (qualname, _) = $3
-               in do
-                 pos <- span (Token.position $2) (Token.position $4)
-                 return (Use { useName = reverse qualname, usePos = pos } : $1)
+            { let
+                pos = Token.position $2 <> Token.position $4
+                (qualname, _) = $3
+              in
+                Use { useName = reverse qualname, usePos = pos } : $1
             }
         | use_list USE qual_id
-            {% let
-                 (qualname, qualpos) = $3
-               in do
-                 pos <- span (Token.position $2) qualpos
-                 return (Use { useName = reverse qualname, usePos = pos } : $1)
+            { let
+                pos = Token.position $2 <> qualpos
+                (qualname, qualpos) = $3
+              in
+                Use { useName = reverse qualname, usePos = pos } : $1
             }
         |
             { [] }
 
 qual_id: qual_id DOT ID
-           {% let
-                (list, headpos) = $1
-              in do
-                pos <- span headpos (Token.position $3)
-                return (name $3 : list, pos)
+           { let
+               pos = headpos <> Token.position $3
+               (list, headpos) = $1
+             in
+               (name $3 : list, pos)
            }
        | ID
            { ([ name $1 ], Token.position $1) }
@@ -187,145 +190,140 @@ open_def_list: closed_def_list open_def
 
 closed_def: type_builder_kind ID args_opt extends
             LBRACE def_list group_list RBRACE
-              {% let
-                   groups = case $6 of
-                     [] -> return (reverse $7)
-                     _ ->
-                       do
-                         grouppos <- span (elementPosition (last $6))
-                                          (elementPosition (head $6))
-                         return (Group { groupVisibility = Public,
-                                         groupElements = reverse $6,
-                                         groupPos = grouppos } :
-                                         reverse $7)
-                 in do
-                   content <- groups
-                   builderpos <- span (snd $1) (Token.position $8)
-                   return Builder { builderKind = fst $1,
-                                    builderName = name $2,
-                                    builderSuperTypes = reverse $4,
-                                    builderParams = reverse $3,
-                                    builderContent = Body content,
-                                    builderPos = builderpos }
+              { let
+                  content = case $6 of
+                    [] -> reverse $7
+                    _ ->
+                      let
+                        grouppos = elementPosition (last $6) <>
+                                   elementPosition (head $6)
+                      in
+                        Group { groupVisibility = Public,
+                                groupElements = reverse $6,
+                                groupPos = grouppos } : reverse $7
+
+                  builderpos = snd $1 <> Token.position $8
+                in
+                  Builder { builderKind = fst $1,
+                            builderName = name $2,
+                            builderSuperTypes = reverse $4,
+                            builderParams = reverse $3,
+                            builderContent = Body content,
+                            builderPos = builderpos }
               }
           | PROOF static_exp LBRACE stm_list RBRACE
-              {% do
-                   compoundpos <- span (Token.position $3) (Token.position $5)
-                   pos <- span (Token.position $1) (Token.position $5)
-                   return Proof { proofName = $2,
-                                  proofBody =
-                                    Compound { compoundBody = reverse $4,
-                                               compoundPos = compoundpos },
-                                  proofPos = pos }
+              { let
+                  compoundpos = Token.position $3 <> Token.position $5
+                  pos = Token.position $1 <> Token.position $5
+                in
+                  Proof { proofName = $2,
+                          proofBody = Compound { compoundBody = reverse $4,
+                                                 compoundPos = compoundpos },
+                          proofPos = pos }
               }
 
 open_def: type_builder_kind ID args_opt extends EQUAL exp
-            {% do
-                 content <- buildExp $6
-                 builderpos <- span (snd $1) (expPosition content)
-                 return Builder { builderKind = fst $1,
-                                  builderName = name $2,
-                                  builderSuperTypes = reverse $4,
-                                  builderParams = reverse $3,
-                                  builderContent = Value content,
-                                  builderPos = builderpos }
+            { let
+                builderpos = snd $1 <> expPosition content
+                content = buildExp $6
+              in
+                Builder { builderKind = fst $1,
+                          builderName = name $2,
+                          builderSuperTypes = reverse $4,
+                          builderParams = reverse $3,
+                          builderContent = Value content,
+                          builderPos = builderpos }
             }
         | truth_kind ID args_opt EQUAL exp
-            {% do
-                 content <- buildExp $5
-                 pos <- span (snd $1) (expPosition content)
-                 return Truth { truthName = name $2, truthKind = fst $1,
-                                truthContent = content, truthPos = pos }
+            { let
+                content = buildExp $5
+                pos = snd $1 <> expPosition content
+              in
+                Truth { truthName = name $2, truthKind = fst $1,
+                        truthContent = content, truthPos = pos }
             }
         | PROOF static_exp EQUAL exp
-            {% do
-                 body <- buildExp $4
-                 pos <- span (Token.position $1) (expPosition body)
-                 return Proof { proofName = $2, proofBody = body,
-                                proofPos = pos }
+            { let
+                body = buildExp $4
+                pos = Token.position $1 <> expPosition body
+              in
+                Proof { proofName = $2, proofBody = body, proofPos = pos }
             }
         | IMPORT static_exp
-            {% do
-                 pos <- span (Token.position $1) (expPosition $2)
-                 return Import { importExp = $2, importPos = pos }
+            { let
+                pos = Token.position $1 <> expPosition $2
+              in
+                Import { importExp = $2, importPos = pos }
             }
         | SYNTAX exp
-            {% do
-                 exp <- buildExp $2
-                 pos <- span (Token.position $1) (expPosition exp)
-                 return Syntax { syntaxExp = exp, syntaxPos = pos }
+            { let
+                exp = buildExp $2
+                pos = Token.position $1 <> expPosition exp
+              in
+                Syntax { syntaxExp = exp, syntaxPos = pos }
             }
 
 closed_value_def: FUN ID case_list pattern LBRACE stm_list RBRACE
-                    {% do
-                         compoundpos <- span (Token.position $5)
-                                             (Token.position $7)
-                         casepos <- span (patternPosition $4)
-                                         (Token.position $7)
-                         funpos <- span (Token.position $1)
-                                        (Token.position $7)
-                         return Fun { funName = name $2,
-                                      funCases =
-                                        reverse (Case {
-                                                   casePat = $4,
-                                                   caseBody =
-                                                     Compound {
-                                                       compoundBody =
-                                                         reverse $6,
-                                                       compoundPos =
-                                                         compoundpos
-                                                     },
-                                                   casePos = casepos } : $3),
-                                      funPos = funpos }
-                                }
+                    { let
+                        compoundpos = Token.position $5 <> Token.position $7
+                        casepos = patternPosition $4 <> Token.position $7
+                        funpos = Token.position $1 <> Token.position $7
+                        body = Compound { compoundBody = reverse $6,
+                                          compoundPos = compoundpos }
+                        cases = Case { casePat = $4, caseBody = body,
+                                       casePos = casepos } : $3
+                      in
+                        Fun { funName = name $2, funCases = reverse cases,
+                              funPos = funpos }
+                    }
 
 
 open_value_def: pattern
-                  {% return Def { defPattern = $1, defInit = Nothing,
-                                  defPos = patternPosition $1 }
+                  { Def { defPattern = $1, defInit = Nothing,
+                          defPos = patternPosition $1 }
                   }
               | pattern EQUAL exp
-                  {% do
-                       init <- buildExp $3
-                       pos <- span (patternPosition $1) (expPosition init)
-                       return Def { defPattern = $1, defInit = Just init,
-                                    defPos = pos }
+                  { let
+                      init = buildExp $3
+                      pos = patternPosition $1 <> expPosition init
+                    in
+                      Def { defPattern = $1, defInit = Just init, defPos = pos }
                   }
               | FUN ID case_list pattern EQUAL exp
-                  {% do
-                       body <- buildExp $6
-                       casepos <- span (casePosition (head $3))
-                                       (expPosition body)
-                       funpos <- span (Token.position $1) (expPosition body)
-                       return Fun { funName = name $2,
-                                    funCases =
-                                      reverse (Case { casePat = $4,
-                                                      caseBody = body,
-                                                      casePos = casepos } :
-                                               $3),
-                                    funPos = funpos }
+                  { let
+                      body = buildExp $6
+                      casepos = casePosition (head $3) <> expPosition body
+                      funpos = Token.position $1 <> expPosition body
+                    in
+                      Fun { funName = name $2,
+                            funCases = reverse (Case { casePat = $4,
+                                                       caseBody = body,
+                                                       casePos = casepos } :
+                                                $3),
+                            funPos = funpos }
                   }
 
 group_list: group_list PRIVATE COLON def_list
-              {% do
-                   pos <- span (Token.position $2) (elementPosition (head $4))
-                   return (Group { groupVisibility = Private,
-                                   groupElements = $4,
-                                   groupPos = pos } : $1)
+              { let
+                  pos = Token.position $2 <> elementPosition (head $4)
+                in
+                  Group { groupVisibility = Private, groupElements = $4,
+                          groupPos = pos } : $1
               }
           | group_list PROTECTED COLON def_list
-              {% do
-                   pos <- span (Token.position $2) (elementPosition (head $4))
-                   return (Group { groupVisibility = Protected,
-                                   groupElements = $4,
-                                   groupPos = pos } : $1)
+              { let
+                  pos = Token.position $2 <> elementPosition (head $4)
+                in
+                  Group { groupVisibility = Protected, groupElements = $4,
+                          groupPos = pos } : $1
               }
           | group_list PUBLIC COLON def_list
-              {% do
-                   pos <- span (Token.position $2) (elementPosition (head $4))
-                   return (Group { groupVisibility = Public,
-                                   groupElements = $4,
-                                   groupPos = pos } : $1) }
+              { let
+                  pos = Token.position $2 <> elementPosition (head $4)
+                in
+                  Group { groupVisibility = Public, groupElements = $4,
+                         groupPos = pos } : $1
+              }
           |
               { [] }
 
@@ -353,33 +351,37 @@ args_opt: LPAREN field_list RPAREN
             { [] }
 
 field_list: field_list COMMA ID COLON exp
-              {% do
-                   val <- buildExp $5
-                   pos <- span (Token.position $3) (expPosition val)
-                   return (Field { fieldName = FieldName { fieldSym = name $3 },
-                                   fieldVal = val, fieldPos = pos } : $1)
+              { let
+                  val = buildExp $5
+                  pos = Token.position $3 <> expPosition val
+                in
+                  Field { fieldName = FieldName { fieldSym = name $3 },
+                          fieldVal = val, fieldPos = pos } : $1
               }
           | ID COLON exp
-              {% do
-                   val <- buildExp $3
-                   pos <- span (Token.position $1) (expPosition val)
-                   return [ Field { fieldName = FieldName { fieldSym = name $1 },
-                                    fieldVal = val, fieldPos = pos } ]
+              { let
+                  val = buildExp $3
+                  pos = Token.position $1 <> expPosition val
+                in
+                  [ Field { fieldName = FieldName { fieldSym = name $1 },
+                            fieldVal = val, fieldPos = pos } ]
               }
 
 bind_list: bind_list COMMA ID EQUAL exp
-             {% do
-                  val <- buildExp $5
-                  pos <- span (Token.position $3) (expPosition val)
-                  return (Field { fieldName = FieldName { fieldSym = name $3 },
-                                  fieldVal = val, fieldPos = pos } : $1)
+             { let
+                 val = buildExp $5
+                 pos = Token.position $3 <> expPosition val
+               in
+                 Field { fieldName = FieldName { fieldSym = name $3 },
+                         fieldVal = val, fieldPos = pos } : $1
              }
          | ID EQUAL exp
-             {% do
-                  val <- buildExp $3
-                  pos <- span (Token.position $1) (expPosition val)
-                  return [ Field { fieldName = FieldName { fieldSym = name $1 },
-                                   fieldVal = val, fieldPos = pos } ]
+             { let
+                 val = buildExp $3
+                 pos = Token.position $1 <> expPosition val
+               in
+                 [ Field { fieldName = FieldName { fieldSym = name $1 },
+                           fieldVal = val, fieldPos = pos } ]
              }
 
 extends: COLON static_exp_list
@@ -393,185 +395,189 @@ static_exp_list: static_exp_list COMMA static_exp
                { [ $1 ] }
 
 static_exp: static_exp WITH LPAREN exp_list RPAREN
-              {% do
-                   withpos <- span (expPosition $1) (Token.position $5)
-                   recpos <- span (Token.position $3) (Token.position $5)
-                   return With { withVal = $1,
-                                 withArgs = Tuple { tupleFields = reverse $4,
-                                                    tuplePos = recpos },
-                                 withPos = withpos }
+              { let
+                  withpos = expPosition $1 <> Token.position $5
+                  recpos = Token.position $3 <> Token.position $5
+                in
+                  With { withVal = $1,
+                         withArgs = Tuple { tupleFields = reverse $4,
+                                            tuplePos = recpos },
+                         withPos = withpos }
               }
           | static_exp WITH LPAREN bind_list RPAREN
-              {% do
-                   withpos <- span (expPosition $1) (Token.position $5)
-                   recpos <- span (Token.position $3) (Token.position $5)
-                   return With { withVal = $1,
-                                 withArgs = Record { recordFields = reverse $4,
-                                                     recordType = False,
-                                                     recordPos = recpos },
-                                 withPos = withpos }
+              { let
+                  withpos = expPosition $1 <> Token.position $5
+                  recpos = Token.position $3 <> Token.position $5
+                in
+                  With { withVal = $1,
+                         withArgs = Record { recordFields = reverse $4,
+                                             recordType = False,
+                                             recordPos = recpos },
+                         withPos = withpos }
               }
           | static_exp WHERE LPAREN bind_list RPAREN
-              {% do
-                   withpos <- span (expPosition $1) (Token.position $5)
-                   recpos <- span (Token.position $3) (Token.position $5)
-                   return Where { whereVal = $1,
-                                  whereProp = Record {
-                                                recordFields = reverse $4,
-                                                recordType = False,
-                                                recordPos = recpos
-                                              },
-                                  wherePos = withpos }
+              { let
+                  wherepos = expPosition $1 <> Token.position $5
+                  recpos = Token.position $3 <> Token.position $5
+                in
+                  Where { whereVal = $1,
+                          whereProp = Record { recordFields = reverse $4,
+                                               recordType = False,
+                                               recordPos = recpos },
+                          wherePos = wherepos }
               }
           | static_exp LPAREN exp_list RPAREN
-              {% do
-                   seqpos <- span (expPosition $1) (Token.position $4)
-                   recpos <- span (Token.position $2) (Token.position $4)
-                   return Seq { seqExps = [$1, Tuple { tupleFields = reverse $3,
-                                                       tuplePos = recpos } ],
-                                seqPos = seqpos }
+              { let
+                  seqpos = expPosition $1 <> Token.position $4
+                  recpos = Token.position $2 <> Token.position $4
+                in
+                  Seq { seqExps = [$1, Tuple { tupleFields = reverse $3,
+                                               tuplePos = recpos } ],
+                        seqPos = seqpos }
               }
           | static_exp LPAREN bind_list RPAREN
-              {% do
-                   seqpos <- span (expPosition $1) (Token.position $4)
-                   recpos <- span (Token.position $2) (Token.position $4)
-                   return Seq { seqExps = [$1,
-                                           Record { recordFields = reverse $3,
-                                                    recordType = False,
-                                                    recordPos = recpos } ],
-                                seqPos = seqpos }
+              { let
+                  seqpos = expPosition $1 <> Token.position $4
+                  recpos = Token.position $2 <> Token.position $4
+                in
+                  Seq { seqExps = [$1, Record { recordFields = reverse $3,
+                                                recordType = False,
+                                                recordPos = recpos } ],
+                        seqPos = seqpos }
               }
           | static_exp DOT ID
-              {% do
-                   pos <- span (expPosition $1) (Token.position $3)
-                   return Project { projectVal = $1,
-                                    projectFields =
-                                      [ FieldName { fieldSym = name $3 } ],
-                                    projectPos = pos }
+              { let
+                  pos = expPosition $1 <>  Token.position $3
+                in
+                  Project { projectVal = $1,
+                            projectFields = [FieldName { fieldSym = name $3 }],
+                            projectPos = pos }
               }
           | type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
-              {% do
-                   grouppos <- span (elementPosition (last $5))
-                                    (elementPosition (head $5))
-                   builderpos <- span (snd $1) (Token.position $7)
-                   return Anon { anonKind = fst $1,
-                                 anonSuperTypes = reverse $3,
-                                 anonParams = reverse $2,
-                                 anonContent = Group {
-                                                 groupVisibility = Public,
-                                                 groupElements = reverse $5,
-                                                 groupPos = grouppos
-                                               } : reverse $6,
-                                 anonPos = builderpos }
+              { let
+                  grouppos = elementPosition (last $5) <>
+                              elementPosition (head $5)
+                  builderpos = snd $1 <> Token.position $7
+                in
+                  Anon { anonKind = fst $1,
+                         anonSuperTypes = reverse $3,
+                         anonParams = reverse $2,
+                         anonContent = Group { groupVisibility = Public,
+                                               groupElements = reverse $5,
+                                               groupPos = grouppos } :
+                                       reverse $6,
+                         anonPos = builderpos }
               }
           | ID
               { Sym { symName = name $1, symPos = Token.position $1 } }
 
 exp_list: exp_list COMMA exp
-            {% do
-                 exp <- buildExp $3
-                 return (exp : $1)
-            }
+            { buildExp $3 : $1 }
         | exp
-            {% do
-                 exp <- buildExp $1
-                 return [ exp ]
-            }
+            { [ buildExp $1 ] }
 
 exp: exp WITH exp
-       {% do
-            val <- buildExp $1
-            args <- buildExp $3
-            pos <- span (expPosition val) (expPosition args)
-            return [ With { withVal = val, withArgs = args, withPos = pos } ]
+       { let
+           val = buildExp $1
+           args = buildExp $3
+           pos = expPosition val <> expPosition args
+         in
+            [ With { withVal = val, withArgs = args, withPos = pos } ]
        }
    | exp WHERE exp
-       {% do
-            val <- buildExp $1
-            prop <- buildExp $3
-            pos <- span (expPosition val) (expPosition prop)
-            return [ Where { whereVal = val, whereProp = prop,
-                             wherePos = pos } ]
+       { let
+           val = buildExp $1
+           prop = buildExp $3
+           pos = expPosition val <> expPosition prop
+         in
+           [ Where { whereVal = val, whereProp = prop, wherePos = pos } ]
        }
    | exp AS exp
-       {% do
-            val <- buildExp $1
-            ty <- buildExp $3
-            pos <- span (expPosition val) (expPosition ty)
-            return [ Ascribe { ascribeVal = val, ascribeType = ty,
-                               ascribePos = pos } ]
+       { let
+           val = buildExp $1
+           ty = buildExp $3
+           pos = expPosition val <> expPosition ty
+         in
+           [ Ascribe { ascribeVal = val, ascribeType = ty, ascribePos = pos } ]
        }
    | exp inner_exp
-       { ($2 : $1) }
+       { $2 : $1 }
    | compound_exp
        { [ $1 ] }
 
 compound_exp: MATCH LPAREN exp RPAREN cases
-                {% do
-                     val <- buildExp $3
-                     pos <- span (Token.position $1) (casePosition (head $5))
-                     return Match { matchVal = val, matchCases = reverse $5,
-                                    matchPos = pos }
+                { let
+                    val = buildExp $3
+                    pos = Token.position $1 <> casePosition (head $5)
+                  in
+                    Match { matchVal = val, matchCases = reverse $5,
+                            matchPos = pos }
                 }
             | abstraction_kind cases
-                {% do
-                     pos <- span (snd $1) (casePosition (head $2))
-                     return Abs { absKind = fst $1, absCases = reverse $2,
-                                  absPos = pos }
+                { let
+                     pos = snd $1 <> casePosition (head $2)
+                  in
+                     Abs { absKind = fst $1, absCases = reverse $2,
+                           absPos = pos }
                 }
             | inner_exp
                 { $1 }
 
 inner_exp: type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
-            {% do
-                 grouppos <- span (elementPosition (last $5))
-                                  (elementPosition (head $5))
-                 builderpos <- span (snd $1) (Token.position $7)
-                 return Anon { anonKind = fst $1,
-                               anonSuperTypes = reverse $3,
-                               anonParams = reverse $2,
-                               anonContent = Group { groupVisibility = Public,
-                                                     groupElements = reverse $5,
-                                                     groupPos = grouppos } :
-                                             reverse $6,
-                               anonPos = builderpos }
+            { let
+                grouppos = elementPosition (last $5) <>
+                           elementPosition (head $5)
+                builderpos = snd $1 <> Token.position $7
+              in
+                Anon { anonKind = fst $1,
+                       anonSuperTypes = reverse $3,
+                       anonParams = reverse $2,
+                       anonContent = Group { groupVisibility = Public,
+                                             groupElements = reverse $5,
+                                             groupPos = grouppos } : reverse $6,
+                       anonPos = builderpos }
             }
          | LPAREN field_list RPAREN
-            {% do
-                 pos <- span (Token.position $1) (Token.position $3)
-                 return Record { recordFields = reverse $2, recordType = True,
-                                 recordPos = pos }
+            { let
+                pos = Token.position $1 <> Token.position $3
+              in
+                Record { recordFields = reverse $2, recordType = True,
+                         recordPos = pos }
             }
          | LPAREN bind_list RPAREN
-            {% do
-                 pos <- span (Token.position $1) (Token.position $3)
-                 return Record { recordFields = reverse $2, recordType = False,
-                                 recordPos = pos }
+            { let
+                pos = Token.position $1 <> Token.position $3
+              in
+                Record { recordFields = reverse $2, recordType = False,
+                         recordPos = pos }
             }
          | LPAREN exp_list RPAREN
-            {% do
-                 pos <- span (Token.position $1) (Token.position $3)
-                 return Tuple { tupleFields = reverse $2, tuplePos = pos }
+            { let
+                pos = Token.position $1 <> Token.position $3
+              in
+                Tuple { tupleFields = reverse $2, tuplePos = pos }
             }
          | LBRACE stm_list RBRACE
-            {% do
-                 compoundpos <- span (Token.position $1) (Token.position $3)
-                 return Compound { compoundBody = reverse $2,
-                                   compoundPos = compoundpos }
+            { let
+                compoundpos = Token.position $1 <> Token.position $3
+              in
+                Compound { compoundBody = reverse $2,
+                           compoundPos = compoundpos }
             }
          | inner_exp DOT ID
-            {% do
-                 pos <- span (expPosition $1) (Token.position $3)
-                 return Project { projectVal = $1,
-                                  projectFields =
-                                    [ FieldName { fieldSym = name $3 } ],
-                                  projectPos = pos }
+            { let
+                pos = expPosition $1 <> Token.position $3
+              in
+                Project { projectVal = $1,
+                          projectFields = [ FieldName { fieldSym = name $3 } ],
+                          projectPos = pos }
             }
          | inner_exp DOT LPAREN project_list RPAREN
-            {% do
-                 pos <- span (expPosition $1) (Token.position $5)
-                 return Project { projectVal = $1, projectFields = reverse $4,
-                                  projectPos = pos }
+            { let
+                pos = expPosition $1 <> Token.position $5
+              in
+                Project { projectVal = $1, projectFields = reverse $4,
+                          projectPos = pos }
             }
 --         | inner_exp LBRACK exp_list RBRACK
 --            {}
@@ -601,9 +607,10 @@ literal: NUM
        | CHAR
           { Char { charVal = char $1, charPos = Token.position $1 } }
        | LPAREN RPAREN
-          {% do
-               pos <- span (Token.position $1) (Token.position $2)
-               return Unit { unitPos = pos }
+          { let
+              pos = Token.position $1 <> Token.position $2
+            in
+              Unit { unitPos = pos }
           }
 
 
@@ -630,10 +637,7 @@ open_stm: open_def
         | LET open_value_def
             { Element $2 }
         | exp
-            {% do
-                 ex <- buildExp $1
-                 return (Exp ex)
-            }
+            { Exp (buildExp $1) }
 
 open_stm_list: closed_stm_list open_stm
                  { $2 : $1 }
@@ -641,77 +645,83 @@ open_stm_list: closed_stm_list open_stm
                  { [ $1 ] }
 
 cases: case_list pattern EQUAL exp %prec COLON
-         {% do
-              body <- buildExp $4
-              pos <- span (patternPosition $2) (expPosition body)
-              return (reverse (Case { casePat = $2, caseBody = body,
-                                      casePos = pos } : $1))
+         { let
+             body = buildExp $4
+             pos = patternPosition $2 <> expPosition body
+           in
+             reverse (Case { casePat = $2, caseBody = body,
+                             casePos = pos } : $1)
          }
      | case_list pattern LBRACE stm_list RBRACE %prec COLON
-         {% do
-              casepos <- span (patternPosition $2) (Token.position $5)
-              compoundpos <- span (Token.position $3) (Token.position $5)
-              return (reverse (Case { casePat = $2,
-                                      caseBody =
-                                        Compound { compoundBody = reverse $4,
-                                                   compoundPos = compoundpos },
-                                      casePos = casepos } : $1))
+         { let
+             casepos = patternPosition $2 <> Token.position $5
+             compoundpos = Token.position $3 <> Token.position $5
+           in
+              reverse (Case { casePat = $2,
+                              caseBody = Compound { compoundBody = reverse $4,
+                                                    compoundPos = compoundpos },
+                              casePos = casepos } : $1)
          }
 
 case_list: case_list pattern EQUAL exp BAR
-             {% do
-                  body <- buildExp $4
-                  pos <- span (patternPosition $2) (expPosition body)
-                  return (Case { casePat = $2, caseBody = body,
-                                 casePos = pos } : $1)
+             { let
+                 body = buildExp $4
+                 pos = patternPosition $2 <> expPosition body
+               in
+                 Case { casePat = $2, caseBody = body, casePos = pos } : $1
              }
          | case_list pattern LBRACE stm_list RBRACE BAR
-             {% do
-                  casepos <- span (patternPosition $2) (Token.position $5)
-                  compoundpos <- span (Token.position $3) (Token.position $5)
-                  return (Case { casePat = $2,
-                                 caseBody =
-                                   Compound { compoundBody = reverse $4,
+             { let
+                 casepos = patternPosition $2 <> Token.position $5
+                 compoundpos = Token.position $3 <> Token.position $5
+               in
+                 Case { casePat = $2,
+                        caseBody = Compound { compoundBody = reverse $4,
                                               compoundPos = compoundpos },
-                                 casePos = casepos } : $1)
+                        casePos = casepos } : $1
              }
          |
              { [] }
 
 pattern: LPAREN option_list RPAREN
-           {% do
-                pos <- span (Token.position $1) (Token.position $3)
-                return Option { optionPats = reverse $2, optionPos = pos }
+           { let
+               pos = Token.position $1 <> Token.position $3
+             in
+               Option { optionPats = reverse $2, optionPos = pos }
            }
        | LPAREN match_list COMMA ELLIPSIS RPAREN
-           {% do
-                pos <- span (Token.position $1) (Token.position $5)
-                return Split { splitFields = reverse $2, splitStrict = False,
-                               splitPos = pos }
+           { let
+               pos = Token.position $1 <> Token.position $5
+             in
+               Split { splitFields = reverse $2, splitStrict = False,
+                       splitPos = pos }
            }
        | LPAREN match_list RPAREN
-           {% do
-                pos <- span (Token.position $1) (Token.position $3)
-                return Split { splitFields = reverse $2, splitStrict = True,
-                               splitPos = pos }
+           { let
+               pos = Token.position $1 <> Token.position $3
+             in
+               Split { splitFields = reverse $2, splitStrict = True,
+                       splitPos = pos }
            }
        | ID AS pattern
-           {% do
-                pos <- span (Token.position $1) (patternPosition $3)
-                return As { asName = name $1, asPat = $3, asPos = pos }
+           { let
+               pos = Token.position $1 <> patternPosition $3
+             in
+               As { asName = name $1, asPat = $3, asPos = pos }
            }
        | pattern COLON exp
-           {% do
-                ty <- buildExp $3
-                pos <- span (patternPosition $1) (expPosition ty)
-                return Typed { typedPat = $1, typedType = ty, typedPos = pos }
+           { let
+               ty = buildExp $3
+               pos = patternPosition $1 <> expPosition ty
+             in
+               Typed { typedPat = $1, typedType = ty, typedPos = pos }
            }
        | ID pattern
-           {% do
-                pos <- span (Token.position $1) (patternPosition $2)
-                return Deconstruct { deconstructName = name $1,
-                                     deconstructPat = $2,
-                                     deconstructPos = pos }
+           { let
+               pos = Token.position $1 <> patternPosition $2
+             in
+               Deconstruct { deconstructName = name $1, deconstructPat = $2,
+                             deconstructPos = pos }
            }
        | ID
            { Name { nameSym = name $1, namePos = Token.position $1 } }
@@ -724,18 +734,20 @@ option_list: option_list BAR pattern
                { [ $3, $1 ] }
 
 match_list: match_list COMMA ID EQUAL pattern
-              {% do
-                   pos <- span (Token.position $3) (patternPosition $5)
-                   return (Named { namedSym = name $3, namedVal = $5,
-                                   namedPos = pos } : $1)
+              { let
+                  pos = Token.position $3 <> patternPosition $5
+                in
+                   Named { namedSym = name $3, namedVal = $5,
+                           namedPos = pos } : $1
               }
           | match_list COMMA pattern
               { Unnamed $3 : $1 }
           | ID EQUAL pattern
-              {% do
-                   pos <- span (Token.position $1) (patternPosition $3)
-                   return [ Named { namedSym = name $1, namedVal = $3,
-                                    namedPos = pos } ]
+              { let
+                  pos = Token.position $1 <> patternPosition $3
+                in
+                  [ Named { namedSym = name $1, namedVal = $3,
+                            namedPos = pos } ]
               }
           | pattern
               { [ Unnamed $1 ] }
@@ -746,15 +758,15 @@ instance Error () where noMsg = ()
 
 type Parser = ErrorT () Lexer
 
-buildExp :: [Exp] -> Parser Exp
+buildExp :: [Exp] -> Exp
 buildExp [] = error "Empty expression sequence, shouldn't happen"
-buildExp [e] = return e
+buildExp [e] = e
 buildExp revexps =
   let
     exps = reverse revexps
-  in do
-    pos <- span (expPosition (head exps)) (expPosition (last exps))
-    return Seq { seqExps = exps, seqPos = pos }
+    pos = expPosition (head exps) <> expPosition (last exps)
+  in
+    Seq { seqExps = exps, seqPos = pos }
 
 parseError :: Token-> Parser a
 parseError tok =
@@ -782,7 +794,7 @@ str (Token.String str _) = str
 str _ = error "Cannot get str of token"
 
 -- | Run the parser, include tokens with the result.
-parser :: Strict.ByteString
+parser :: Position.Filename
        -- ^ Name of the file being parsed.
        -> Lazy.ByteString
        -- ^ Content of the file being parsed
@@ -803,7 +815,7 @@ parser name input =
     runLexer run name input
 
 -- | Run the parser
-parserNoTokens :: Strict.ByteString
+parserNoTokens :: Position.Filename
                -- ^ Name of the file being parsed.
                -> Lazy.ByteString
                -- ^ Content of the file being parsed

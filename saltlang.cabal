@@ -138,7 +138,7 @@ Library
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
-                        hashtables, filepath
+                        hashtables, filepath, semigroups
   build-tools:          alex, happy
   hs-source-dirs:       src/library
   exposed-modules:

@@ -35,7 +35,7 @@ import Control.Monad.Trans
 import Data.Array hiding (accum, elems)
 import Data.HashMap.Strict(HashMap)
 import Data.Maybe
-import Data.Position
+import Data.Position.Filename
 import Data.Symbol
 import Language.Salt.Message
 import Language.Salt.Surface.Common
@@ -1012,14 +1012,14 @@ loadComponent :: (MonadIO m, MonadLoader Strict.ByteString Lazy.ByteString m,
               -> Position
               -- ^ The position at which the reference to this
               -- component occurred.
-              -> m (Strict.ByteString, Maybe Lazy.ByteString)
+              -> m (Maybe (Filename, Lazy.ByteString))
 loadComponent cname pos =
   do
-    fname <- componentFileName cname
+    fstr <- componentFileName cname
     -- XXX Replace this with some sort of progress messages framework
-    liftIO (Strict.putStr (Strict.concat ["Loaded ", fname, "\n"]))
+    liftIO (Strict.putStr (Strict.concat ["Loaded ", fstr, "\n"]))
     -- Call the loader to get the file contents.
-    loaded <- load fname
+    loaded <- load fstr
     case loaded of
     -- If an error occurs while loading, report it.
       Left err ->
@@ -1028,14 +1028,14 @@ loadComponent cname pos =
         in do
           if isDoesNotExistError err
             then cannotFindComponent cname pos
-            else cannotAccessComponent cname fname errstr pos
-          return (fname, Nothing)
-      Right content -> return (fname, Just content)
+            else cannotAccessComponent cname fstr errstr pos
+          return Nothing
+      Right (fname, content) -> return (Just (fname, content))
 
 collectComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                      MonadMessages Message m, MonadGenpos m,
                      MonadCollect m, MonadSymbols m, MonadIO m) =>
-                    (Strict.ByteString -> Lazy.ByteString -> m (Maybe AST.AST))
+                    (Filename -> Lazy.ByteString -> m (Maybe AST.AST))
                  -- ^ The parsing function to use.
                  -> Position
                  -- ^ The position at which the reference to this
@@ -1054,17 +1054,18 @@ collectComponent parseFunc pos cname =
     loadAndCollect =
       do
         -- Call the loader to get the file contents.
-        (fname, loaded) <- loadComponent cname pos
-        fpos <- file fname
+        loaded <- loadComponent cname pos
         case loaded of
           Nothing -> addComponent cname emptyComponent
-          Just content ->
+          Just (fname, content) ->
             -- Otherwise, continue
             do
               res <- parseFunc fname content
               case res of
                 Just ast @ AST.AST { AST.astUses = uses } ->
-                  do
+                  let
+                    fpos = File { fileName = fname }
+                  in do
                     scope <- collectAST fpos (Just cname) ast
                     addComponent cname scope
                     mapM_ collectUse uses
@@ -1082,13 +1083,13 @@ loadFile :: (MonadIO m, MonadLoader Strict.ByteString Lazy.ByteString m,
          -> Position
          -- ^ The position at which the reference to this
          -- file occurred.
-         -> m (Maybe Lazy.ByteString)
-loadFile fname pos =
+         -> m (Maybe (Filename, Lazy.ByteString))
+loadFile fstr pos =
   do
     -- Call the loader to get the file contents.
-    loaded <- load fname
+    loaded <- load fstr
     -- XXX Replace this with some sort of progress messages framework
-    liftIO (Strict.putStr (Strict.concat ["Loaded ", fname, "\n"]))
+    liftIO (Strict.putStr (Strict.concat ["Loaded ", fstr, "\n"]))
     case loaded of
     -- If an error occurs while loading, report it.
       Left err ->
@@ -1096,15 +1097,15 @@ loadFile fname pos =
           errstr = Strict.fromString $! ioeGetErrorString err
         in do
           if isDoesNotExistError err
-            then cannotFindFile fname pos
-            else cannotAccessFile fname errstr pos
+            then cannotFindFile fstr pos
+            else cannotAccessFile fstr errstr pos
           return Nothing
-      Right content -> return (Just content)
+      Right (fname, content) -> return (Just (fname, content))
 
 collectFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                 MonadMessages Message m, MonadGenpos m,
                 MonadCollect m, MonadSymbols m, MonadIO m) =>
-               (Strict.ByteString -> Lazy.ByteString -> m (Maybe AST.AST))
+               (Filename -> Lazy.ByteString -> m (Maybe AST.AST))
             -- ^ The parsing function to use.
             -> Position
             -- ^ The position at which the reference to this
@@ -1112,23 +1113,24 @@ collectFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
             -> Strict.ByteString
             -- ^ The name of the file to collect.
             -> m (Maybe Syntax.Component)
-collectFile parseFunc pos fname =
+collectFile parseFunc pos fstr =
   let
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
       collectComponent parseFunc upos uname
   in do
-    fpos <- file fname
     -- Call the loader to get the file contents.
-    loaded <- loadFile fname pos
+    loaded <- loadFile fstr pos
     case loaded of
       Nothing -> return Nothing
-      Just content ->
+      Just (fname, content) ->
         -- Otherwise, continue
         do
           res <- parseFunc fname content
           case res of
             Just ast @ AST.AST { AST.astUses = uses } ->
-              do
+              let
+                fpos = File { fileName = fname }
+              in do
                 scope <- collectAST fpos Nothing ast
                 mapM_ collectUse uses
                 return (Just scope)

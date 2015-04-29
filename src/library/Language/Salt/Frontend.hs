@@ -22,10 +22,11 @@ module Language.Salt.Frontend(
 
 import Control.Monad.FileLoader
 import Control.Monad.Messages
+import Data.Position.BasicPosition
 import Language.Salt.Message
 import Language.Salt.Surface.Token
 
 import qualified Control.Monad.Frontend as Frontend
 
 type Frontend = FileLoaderT (MessagesT [Message] Message
-                                       (Frontend.Frontend Token))
+                                       (Frontend.Frontend BasicPosition Token))

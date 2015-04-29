@@ -25,6 +25,8 @@ module Language.Salt.Surface.Common(
        AbstractionKind(..),
        Visibility(..),
        Literal(..),
+       BasicPosition(..),
+       Position,
        literalPosition,
        literalDot,
        recordDoc,
@@ -42,12 +44,14 @@ import Data.ByteString(ByteString)
 import Data.Hashable
 import Data.Ratio
 import Text.Format
-import Data.Position
+import Data.Position.BasicPosition
 import Data.Symbol
 import Data.Word
 import Text.FormatM
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
+
+type Position = BasicPosition
 
 -- | A newtype to discriminate field names from symbols.
 newtype FieldName = FieldName { fieldSym :: Symbol }
@@ -292,27 +296,30 @@ numPickler :: (GenericXMLString tag, Show tag,
 numPickler =
   let
     revfunc Num { numVal = num, numPos = pos } =
-      (numerator num, denominator num, pos)
+      ((numerator num, denominator num), pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(numer, denom, pos) -> Num { numVal = numer % denom,
-                                          numPos = pos }, revfunc)
-           (xpElemAttrs (gxFromString "Num")
-                        (xpTriple (xpAttr (gxFromString "numerator") xpPrim)
-                                  (xpAttr (gxFromString "denominator") xpPrim)
-                                  xpickle))
+    xpWrap (\((numer, denom), pos) -> Num { numVal = numer % denom,
+                                            numPos = pos }, revfunc)
+           (xpElem (gxFromString "Num")
+                   (xpPair (xpAttr (gxFromString "numerator") xpPrim)
+                           (xpAttr (gxFromString "denominator") xpPrim))
+                   (xpElemNodes (gxFromString "pos") xpickle))
 
 strPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Literal
 strPickler =
   let
-    revfunc Str { strVal = str, strPos = pos } = (pos, gxFromByteString str)
+    revfunc Str { strVal = str, strPos = pos } = (gxFromByteString str, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, str) -> Str { strVal = gxToByteString str,
+    xpWrap (\(str, pos) -> Str { strVal = gxToByteString str,
                                  strPos = pos }, revfunc)
-           (xpElem (gxFromString "Str") xpickle (xpContent xpText0))
+           (xpElemNodes (gxFromString "Str")
+                        (xpPair (xpElemNodes (gxFromString "value")
+                                             (xpContent xpText0))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 charPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
@@ -323,13 +330,16 @@ charPickler =
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (\(chr, pos) -> Char { charVal = chr, charPos = pos }, revfunc)
-           (xpElemAttrs (gxFromString "char")
-                        (xpPair (xpAttr (gxFromString "value") xpPrim) xpickle))
+           (xpElem (gxFromString "Char")
+                   (xpAttr (gxFromString "value") xpPrim)
+                   (xpElemNodes (gxFromString "pos") xpickle))
 
 unitPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
                PU [NodeG [] tag text] Literal
-unitPickler = xpWrap (Unit, unitPos) (xpElemAttrs (gxFromString "Unit") xpickle)
+unitPickler = xpWrap (Unit, unitPos)
+                     (xpElemNodes (gxFromString "Unit")
+                                  (xpElemNodes (gxFromString "pos") xpickle))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Literal where

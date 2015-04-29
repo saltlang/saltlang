@@ -80,7 +80,7 @@ instance MonadCollect m => MonadCollect (GensymT m) where
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (KeywordsT tok m) where
+instance MonadCollect m => MonadCollect (KeywordsT pos tok m) where
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 

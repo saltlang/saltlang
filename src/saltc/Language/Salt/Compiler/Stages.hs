@@ -36,7 +36,8 @@ import Control.Monad.Messages
 import Control.Monad.Symbols
 import Control.Monad.Trans
 import Data.Array hiding (accum)
-import Data.Position
+import Data.Position.BasicPosition
+import Data.Position.Filename
 import Data.Symbol
 import Language.Salt.Compiler.Options
 import Language.Salt.Frontend
@@ -124,11 +125,12 @@ printXMLTokens fname tokens =
 
 printTokens :: (MonadIO m, MonadPositions m, MonadMessages Message m,
                 MonadSymbols m, MonadArtifacts Strict.ByteString m) =>
-               Save -> Strict.ByteString -> [Token] -> m ()
+               Save -> Filename -> [Token] -> m ()
 printTokens Save { saveText = savetext, saveXML = savexml } fname toks =
   do
-    when savetext (printTextTokens fname (reverse toks))
-    when savexml (printXMLTokens fname (reverse toks))
+    FileInfo { fileInfoName = fstr } <- fileInfo fname
+    when savetext (printTextTokens fstr (reverse toks))
+    when savexml (printXMLTokens fstr (reverse toks))
 
 printTextAST :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
                  MonadArtifacts Strict.ByteString m) =>
@@ -164,13 +166,14 @@ printXMLAST fname ast =
 
 printAST :: (MonadIO m, MonadPositions m, MonadSymbols m,
              MonadMessages Message m, MonadArtifacts Strict.ByteString m) =>
-            Save -> Strict.ByteString -> AST -> m ()
+            Save -> Filename -> AST -> m ()
 printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
          fname ast =
   do
-    when savetxt (printTextAST fname ast)
-    when savedot (printDotAST fname ast)
-    when savexml (printXMLAST fname ast)
+    FileInfo { fileInfoName = fstr } <- fileInfo fname
+    when savetxt (printTextAST fstr ast)
+    when savedot (printDotAST fstr ast)
+    when savexml (printXMLAST fstr ast)
 
 printTextSurface :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
                      MonadArtifacts Strict.ByteString m) =>
@@ -182,7 +185,8 @@ printTextSurface fname scope =
     surfacedoc <- formatM scope
     createArtifact surfacefile (buildOptimal 120 False surfacedoc)
 
-printXMLSurface :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m) =>
+printXMLSurface :: (MonadArtifacts Strict.ByteString m,
+                    MonadMessages Message m) =>
                    Strict.ByteString -> Component -> m ()
 printXMLSurface fname scope =
   let
@@ -237,11 +241,10 @@ lex Options { optStages = stages, optComponents = True }
       lexOnlyFile namestr =
         do
           cname <- getComponentName namestr
-          pos <- cmdLine
-          (fname, input) <- loadComponent cname pos
-          case input of
+          res <- loadComponent cname CmdLine
+          case res of
             Nothing -> return ()
-            Just content ->
+            Just (fname, content) ->
               do
                 (_, toks) <- lift (runLexer lexRemaining fname content)
                 printTokens save fname toks
@@ -253,11 +256,10 @@ lex Options { optStages = stages, optComponents = True }
       lexOnlyFile namestr =
         do
           cname <- getComponentName namestr
-          pos <- cmdLine
-          (fname, input) <- loadComponent cname pos
-          case input of
+          res <- loadComponent cname CmdLine
+          case res of
             Nothing -> return ()
-            Just content ->
+            Just (fname, content) ->
               lift (runLexerNoTokens lexRemaining fname content)
     in
       mapM_ lexOnlyFile
@@ -267,13 +269,12 @@ lex Options { optStages = stages, optComponents = False }
       save = stages ! Lexer
 
       lexOnlyFile :: Strict.ByteString -> FileArtifactsT Frontend ()
-      lexOnlyFile fname =
+      lexOnlyFile fstr =
         do
-          pos <- cmdLine
-          input <- loadFile fname pos
-          case input of
+          res <- loadFile fstr CmdLine
+          case res of
             Nothing -> return ()
-            Just content ->
+            Just (fname, content) ->
               do
                 (_, toks) <- lift (runLexer lexRemaining fname content)
                 printTokens save fname toks
@@ -282,13 +283,12 @@ lex Options { optStages = stages, optComponents = False }
   | otherwise =
     let
       lexOnlyFile :: Strict.ByteString -> FileArtifactsT Frontend ()
-      lexOnlyFile fname =
+      lexOnlyFile fstr =
         do
-          pos <- cmdLine
-          input <- loadFile fname pos
-          case input of
+          res <- loadFile fstr CmdLine
+          case res of
             Nothing -> return ()
-            Just content ->
+            Just (fname, content) ->
               lift (runLexerNoTokens lexRemaining fname content)
     in
       mapM_ lexOnlyFile
@@ -305,15 +305,15 @@ parse Options { optStages = stages, optComponents = True } names
       savetokens = stages ! Lexer
       saveast = stages ! Parser
 
-      parseFile :: Position -> Strict.ByteString ->
+      parseFile :: BasicPosition -> Strict.ByteString ->
                    FileArtifactsT Frontend (Maybe AST)
       parseFile pos namestr =
         do
           cname <- getComponentName namestr
-          (fname, input) <- loadComponent cname pos
-          case input of
+          res <- loadComponent cname pos
+          case res of
             Nothing -> return Nothing
-            Just content ->
+            Just (fname, content) ->
               do
                 (out, tokens) <- lift (parser fname content)
                 printTokens savetokens fname tokens
@@ -323,22 +323,21 @@ parse Options { optStages = stages, optComponents = True } names
                       printAST saveast fname ast
                       return out
                   Nothing -> return out
-    in do
-      pos <- cmdLine
-      mapM_ (parseFile pos) names
+    in
+      mapM_ (parseFile CmdLine) names
   | otherwise =
     let
       saveast = stages ! Parser
 
-      parseFile :: Position -> Strict.ByteString ->
+      parseFile :: BasicPosition -> Strict.ByteString ->
                    FileArtifactsT Frontend (Maybe AST)
       parseFile pos namestr =
         do
           cname <- getComponentName namestr
-          (fname, input) <- loadComponent cname pos
-          case input of
+          res <- loadComponent cname pos
+          case res of
             Nothing -> return Nothing
-            Just content ->
+            Just (fname, content) ->
               do
                 out <- lift (parserNoTokens fname content)
                 case out of
@@ -347,23 +346,22 @@ parse Options { optStages = stages, optComponents = True } names
                       printAST saveast fname ast
                       return out
                   Nothing -> return out
-    in do
-      pos <- cmdLine
-      mapM_ (parseFile pos) names
+    in
+      mapM_ (parseFile CmdLine) names
 parse Options { optStages = stages, optComponents = False } names
   | saveText (stages ! Lexer) || saveXML (stages ! Lexer) =
     let
       savetokens = stages ! Lexer
       saveast = stages ! Parser
 
-      parseFile :: Position -> Strict.ByteString ->
+      parseFile :: BasicPosition -> Strict.ByteString ->
                    FileArtifactsT Frontend (Maybe AST)
-      parseFile pos fname =
+      parseFile pos fstr =
         do
-          input <- loadFile fname pos
-          case input of
+          res <- loadFile fstr pos
+          case res of
             Nothing -> return Nothing
-            Just content ->
+            Just (fname, content) ->
               do
                 (out, tokens) <- lift (parser fname content)
                 printTokens savetokens fname tokens
@@ -373,21 +371,20 @@ parse Options { optStages = stages, optComponents = False } names
                       printAST saveast fname ast
                       return out
                   Nothing -> return out
-    in do
-      pos <- cmdLine
-      mapM_ (parseFile pos) names
+    in
+      mapM_ (parseFile CmdLine) names
   | otherwise =
     let
       saveast = stages ! Parser
 
-      parseFile :: Position -> Strict.ByteString ->
+      parseFile :: BasicPosition -> Strict.ByteString ->
                    FileArtifactsT Frontend (Maybe AST)
-      parseFile pos fname =
+      parseFile pos fstr =
         do
-          input <- loadFile fname pos
-          case input of
+          res <- loadFile fstr pos
+          case res of
             Nothing -> return Nothing
-            Just content ->
+            Just (fname, content) ->
               do
                 out <- lift (parserNoTokens fname content)
                 case out of
@@ -396,9 +393,8 @@ parse Options { optStages = stages, optComponents = False } names
                       printAST saveast fname ast
                       return out
                   Nothing -> return out
-    in do
-      pos <- cmdLine
-      mapM_ (parseFile pos) names
+    in
+      mapM_ (parseFile CmdLine) names
 
 dumpSurface :: Options -> ComponentsT (FileArtifactsT Frontend) ()
 dumpSurface Options { optStages = stages } =
@@ -428,7 +424,7 @@ collect Options { optStages = stages, optComponents = compnames } names
       savetokens = stages ! Lexer
       saveast = stages ! Parser
 
-      parseFile :: Strict.ByteString -> Lazy.ByteString ->
+      parseFile :: Filename -> Lazy.ByteString ->
                    CollectT (FileArtifactsT Frontend) (Maybe AST)
       parseFile fname content =
         do
@@ -440,18 +436,17 @@ collect Options { optStages = stages, optComponents = compnames } names
                 lift (printAST saveast fname ast)
                 return out
             Nothing -> return out
-    in do
-      pos <- cmdLine
+    in
       if compnames
         then do
           cnames <- mapM getComponentName names
-          mapM_ (collectComponent parseFile pos) cnames
-        else mapM_ (collectFile parseFile pos) names
+          mapM_ (collectComponent parseFile CmdLine) cnames
+        else mapM_ (collectFile parseFile CmdLine) names
   | otherwise =
     let
       saveast = stages ! Parser
 
-      parseFile :: Strict.ByteString -> Lazy.ByteString ->
+      parseFile :: Filename -> Lazy.ByteString ->
                    CollectT (FileArtifactsT Frontend) (Maybe AST)
       parseFile fname content =
         do
@@ -463,9 +458,8 @@ collect Options { optStages = stages, optComponents = compnames } names
                 return out
             Nothing -> return out
     in do
-      pos <- cmdLine
       if compnames
         then do
           cnames <- mapM getComponentName names
-          mapM_ (collectComponent parseFile pos) cnames
-        else mapM_ (collectFile parseFile pos) names
+          mapM_ (collectComponent parseFile CmdLine) cnames
+        else mapM_ (collectFile parseFile CmdLine) names

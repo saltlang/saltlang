@@ -142,13 +142,14 @@ instance (Error e, MonadError e m) => MonadError e (ComponentsT m) where
     ComponentsT (unpackComponentsT m `catchError` (unpackComponentsT . h))
 
 instance MonadGenpos m => MonadGenpos (ComponentsT m) where
-  position = lift . position
+  point = lift . point
+  filename = lift . filename
 
 instance MonadGensym m => MonadGensym (ComponentsT m) where
   symbol = lift . symbol
   unique = lift . unique
 
-instance MonadKeywords t m => MonadKeywords t (ComponentsT m) where
+instance MonadKeywords p t m => MonadKeywords p t (ComponentsT m) where
   mkKeyword p = lift . mkKeyword p
 
 instance MonadMessages msg m => MonadMessages msg (ComponentsT m) where
@@ -158,7 +159,8 @@ instance MonadLoader path info m => MonadLoader path info (ComponentsT m) where
   load = lift . load
 
 instance MonadPositions m => MonadPositions (ComponentsT m) where
-  positionInfo = lift . positionInfo
+  pointInfo = lift . pointInfo
+  fileInfo = lift . fileInfo
 
 instance MonadSourceFiles m => MonadSourceFiles (ComponentsT m) where
   sourceFile = lift . sourceFile

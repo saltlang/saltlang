@@ -45,7 +45,6 @@ import Control.Monad.Symbols
 import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
-import Data.Position
 import Data.List(sort)
 import Data.Symbol
 import Data.Word
@@ -1424,14 +1423,15 @@ mapPickler = xpWrap (HashMap.fromList, HashMap.toList)
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Truth where
   xpickle =
-    xpWrap (\((vis, kind, pos), body) ->
+    xpWrap (\((vis, kind), (body, pos)) ->
              Truth { truthVisibility = vis, truthContent = body,
                      truthKind = kind, truthPos = pos },
             \Truth { truthVisibility = vis, truthKind = kind,
                     truthContent = body, truthPos = pos } ->
-              ((vis, kind, pos), body))
-           (xpElem (gxFromString "Truth") (xpTriple xpickle xpickle xpickle)
-                   (xpElemNodes (gxFromString "type") xpickle))
+              ((vis, kind), (body, pos)))
+           (xpElem (gxFromString "Truth") (xpPair xpickle xpickle)
+                   (xpPair (xpElemNodes (gxFromString "type") xpickle)
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 defsPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
@@ -1477,30 +1477,32 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Builder where
   xpickle =
-    xpWrap (\((vis, kind, pos), (params, supers, body)) ->
+    xpWrap (\((vis, kind), (params, supers, body, pos)) ->
              Builder { builderVisibility = vis, builderKind = kind,
                        builderParams = params, builderSuperTypes = supers,
                        builderContent = body, builderPos = pos },
             \Builder { builderVisibility = vis, builderKind = kind,
                        builderParams = params, builderSuperTypes = supers,
                        builderContent = body, builderPos = pos } ->
-            ((vis, kind, pos), (params, supers, body)))
-           (xpElem (gxFromString "Builder")
-                   (xpTriple xpickle xpickle xpickle)
-                   (xpTriple (xpElemNodes (gxFromString "params") xpickle)
+            ((vis, kind), (params, supers, body, pos)))
+           (xpElem (gxFromString "Builder") (xpPair xpickle xpickle)
+                   (xp4Tuple (xpElemNodes (gxFromString "params") xpickle)
                              (xpElemNodes (gxFromString "supers") xpickle)
-                             (xpElemNodes (gxFromString "body") xpickle)))
+                             (xpElemNodes (gxFromString "body") xpickle)
+                             (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Proof where
-  xpickle = xpWrap (\(pos, (pname, body)) -> Proof { proofName = pname,
-                                                     proofBody = body,
-                                                     proofPos = pos },
-                    \Proof { proofName = pname, proofBody = body,
-                             proofPos = pos } -> (pos, (pname, body)))
-                   (xpElem (gxFromString "Proof") xpickle
-                           (xpPair (xpElemNodes (gxFromString "name") xpickle)
-                                   (xpElemNodes (gxFromString "type") xpickle)))
+  xpickle =
+    xpWrap (\(pname, body, pos) -> Proof { proofName = pname,
+                                           proofBody = body,
+                                           proofPos = pos },
+            \Proof { proofName = pname, proofBody = body,
+                     proofPos = pos } -> (pname, body, pos))
+           (xpElemNodes (gxFromString "Proof")
+                        (xpTriple (xpElemNodes (gxFromString "name") xpickle)
+                                  (xpElemNodes (gxFromString "type") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 defPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -1508,27 +1510,29 @@ defPickler :: (GenericXMLString tag, Show tag,
 defPickler =
   let
     revfunc Def { defPattern = pat, defInit = init, defPos = pos } =
-      (pos, (pat, init))
+      (pat, init, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (pat, init)) -> Def { defPattern = pat, defInit = init,
-                                         defPos = pos }, revfunc)
-           (xpElem (gxFromString "Def") xpickle
-                   (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
-                           (xpOption (xpElemNodes (gxFromString "init")
-                                                  xpickle))))
+    xpWrap (\(pat, init, pos) -> Def { defPattern = pat, defInit = init,
+                                       defPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Def")
+                        (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
+                                  (xpOption (xpElemNodes (gxFromString "init")
+                                                         xpickle))
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 importPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Element
 importPickler =
   let
-    revfunc Import { importExp = exp, importPos = pos } = (pos, exp)
+    revfunc Import { importExp = exp, importPos = pos } = (exp, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, exp) -> Import { importExp = exp, importPos = pos }, revfunc)
-           (xpElem (gxFromString "Import") xpickle
-                   (xpElemNodes (gxFromString "name") xpickle))
+    xpWrap (\(exp, pos) -> Import { importExp = exp, importPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Import")
+                        (xpPair (xpElemNodes (gxFromString "name") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Element where
@@ -1599,13 +1603,14 @@ optionPickler :: (GenericXMLString tag, Show tag,
                  PU [NodeG [] tag text] Pattern
 optionPickler =
   let
-    revfunc Option { optionPats = pats, optionPos = pos } = (pos, pats)
+    revfunc Option { optionPats = pats, optionPos = pos } = (pats, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, pats) -> Option { optionPats = pats,
+    xpWrap (\(pats, pos) -> Option { optionPats = pats,
                                      optionPos = pos }, revfunc)
-           (xpElem (gxFromString "Option") xpickle
-                   (xpElemNodes (gxFromString "patterns") xpickle))
+           (xpElemNodes (gxFromString "Option")
+                        (xpPair (xpElemNodes (gxFromString "patterns") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 deconstructPickler :: (GenericXMLString tag, Show tag,
                        GenericXMLString text, Show text) =>
@@ -1614,15 +1619,16 @@ deconstructPickler =
   let
     revfunc Deconstruct { deconstructName = sym, deconstructPat = pat,
                           deconstructPos = pos } =
-      ((sym, pos), pat)
+      (sym, (pat, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((sym, pos), pat) -> Deconstruct { deconstructName = sym,
-                                                 deconstructPat = pat,
-                                                 deconstructPos = pos },
+    xpWrap (\(sym, (pat, pos)) -> Deconstruct { deconstructName = sym,
+                                                deconstructPat = pat,
+                                                deconstructPos = pos },
             revfunc)
-           (xpElem (gxFromString "Deconstruct") (xpPair xpickle xpickle)
-                   (xpElemNodes (gxFromString "pattern") xpickle))
+           (xpElem (gxFromString "Deconstruct") xpickle
+                   (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 splitPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
@@ -1631,15 +1637,16 @@ splitPickler =
   let
     revfunc Split { splitStrict = strict, splitFields = fields,
                     splitPos = pos } =
-      ((strict, pos), fields)
+      (strict, (fields, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((strict, pos), fields) -> Split { splitStrict = strict,
+    xpWrap (\(strict, (fields, pos)) -> Split { splitStrict = strict,
                                                 splitFields = fields,
                                                 splitPos = pos }, revfunc)
            (xpElem (gxFromString "Split")
-                   (xpPair (xpAttr (gxFromString "strict") xpPrim) xpickle)
-                   (xpElemNodes (gxFromString "fields") mapPickler))
+                   (xpAttr (gxFromString "strict") xpPrim)
+                   (xpPair (xpElemNodes (gxFromString "fields") mapPickler)
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 typedPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -1647,27 +1654,29 @@ typedPickler :: (GenericXMLString tag, Show tag,
 typedPickler =
   let
     revfunc Typed { typedPat = pat, typedType = ty, typedPos = pos } =
-      (pos, (pat, ty))
+      (pat, ty, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (pat, ty)) -> Typed { typedPat = pat, typedType = ty,
-                                         typedPos = pos }, revfunc)
-           (xpElem (gxFromString "Typed") xpickle
-                   (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
-                           (xpElemNodes (gxFromString "type") xpickle)))
+    xpWrap (\(pat, ty, pos) -> Typed { typedPat = pat, typedType = ty,
+                                       typedPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Typed")
+                        (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
+                                  (xpElemNodes (gxFromString "type") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 asPickler :: (GenericXMLString tag, Show tag,
               GenericXMLString text, Show text) =>
              PU [NodeG [] tag text] Pattern
 asPickler =
   let
-    revfunc As { asName = sym, asPat = pat, asPos = pos } = ((sym, pos), pat)
+    revfunc As { asName = sym, asPat = pat, asPos = pos } = (sym, (pat, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((sym, pos), pat) -> As { asName = sym, asPat = pat,
-                                        asPos = pos }, revfunc)
-           (xpElem (gxFromString "As") (xpPair xpickle xpickle)
-                   (xpElemNodes (gxFromString "pattern") xpickle))
+    xpWrap (\(sym, (pat, pos)) -> As { asName = sym, asPat = pat,
+                                       asPos = pos }, revfunc)
+           (xpElem (gxFromString "As") xpickle
+                   (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
+                           (xpElemNodes (gxFromString "pair") xpickle)))
 
 namePickler :: (GenericXMLString tag, Show tag,
               GenericXMLString text, Show text) =>
@@ -1678,7 +1687,8 @@ namePickler =
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (\(sym, pos) -> Name { nameSym = sym, namePos = pos }, revfunc)
-           (xpElemAttrs (gxFromString "Name") (xpPair xpickle xpickle))
+           (xpElem (gxFromString "Name") xpickle
+                   (xpElemNodes (gxFromString "pos") xpickle))
 
 exactPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
@@ -1697,19 +1707,20 @@ compoundPickler =
   let
     revfunc Compound { compoundSyntax = syntax, compoundProofs = proofs,
                        compoundBody = body, compoundPos = pos } =
-      (pos, (syntax, proofs, body))
+      (syntax, proofs, body, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (syntax, proofs, body)) ->
+    xpWrap (\(syntax, proofs, body, pos) ->
              Compound { compoundSyntax = syntax, compoundProofs = proofs,
                         compoundBody = body, compoundPos = pos }, revfunc)
-           (xpElem (gxFromString "Compound") xpickle
-                   (xpTriple (xpElemNodes (gxFromString "syntax")
-                                          mapPickler)
-                             (xpElemNodes (gxFromString "proofs")
-                                          (xpList xpickle))
-                             (xpElemNodes (gxFromString "body")
-                                          (xpList xpickle))))
+           (xpElemNodes (gxFromString "Compound")
+                        (xp4Tuple (xpElemNodes (gxFromString "syntax")
+                                               mapPickler)
+                                  (xpElemNodes (gxFromString "proofs")
+                                               (xpList xpickle))
+                                  (xpElemNodes (gxFromString "body")
+                                               (xpList xpickle))
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 absPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -1717,13 +1728,14 @@ absPickler :: (GenericXMLString tag, Show tag,
 absPickler =
   let
     revfunc Abs { absKind = kind, absCases = cases, absPos = pos } =
-      ((kind, pos), cases)
+      (kind, (cases, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((kind, pos), cases) -> Abs { absKind = kind, absCases = cases,
+    xpWrap (\(kind, (cases, pos)) -> Abs { absKind = kind, absCases = cases,
                                            absPos = pos }, revfunc)
-           (xpElem (gxFromString "Abs") (xpPair xpickle xpickle)
-                   (xpElemNodes (gxFromString "fields") xpickle))
+           (xpElem (gxFromString "Abs") xpickle
+                   (xpPair (xpElemNodes (gxFromString "fields") xpickle)
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 matchPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
@@ -1731,14 +1743,15 @@ matchPickler :: (GenericXMLString tag, Show tag,
 matchPickler =
   let
     revfunc Match { matchVal = val, matchCases = cases, matchPos = pos } =
-      (pos, (val, cases))
+      (val, cases, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (val, cases)) -> Match { matchVal = val, matchCases = cases,
-                                            matchPos = pos }, revfunc)
-           (xpElem (gxFromString "Match") xpickle
-                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
-                           (xpElemNodes (gxFromString "cases") xpickle)))
+    xpWrap (\(val, cases, pos) -> Match { matchVal = val, matchCases = cases,
+                                          matchPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Match")
+                        (xpTriple (xpElemNodes (gxFromString "value") xpickle)
+                                  (xpElemNodes (gxFromString "cases") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 ascribePickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text) =>
@@ -1746,39 +1759,42 @@ ascribePickler :: (GenericXMLString tag, Show tag,
 ascribePickler =
   let
     revfunc Ascribe { ascribeVal = val, ascribeType = ty, ascribePos = pos } =
-      (pos, (val, ty))
+      (val, ty, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (val, ty)) -> Ascribe { ascribeVal = val,
-                                           ascribeType = ty,
-                                           ascribePos = pos }, revfunc)
-           (xpElem (gxFromString "Ascribe") xpickle
-                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
-                           (xpElemNodes (gxFromString "type") xpickle)))
+    xpWrap (\(val, ty, pos) -> Ascribe { ascribeVal = val, ascribeType = ty,
+                                         ascribePos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Ascribe")
+                        (xpTriple (xpElemNodes (gxFromString "value") xpickle)
+                                  (xpElemNodes (gxFromString "type") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 seqPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text) =>
                   PU [NodeG [] tag text] Exp
 seqPickler =
   let
-    revfunc Seq { seqExps = exps, seqPos = pos } = (pos, exps)
+    revfunc Seq { seqExps = exps, seqPos = pos } = (exps, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, exps) -> Seq { seqExps = exps, seqPos = pos }, revfunc)
-           (xpElem (gxFromString "Seq") xpickle (xpList xpickle))
+    xpWrap (\(exps, pos) -> Seq { seqExps = exps, seqPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Seq")
+                        (xpPair (xpElemNodes (gxFromString "exps") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 recordPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Exp
 recordPickler =
   let
-    revfunc Record { recordFields = fields, recordPos = pos } = (pos, fields)
+    revfunc Record { recordFields = fields, recordPos = pos } = (fields, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, fields) -> Record { recordFields = fields,
+    xpWrap (\(fields, pos) -> Record { recordFields = fields,
                                        recordPos = pos }, revfunc)
-           (xpElem (gxFromString "Record") xpickle
-                   (xpElemNodes (gxFromString "fields") mapPickler))
+           (xpElemNodes (gxFromString "Record")
+                        (xpPair (xpElemNodes (gxFromString "fields") mapPickler)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 recordTypePickler :: (GenericXMLString tag, Show tag,
                       GenericXMLString text, Show text) =>
@@ -1786,26 +1802,28 @@ recordTypePickler :: (GenericXMLString tag, Show tag,
 recordTypePickler =
   let
     revfunc RecordType { recordTypeFields = fields,
-                         recordTypePos = pos } = (pos, fields)
+                         recordTypePos = pos } = (fields, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, fields) -> RecordType { recordTypeFields = fields,
+    xpWrap (\(fields, pos) -> RecordType { recordTypeFields = fields,
                                            recordTypePos = pos }, revfunc)
-           (xpElem (gxFromString "Record") xpickle
-                   (xpElemNodes (gxFromString "fields") xpickle))
+           (xpElemNodes (gxFromString "RecordType")
+                        (xpPair (xpElemNodes (gxFromString "fields") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 tuplePickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Exp
 tuplePickler =
   let
-    revfunc Tuple { tupleFields = fields, tuplePos = pos } = (pos, fields)
+    revfunc Tuple { tupleFields = fields, tuplePos = pos } = (fields, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, fields) -> Tuple { tupleFields = fields,
+    xpWrap (\(fields, pos) -> Tuple { tupleFields = fields,
                                       tuplePos = pos }, revfunc)
-           (xpElem (gxFromString "Record") xpickle
-                   (xpElemNodes (gxFromString "fields") xpickle))
+           (xpElemNodes (gxFromString "Tuple")
+                        (xpPair (xpElemNodes (gxFromString "fields") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 projectPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text) =>
@@ -1813,15 +1831,16 @@ projectPickler :: (GenericXMLString tag, Show tag,
 projectPickler =
   let
     revfunc Project { projectFields = fields, projectVal = val,
-                      projectPos = pos } = (pos, (fields, val))
+                      projectPos = pos } = (fields, val, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (fields, val)) -> Project { projectFields = fields,
-                                                 projectVal = val,
-                                                 projectPos = pos }, revfunc)
-           (xpElem (gxFromString "Project") xpickle
-                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
-                           (xpElemNodes (gxFromString "fields") xpickle)))
+    xpWrap (\(fields, val, pos) -> Project { projectFields = fields,
+                                             projectVal = val,
+                                             projectPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Project")
+                        (xpTriple (xpElemNodes (gxFromString "value") xpickle)
+                                  (xpElemNodes (gxFromString "fields") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 symPickler :: (GenericXMLString tag, Show tag,
               GenericXMLString text, Show text) =>
@@ -1832,37 +1851,40 @@ symPickler =
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (\(sym, pos) -> Sym { symName = sym, symPos = pos }, revfunc)
-           (xpElemAttrs (gxFromString "Sym") (xpPair xpickle xpickle))
+           (xpElem (gxFromString "Sym") xpickle
+                   (xpElemNodes (gxFromString "pos") xpickle))
 
 withPickler :: (GenericXMLString tag, Show tag,
-                   GenericXMLString text, Show text) =>
-                  PU [NodeG [] tag text] Exp
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Exp
 withPickler =
   let
     revfunc With { withVal = val, withArgs = args, withPos = pos } =
-      (pos, (val, args))
+      (val, args, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (val, args)) -> With { withVal = val, withArgs = args,
-                                          withPos = pos }, revfunc)
-           (xpElem (gxFromString "With") xpickle
-                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
-                           (xpElemNodes (gxFromString "args") xpickle)))
+    xpWrap (\(val, args, pos) -> With { withVal = val, withArgs = args,
+                                        withPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "With")
+                        (xpTriple (xpElemNodes (gxFromString "value") xpickle)
+                                  (xpElemNodes (gxFromString "args") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 wherePickler :: (GenericXMLString tag, Show tag,
-                   GenericXMLString text, Show text) =>
-                  PU [NodeG [] tag text] Exp
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Exp
 wherePickler =
   let
     revfunc Where { whereVal = val, whereProp = prop, wherePos = pos } =
-      (pos, (val, prop))
+      (val, prop, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(pos, (val, prop)) -> Where { whereVal = val, whereProp = prop,
-                                           wherePos = pos }, revfunc)
-           (xpElem (gxFromString "Where") xpickle
-                   (xpPair (xpElemNodes (gxFromString "value") xpickle)
-                           (xpElemNodes (gxFromString "prop") xpickle)))
+    xpWrap (\(val, prop, pos) -> Where { whereVal = val, whereProp = prop,
+                                         wherePos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Where")
+                        (xpTriple (xpElemNodes (gxFromString "value") xpickle)
+                                  (xpElemNodes (gxFromString "prop") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 anonPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
@@ -1871,17 +1893,17 @@ anonPickler =
   let
     revfunc Anon { anonKind = kind, anonParams = params, anonContent = body,
                    anonSuperTypes = supers, anonPos = pos } =
-      ((kind, pos), (params, supers, body))
+      (kind, (params, supers, body, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((kind, pos), (params, supers, body)) ->
+    xpWrap (\(kind, (params, supers, body, pos)) ->
              Anon { anonKind = kind, anonParams = params, anonContent = body,
                     anonSuperTypes = supers, anonPos = pos }, revfunc)
-           (xpElem (gxFromString "Anon")
-                   (xpPair xpickle xpickle)
-                   (xpTriple (xpElemNodes (gxFromString "params") xpickle)
+           (xpElem (gxFromString "Anon") xpickle
+                   (xp4Tuple (xpElemNodes (gxFromString "params") xpickle)
                              (xpElemNodes (gxFromString "supers") xpickle)
-                             (xpElemNodes (gxFromString "body") xpickle)))
+                             (xpElemNodes (gxFromString "body") xpickle)
+                             (xpElemNodes (gxFromString "pos") xpickle)))
 
 literalPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text) =>
@@ -1937,9 +1959,12 @@ makeArray l = listArray (1, fromIntegral (length l)) l
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Entry where
-  xpickle = xpWrap (\(pos, pat) -> Entry { entryPat = pat, entryPos = pos },
-                    \Entry { entryPat = pat, entryPos = pos } -> (pos, pat))
-                   (xpElem (gxFromString "Entry") xpickle xpickle)
+  xpickle =
+    xpWrap (\(pat, pos) -> Entry { entryPat = pat, entryPos = pos },
+            \Entry { entryPat = pat, entryPos = pos } -> (pat, pos))
+           (xpElemNodes (gxFromString "Entry")
+                        (xpPair (xpElemNodes (gxFromString "val") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Fields where
@@ -1953,19 +1978,21 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Field where
-  xpickle = xpWrap (\(pos, val) -> Field { fieldVal = val, fieldPos = pos },
-                    \Field { fieldVal = val, fieldPos = pos } -> (pos, val))
-                   (xpElem (gxFromString "Field") xpickle xpickle)
+  xpickle =
+    xpWrap (\(val, pos) -> Field { fieldVal = val, fieldPos = pos },
+            \Field { fieldVal = val, fieldPos = pos } -> (val, pos))
+           (xpElemNodes (gxFromString "Field")
+                        (xpPair (xpElemNodes (gxFromString "val") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Case where
-  xpickle = xpWrap (\(pos, (pat, exp)) -> Case { casePat = pat,
-                                                 caseBody = exp,
-                                                 casePos = pos },
-                    \Case { casePat = pat, caseBody = body, casePos = pos } ->
-                      (pos, (pat, body)))
-                   (xpElem (gxFromString "Case") xpickle
-                           (xpPair (xpElemNodes (gxFromString "pattern")
-                                                xpickle)
-                                   (xpElemNodes (gxFromString "body")
-                                                xpickle)))
+  xpickle =
+    xpWrap (\(pat, body, pos) -> Case { casePat = pat, caseBody = body,
+                                        casePos = pos },
+            \Case { casePat = pat, caseBody = body, casePos = pos } ->
+            (pat, body, pos))
+           (xpElemNodes (gxFromString "Case")
+                        (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
+                                  (xpElemNodes (gxFromString "body") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))

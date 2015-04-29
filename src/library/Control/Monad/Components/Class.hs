@@ -76,7 +76,7 @@ instance MonadComponents m => MonadComponents (GensymT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (KeywordsT tok m) where
+instance MonadComponents m => MonadComponents (KeywordsT pos tok m) where
   component = lift . component
   components = lift components
 
