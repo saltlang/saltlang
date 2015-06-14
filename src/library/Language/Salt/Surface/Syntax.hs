@@ -63,7 +63,7 @@ import Data.Symbol
 import Data.Word
 import Language.Salt.Surface.Common
 import Prelude hiding (init, exp, Either(..))
-import Text.FormatM
+import Text.Format
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 

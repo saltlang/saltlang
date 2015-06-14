@@ -65,7 +65,6 @@ import Prelude hiding (lex)
 import System.IO.Error
 import System.FilePath
 import Text.Format hiding (Options, concat)
-import Text.FormatM hiding (Options)
 import Text.XML.Expat.Pickle
 
 import qualified Data.ByteString as Strict hiding (drop, break)

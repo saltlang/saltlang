@@ -56,11 +56,11 @@ import Data.Array
 import Data.ByteString(ByteString)
 import Data.Hashable
 import Data.Ratio
-import Text.Format
 import Data.Position.BasicPosition
 import Data.Symbol
 import Data.Word
-import Text.FormatM
+import Prelude hiding (concat)
+import Text.Format
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
@@ -186,13 +186,13 @@ recordDoc =
     entryDoc :: (Doc, Doc) -> Doc
     entryDoc (fieldname, fieldval) = fieldname <+> equals <+> fieldval
   in
-    nest 2 . parens . punctuate (comma <> linebreak) . map entryDoc
+    nest 2 . parens . concat . punctuate (comma <> linebreak) . map entryDoc
 
 tupleDoc :: [Doc] -> Doc
-tupleDoc = nest 2 . parens . punctuate (comma <> linebreak)
+tupleDoc = nest 2 . parens . concat . punctuate (comma <> linebreak)
 
 listDoc :: [Doc] -> Doc
-listDoc = nest 2 . brackets . punctuate (comma <> linebreak)
+listDoc = nest 2 . brackets . concat . punctuate (comma <> linebreak)
 
 constructorDoc :: Doc -> [(Doc, Doc)] -> Doc
 constructorDoc prefix =

@@ -120,7 +120,7 @@ Executable saltc
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, saltlang, filepath,
-                        blaze-builder
+                        blaze-builder, dynamic-pp
   hs-source-dirs:       src/saltc
   main-is:              Language/Salt/Compiler/Main.hs
 
@@ -138,7 +138,7 @@ Library
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
-                        hashtables, filepath, semigroups
+                        hashtables, filepath, semigroups, dynamic-pp
   build-tools:          alex, happy
   hs-source-dirs:       src/library
   exposed-modules:

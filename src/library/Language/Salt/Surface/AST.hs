@@ -67,12 +67,12 @@ import Control.Monad.Positions
 import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Hashable
-import Data.List hiding (init)
+import Data.List hiding (init, concat)
 import Data.Symbol
 import Data.Word
 import Language.Salt.Surface.Common
-import Prelude hiding (sequence, init, exp)
-import Text.FormatM
+import Prelude hiding (sequence, init, exp, concat)
+import Text.Format
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
@@ -961,7 +961,7 @@ componentDot Component { componentName = cname } =
     return (dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Component | " <>
-                               punctuate dot unames) <$>
+                               concat (punctuate dot unames)) <$>
                       string "shape = \"record\"") <> char ';', nodeid)
 
 useDot :: MonadSymbols m => Use -> StateT Word m (Doc, String)
@@ -972,7 +972,7 @@ useDot Use { useName = uname } =
     return (dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Use | " <>
-                               punctuate dot unames) <$>
+                               concat (punctuate dot unames)) <$>
                       string "shape = \"record\"") <> char ';', nodeid)
 
 groupDot :: MonadSymbols m => Group -> StateT Word m (Doc, String)
@@ -1570,7 +1570,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Component where
       unames <- mapM formatM cname
       return (constructorDoc (string "Component")
                              [(string "pos", posdoc),
-                              (string "name", punctuate dot unames)])
+                              (string "name", concat (punctuate dot unames))])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Use where
   formatM Use { useName = uname, usePos = pos } =
@@ -1579,7 +1579,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Use where
       unames <- mapM formatM uname
       return (constructorDoc (string "Use")
                              [(string "pos", posdoc),
-                              (string "name", punctuate dot unames)])
+                              (string "name", concat (punctuate dot unames))])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Group where
   formatM Group { groupElements = elems, groupPos = pos,
