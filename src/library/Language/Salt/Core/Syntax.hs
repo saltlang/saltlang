@@ -54,14 +54,15 @@ import Data.Hashable.Extras
 import Data.Hashable.ExtraInstances()
 import Data.Map(Map)
 import Data.Monoid(mappend, mempty)
-import Data.Position
+import Data.Position.DWARFPosition
 import Data.Traversable
 import Prelude hiding (foldr1, foldr, mapM)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
-import Text.Format hiding ((<$>))
+--import Text.Format hiding ((<$>))
 
 import qualified Data.Map as Map
+import qualified Data.ByteString.UTF8 as Lazy
 
 -- | Quantifier types.
 data Quantifier =
@@ -87,7 +88,7 @@ data Pattern bound const free =
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
-      deconstructPos :: !Position
+      deconstructPos :: !DWARFPosition
     }
     -- | An "as" binding.  Allows part of a pattern to be bound to a
     -- name, but further deconstructed by another pattern.  For
@@ -98,7 +99,7 @@ data Pattern bound const free =
       -- | The inner binding, which further deconstructs the binding.
       asBind :: Pattern bound const free,
       -- | The position in source from which this originates.
-      asPos :: !Position
+      asPos :: !DWARFPosition
     }
     -- | A simple name binding.  This does the same thing as an as
     -- pattern, but does not further deconstruct the binding.
@@ -110,7 +111,7 @@ data Pattern bound const free =
       -- | The bound variable type being bound.
       nameSym :: !bound,
       -- | The position in source from which this originates.
-      namePos :: !Position
+      namePos :: !DWARFPosition
     }
     -- | A constant.  Constrains the binding to the given value.
   | Constant (const free)
@@ -124,7 +125,7 @@ data Case bound free =
     -- | The body of the case.
     caseBody :: Scope bound (Term bound) free,
     -- | The position in source from which this originates.
-    casePos :: !Position
+    casePos :: !DWARFPosition
   }
 
 -- | An element.  This is either an argument in a product type or a
@@ -139,7 +140,7 @@ data Element bound free =
     -- | The type of the element.
     elemType :: Scope bound (Term bound) free,
     -- | The position in source from which this originates.
-    elemPos :: !Position
+    elemPos :: !DWARFPosition
   }
 
 -- | Terms.  Represents pure terms in the language.  Terms are further
@@ -167,7 +168,7 @@ data Term bound free =
       -- value of any argument by their binding name.
       funcTypeRetTy :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
-      funcTypePos :: !Position
+      funcTypePos :: !DWARFPosition
     }
   -- | Dependent sum type.  This is the type given to structures.
   | RecordType {
@@ -179,7 +180,7 @@ data Term bound free =
       -- Note: all fields are given names by transliteration.
       recTypeBody :: [Element bound free],
       -- | The position in source from which this originates.
-      recTypePos :: !Position
+      recTypePos :: !DWARFPosition
     }
   -- | Refinement type.  This type represents all members of a type
   -- satisfying a given proposition.
@@ -190,7 +191,7 @@ data Term bound free =
       -- type.  These express the constraints on the base type.
       refineCases :: [Case bound free],
       -- | The position in source from which this originates.
-      refinePos :: !Position
+      refinePos :: !DWARFPosition
     }
   -- | Computation type.  This type represents a computation, and
   -- includes both its result type and a specification of its
@@ -203,7 +204,7 @@ data Term bound free =
       -- | The specification describing the computation's behavior.
       compSpec :: Scope bound (Term bound) free,
       -- | The position in source from which this originates.
-      compTypePos :: !Position
+      compTypePos :: !DWARFPosition
     }
 
   -- Propositions.  These do not support decidable equality.  As such,
@@ -221,7 +222,7 @@ data Term bound free =
       -- | A case statement which denotes a proposition.
       quantCases :: [Case bound free],
       -- | The position in source from which this originates.
-      quantPos :: !Position
+      quantPos :: !DWARFPosition
     }
 
   -- Elimination Terms.  These terms generate a type in type checking.
@@ -240,7 +241,7 @@ data Term bound free =
       -- term.
       callFunc :: Term bound free,
       -- | The position in source from which this originates.
-      callPos :: !Position
+      callPos :: !DWARFPosition
     }
   -- | A typed term.  This is an introduction term with an explicit
   -- type tag, which makes it an elimination term.
@@ -250,7 +251,7 @@ data Term bound free =
       -- | The type of the introduction term.
       typedType :: Term bound free,
       -- | The position in source from which this originates.
-      typedPos :: !Position
+      typedPos :: !DWARFPosition
     }
   -- | A variable symbol.  Since we know the types of all variables,
   -- this is an elimination term.
@@ -258,7 +259,7 @@ data Term bound free =
       -- | The underlying symbol.
       varSym :: !free,
       -- | The position in source from which this originates.
-      varPos :: !Position
+      varPos :: !DWARFPosition
     }
 
   -- Introduction Terms.  These terms require a type in type checking.
@@ -271,7 +272,7 @@ data Term bound free =
       etaTerm :: Term bound free,
       etaType :: Term bound free,
       -- | The position in source from which this originates.
-      etaPos :: !Position
+      etaPos :: !DWARFPosition
     }
   -- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
@@ -283,7 +284,7 @@ data Term bound free =
       -- | The cases describing this function's behavior.
       lambdaCases :: [Case bound free],
       -- | The position in source from which this originates.
-      lambdaPos :: !Position
+      lambdaPos :: !DWARFPosition
     }
   -- | A structure.  Structures can be named or ordered in the surface
   -- syntax.  Ordered structures are transliterated into named
@@ -292,7 +293,7 @@ data Term bound free =
       -- | The bindings for this record.  These are introduction terms.
       recVals :: Map bound (Term bound free),
       -- | The position in source from which this originates.
-      recPos :: !Position
+      recPos :: !DWARFPosition
     }
   -- | A collection of one or more terms, each of which is
   -- bound to a name.  Each of the members of the group may reference
@@ -300,18 +301,18 @@ data Term bound free =
   | Fix {
       fixTerms :: Map bound (Scope bound (Term bound) free),
       -- | The position in source from which this originates.
-      fixPos :: !Position
+      fixPos :: !DWARFPosition
     }
   -- | A computation value.  This is essentially a "frozen"
   -- computation.
   | Comp {
       compBody :: Comp bound free,
       -- | The position in source from which this originates.
-      compPos :: !Position
+      compPos :: !DWARFPosition
     }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
-  | BadTerm !Position
+  | BadTerm !DWARFPosition
 
 -- | Commands.  These represent individual statements, or combinations
 -- thereof, which do not bind variables.
@@ -331,7 +332,7 @@ data Cmd bound free =
       -- | The term representing the value of this command
       valTerm :: Term bound free,
       -- | The position in source from which this originates.
-      valPos :: !Position
+      valPos :: !DWARFPosition
     }
   -- | Evaluate a computation value.  This allows execution of
   -- computations produced by terms.
@@ -339,11 +340,11 @@ data Cmd bound free =
       -- | The computation value to evaluate
       evalTerm :: Term bound free,
       -- | The position in source from which this originates.
-      evalPos :: !Position
+      evalPos :: !DWARFPosition
     }
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
-  | BadCmd !Position
+  | BadCmd !DWARFPosition
 
 -- | Computations. Semantically, computations are generators for
 -- sequences of atomic actions, which are not guaranteed to terminate,
@@ -368,18 +369,18 @@ data Comp bound free =
       -- | The next computation to execute.
       seqNext :: Scope bound (Comp bound) free,
       -- | The position in source from which this originates.
-      seqPos :: !Position
+      seqPos :: !DWARFPosition
     }
   -- | Result of a computation. This is always the end of a sequence.
   | End {
       -- | The command to run to produce a result.
       endCmd :: Cmd bound free,
       -- | The position in source from which this originates.
-      endPos :: !Position
+      endPos :: !DWARFPosition
     }
   -- | Placeholder for a malformed computation, allowing type checking
   -- to continue in spite of errors.
-  | BadComp !Position
+  | BadComp !DWARFPosition
 
 -- The equality and comparison functions ignore position
 eqBinds :: (Eq b, Eq s, Eq1 t) =>
@@ -905,8 +906,8 @@ instance Traversable (Comp b) where
     (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
   traverse _ (BadComp p) = pure (BadComp p)
 
-injectpos :: Position
-injectpos = internal "Monad return"
+injectpos :: DWARFPosition
+injectpos = Synthetic { synthDesc = Lazy.fromString "Monad return" }
 
 instance MonadTrans (Pattern b) where
   lift = Constant
@@ -952,7 +953,8 @@ instance Monad (Term b) where
   return sym = Var { varSym = sym, varPos = injectpos }
 
   t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } >>= f =
-    t { funcTypeArgs = fmap (elementSubstTerm f) argtys, funcTypeRetTy = retty >>>= f }
+    t { funcTypeArgs = fmap (elementSubstTerm f) argtys,
+        funcTypeRetTy = retty >>>= f }
   t @ RecordType { recTypeBody = body } >>= f =
     t { recTypeBody = fmap (elementSubstTerm f) body }
   t @ RefineType { refineType = ty, refineCases = cases } >>= f =
@@ -979,7 +981,10 @@ termSubstComp :: (a -> Comp c b) -> a -> Term c b
 termSubstComp f sym =
   case f sym of
     End { endCmd = Eval { evalTerm = term } } -> term
+    End { endCmd = Value { valTerm = term } } -> term
+    End { endCmd = BadCmd p } -> BadTerm p
     body @ Seq { seqPos = pos } -> Comp { compBody = body, compPos = pos }
+    BadComp p -> BadTerm p
 
 cmdSubstComp :: (a -> Comp c b) -> Cmd c a -> Cmd c b
 cmdSubstComp f c @ Value { valTerm = term } =

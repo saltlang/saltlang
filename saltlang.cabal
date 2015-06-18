@@ -144,7 +144,7 @@ Library
   exposed-modules:
 --      Language.Salt.Core,
 --                        Language.Salt.Core.Patterns,
---                        Language.Salt.Core.Syntax,
+                        Language.Salt.Core.Syntax,
 --                        Language.Salt.Core.TypeCheck,
                         Language.Salt.Frontend
                         Language.Salt.Message
