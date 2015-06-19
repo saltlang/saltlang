@@ -1692,7 +1692,7 @@ asPickler =
                            (xpElemNodes (gxFromString "pair") xpickle)))
 
 namePickler :: (GenericXMLString tag, Show tag,
-              GenericXMLString text, Show text) =>
+                GenericXMLString text, Show text) =>
              PU [NodeG [] tag text] Pattern
 namePickler =
   let
