@@ -28,7 +28,8 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
-{-# Language FlexibleInstances, FlexibleContexts, UndecidableInstances #-}
+{-# Language FlexibleInstances, FlexibleContexts, UndecidableInstances,
+             MultiParamTypeClasses #-}
 
 -- | The Salt core language.  Salt's surface syntax is transliterated
 -- into Core, which is then type-checked and compiled.  Core is
@@ -52,16 +53,19 @@ import Data.Foldable
 import Data.Hashable
 import Data.Hashable.Extras
 import Data.Hashable.ExtraInstances()
-import Data.Map(Map)
+import Data.HashMap.Strict(HashMap)
+import Data.List(sortBy)
 import Data.Monoid(mappend, mempty)
 import Data.Position.DWARFPosition
 import Data.Traversable
-import Prelude hiding (foldr1, foldr, mapM)
+import Prelude hiding (foldl, mapM)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
+import Text.XML.Expat.Pickle
+import Text.XML.Expat.Tree(NodeG)
 --import Text.Format hiding ((<$>))
 
-import qualified Data.Map as Map
+import qualified Data.HashMap.Strict as HashMap
 import qualified Data.ByteString.UTF8 as Lazy
 
 -- | Quantifier types.
@@ -84,7 +88,7 @@ data Pattern bound const free =
       deconstructConstructor :: !bound,
       -- | The fields in the record being bound.  Note: all fields are
       -- given names by transliteration.
-      deconstructBinds :: Map bound (Pattern bound const free),
+      deconstructBinds :: HashMap bound (Pattern bound const free),
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
@@ -236,7 +240,7 @@ data Term bound free =
   -- and so on.
   | Call {
       -- | The arguments to the call.  These are introduction terms.
-      callArgs :: Map bound (Term bound free),
+      callArgs :: HashMap bound (Term bound free),
       -- | The function being called.  This must be an elimination
       -- term.
       callFunc :: Term bound free,
@@ -291,7 +295,7 @@ data Term bound free =
   -- structures, with the fields "1", "2", and so on.
   | Record {
       -- | The bindings for this record.  These are introduction terms.
-      recVals :: Map bound (Term bound free),
+      recVals :: HashMap bound (Term bound free),
       -- | The position in source from which this originates.
       recPos :: !DWARFPosition
     }
@@ -299,7 +303,7 @@ data Term bound free =
   -- bound to a name.  Each of the members of the group may reference
   -- eachother.
   | Fix {
-      fixTerms :: Map bound (Scope bound (Term bound) free),
+      fixTerms :: HashMap bound (Scope bound (Term bound) free),
       -- | The position in source from which this originates.
       fixPos :: !DWARFPosition
     }
@@ -382,14 +386,6 @@ data Comp bound free =
   -- to continue in spite of errors.
   | BadComp !DWARFPosition
 
--- The equality and comparison functions ignore position
-eqBinds :: (Eq b, Eq s, Eq1 t) =>
-           [(b, Pattern b t s)] -> [(b, Pattern b t s)] -> Bool
-eqBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
-  (name1 == name2) && (bind1 ==# bind2) && eqBinds binds1 binds2
-eqBinds [] [] = True
-eqBinds _ _ = False
-
 compareBinds :: (Ord b, Ord s, Ord1 t) =>
                 [(b, Pattern b t s)] -> [(b, Pattern b t s)] -> Ordering
 compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
@@ -408,7 +404,7 @@ instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
     Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
                   deconstructConstructor = constructor2 } =
       (strict1 == strict2) && (constructor1 == constructor2) &&
-        eqBinds (Map.toAscList binds1) (Map.toAscList binds2)
+      (binds1 == binds2)
   As { asName = name1, asBind = bind1 } ==#
     As { asName = name2, asBind = bind2 } =
       (name1 == name2) && (bind1 ==# bind2)
@@ -443,7 +439,7 @@ instance Eq b => Eq1 (Term b) where
       kind1 == kind2 && ty1 ==# ty2 && cases1 ==# cases2
   Call { callArgs = args1, callFunc = func1 } ==#
     Call { callArgs = args2, callFunc = func2 } =
-      args1 ==# args2 && func1 ==# func2
+      args1 == args2 && func1 ==# func2
   Var { varSym = sym1 } ==# Var { varSym = sym2 } = sym1 == sym2
   Typed { typedTerm = term1, typedType = ty1 } ==#
     Typed { typedTerm = term2, typedType = ty2 } =
@@ -453,8 +449,8 @@ instance Eq b => Eq1 (Term b) where
       term1 ==# term2 && ty1 ==# ty2
   Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
     cases1 == cases2
-  Record { recVals = vals1 } ==# Record { recVals = vals2 } = vals1 ==# vals2
-  Fix { fixTerms = terms1 } ==# Fix { fixTerms = terms2 } = terms1 ==# terms2
+  Record { recVals = vals1 } ==# Record { recVals = vals2 } = vals1 == vals2
+  Fix { fixTerms = terms1 } ==# Fix { fixTerms = terms2 } = terms1 == terms2
   Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
   BadTerm _ ==# BadTerm _ = True
   _ ==# _ = False
@@ -482,6 +478,9 @@ instance (Eq b, Eq s) => Eq (Term b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Cmd b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
 
+keyOrd :: Ord a => (a, b) -> (a, b) -> Ordering
+keyOrd (a1, _) (a2, _) = compare a1 a2
+
 instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
   compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                          deconstructConstructor = constructor1 }
@@ -489,7 +488,8 @@ instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
                          deconstructConstructor = constructor2 } =
     case compare strict1 strict2 of
       EQ -> case compare constructor1 constructor2 of
-        EQ -> compareBinds (Map.toAscList binds1) (Map.toAscList binds2)
+        EQ -> compare (sortBy keyOrd (HashMap.toList binds1))
+                      (sortBy keyOrd (HashMap.toList binds2))
         out -> out
       out -> out
   compare1 Deconstruct {} _ = GT
@@ -566,7 +566,8 @@ instance Ord b => Ord1 (Term b) where
   compare1 Call { callArgs = args1, callFunc = func1 }
            Call { callArgs = args2, callFunc = func2 } =
     case compare1 func1 func2 of
-      EQ -> compare1 args1 args2
+      EQ -> compare (sortBy keyOrd (HashMap.toList args1))
+                    (sortBy keyOrd (HashMap.toList args2))
       out -> out
   compare1 Call {} _ = GT
   compare1 _ Call {} = LT
@@ -592,11 +593,13 @@ instance Ord b => Ord1 (Term b) where
   compare1 Lambda {} _ = GT
   compare1 _ Lambda {} = LT
   compare1 Record { recVals = vals1 } Record { recVals = vals2 } =
-    compare1 vals1 vals2
+    compare (sortBy keyOrd (HashMap.toList vals1))
+            (sortBy keyOrd (HashMap.toList vals2))
   compare1 Record {} _ = GT
   compare1 _ Record {} = LT
   compare1 Fix { fixTerms = terms1 } Fix { fixTerms = terms2 } =
-    compare1 terms1 terms2
+    compare (sortBy keyOrd (HashMap.toList terms1))
+            (sortBy keyOrd (HashMap.toList terms2))
   compare1 Fix {} _ = GT
   compare1 _ Fix {} = LT
   compare1 Comp { compBody = body1 } Comp { compBody = body2 } =
@@ -643,27 +646,28 @@ instance (Ord b, Ord s) => Ord (Term b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Comp b s) where compare = compare1
 
-instance (Hashable b, Hashable1 t) => Hashable1 (Pattern b t) where
+instance (Hashable b, Hashable1 t, Ord b) =>
+         Hashable1 (Pattern b t) where
   hashWithSalt1 s Deconstruct { deconstructConstructor = constructor,
                                 deconstructBinds = binds,
                                 deconstructStrict = strict } =
     (s `hashWithSalt` (1 :: Int) `hashWithSalt` constructor `hashWithSalt`
-      strict) `hashWithSalt1` binds
+     strict) `hashWithSalt1` sortBy keyOrd (HashMap.toList binds)
   hashWithSalt1 s As { asName = name, asBind = bind } =
     (s `hashWithSalt` (2 :: Int) `hashWithSalt` name) `hashWithSalt1` bind
   hashWithSalt1 s Name { nameSym = name } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt` name
-  hashWithSalt1 s (Constant c) = (s `hashWithSalt` (4 :: Int)) `hashWithSalt1` c
+  hashWithSalt1 s (Constant c) = s `hashWithSalt` (4 :: Int) `hashWithSalt1` c
 
-instance (Hashable b) => Hashable1 (Case b) where
+instance (Hashable b, Ord b) => Hashable1 (Case b) where
   hashWithSalt1 s Case { casePat = pat, caseBody = body } =
     s `hashWithSalt1` pat `hashWithSalt1` body
 
-instance (Hashable b) => Hashable1 (Element b) where
+instance (Hashable b, Ord b) => Hashable1 (Element b) where
   hashWithSalt1 s Element { elemName = name, elemPat = pat, elemType = ty } =
     (s `hashWithSalt` name) `hashWithSalt1` pat `hashWithSalt1` ty
 
-instance (Hashable b) => Hashable1 (Term b) where
+instance (Hashable b, Ord b) => Hashable1 (Term b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` argtys `hashWithSalt` retty
   hashWithSalt1 s RecordType { recTypeBody = body } =
@@ -680,7 +684,8 @@ instance (Hashable b) => Hashable1 (Term b) where
                                quantCases = cases } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s Call { callArgs = args, callFunc = func } =
-    s `hashWithSalt` (7 :: Int) `hashWithSalt1` args `hashWithSalt1` func
+    (s `hashWithSalt` (7 :: Int) `hashWithSalt`
+     sortBy keyOrd (HashMap.toList args)) `hashWithSalt1` func
   hashWithSalt1 s Var { varSym = sym } =
     s `hashWithSalt` (8 :: Int) `hashWithSalt` sym
   hashWithSalt1 s Typed { typedTerm = term, typedType = ty } =
@@ -690,21 +695,23 @@ instance (Hashable b) => Hashable1 (Term b) where
   hashWithSalt1 s Lambda { lambdaCases = cases } =
     s `hashWithSalt` (11 :: Int) `hashWithSalt1` cases
   hashWithSalt1 s Record { recVals = vals } =
-    s `hashWithSalt` (12 :: Int) `hashWithSalt1` vals
+    s `hashWithSalt` (12 :: Int) `hashWithSalt1`
+    sortBy keyOrd (HashMap.toList vals)
   hashWithSalt1 s Fix { fixTerms = terms } =
-    s `hashWithSalt` (13 :: Int) `hashWithSalt1` terms
+    s `hashWithSalt` (13 :: Int) `hashWithSalt1`
+    sortBy keyOrd (HashMap.toList terms)
   hashWithSalt1 s Comp { compBody = body } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt1` body
   hashWithSalt1 s (BadTerm _) = s `hashWithSalt` (0 :: Int)
 
-instance (Hashable b) => Hashable1 (Cmd b) where
+instance (Hashable b, Ord b) => Hashable1 (Cmd b) where
   hashWithSalt1 s Value { valTerm = term } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt1` term
   hashWithSalt1 s Eval { evalTerm = term } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` term
   hashWithSalt1 s (BadCmd _) = s `hashWithSalt` (0 :: Int)
 
-instance (Hashable b) => Hashable1 (Comp b) where
+instance (Hashable b, Ord b) => Hashable1 (Comp b) where
   hashWithSalt1 s Seq { seqCmd = cmd, seqNext = next,
                         seqType = ty, seqPat = pat } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt1` ty `hashWithSalt1`
@@ -713,23 +720,23 @@ instance (Hashable b) => Hashable1 (Comp b) where
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` cmd
   hashWithSalt1 s (BadComp _) = s `hashWithSalt` (0 :: Int)
 
-instance (Hashable b, Hashable1 t, Hashable s) =>
-         Hashable (Pattern b t s) where
+instance (Hashable b, Hashable1 t, Hashable a, Ord b) =>
+         Hashable (Pattern b t a) where
   hashWithSalt = hashWithSalt1
 
-instance (Hashable b, Hashable s) => Hashable (Case b s) where
+instance (Hashable b, Hashable s, Ord b) => Hashable (Case b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Hashable b, Hashable s) => Hashable (Element b s) where
+instance (Hashable b, Hashable s, Ord b) => Hashable (Element b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Hashable b, Hashable s) => Hashable (Term b s) where
+instance (Hashable b, Hashable s, Ord b) => Hashable (Term b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Hashable b, Hashable s) => Hashable (Cmd b s) where
+instance (Hashable b, Hashable s, Ord b) => Hashable (Cmd b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Hashable b, Hashable s) => Hashable (Comp b s) where
+instance (Hashable b, Hashable s, Ord b) => Hashable (Comp b s) where
   hashWithSalt = hashWithSalt1
 
 instance Functor t => Functor (Pattern b t) where
@@ -1004,6 +1011,8 @@ instance Monad (Comp b) where
         seqPat = pat >>>= termSubstComp f, seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
+
+
 {-
 formatBind :: (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
               (b, t s) -> Doc
