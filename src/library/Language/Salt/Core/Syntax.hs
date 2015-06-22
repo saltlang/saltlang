@@ -45,6 +45,7 @@ module Language.Salt.Core.Syntax(
        ) where
 
 import Bound
+import Bound.Scope.ExtraInstances()
 import Bound.Var.ExtraInstances()
 import Control.Applicative
 import Control.Monad hiding (mapM)
@@ -74,7 +75,7 @@ data Quantifier =
     Forall
   -- | Existential quantifiers.
   | Exists
-    deriving (Ord, Eq)
+    deriving (Ord, Eq, Enum)
 
 -- | A pattern binding.  Represents how to deconstruct a value and
 -- bind it to variables.
@@ -203,10 +204,10 @@ data Term bound free =
   | CompType {
       -- | The result type of the computation.
       compType :: Term bound free,
-      -- | The binder for the result of this computation.
-      compPat :: Pattern bound (Term bound) free,
-      -- | The specification describing the computation's behavior.
-      compSpec :: Scope bound (Term bound) free,
+      -- | Binding patterns and behavior specifications for values of
+      -- the return type.  These express the constraints on the base
+      -- type.
+      compCases :: [Case bound free],
       -- | The position in source from which this originates.
       compTypePos :: !DWARFPosition
     }
@@ -295,7 +296,7 @@ data Term bound free =
   -- structures, with the fields "1", "2", and so on.
   | Record {
       -- | The bindings for this record.  These are introduction terms.
-      recVals :: HashMap bound (Term bound free),
+      recFields :: HashMap bound (Term bound free),
       -- | The position in source from which this originates.
       recPos :: !DWARFPosition
     }
@@ -386,18 +387,6 @@ data Comp bound free =
   -- to continue in spite of errors.
   | BadComp !DWARFPosition
 
-compareBinds :: (Ord b, Ord s, Ord1 t) =>
-                [(b, Pattern b t s)] -> [(b, Pattern b t s)] -> Ordering
-compareBinds ((name1, bind1) : binds1) ((name2, bind2) : binds2) =
-  case compare name1 name2 of
-    EQ -> case compare1 bind1 bind2 of
-      EQ -> compareBinds binds1 binds2
-      out -> out
-    out -> out
-compareBinds [] [] = EQ
-compareBinds [] _ = LT
-compareBinds _ [] = GT
-
 instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                 deconstructConstructor = constructor1 } ==#
@@ -431,9 +420,9 @@ instance Eq b => Eq1 (Term b) where
   RefineType { refineType = ty1, refineCases = cases1 } ==#
     RefineType { refineType = ty2, refineCases = cases2 } =
       ty1 ==# ty2 && cases1 ==# cases2
-  CompType { compType = ty1, compPat = pat1, compSpec = spec1 } ==#
-    CompType { compType = ty2, compPat = pat2, compSpec = spec2 } =
-      ty1 ==# ty2 && pat1 ==# pat2 && spec1 ==# spec2
+  CompType { compType = ty1, compCases = cases1 } ==#
+    CompType { compType = ty2, compCases = cases2 } =
+      ty1 ==# ty2 && cases1 ==# cases2
   Quantified { quantKind = kind1, quantType = ty1, quantCases = cases1 } ==#
     Quantified { quantKind = kind2, quantType = ty2, quantCases = cases2 } =
       kind1 == kind2 && ty1 ==# ty2 && cases1 ==# cases2
@@ -449,7 +438,7 @@ instance Eq b => Eq1 (Term b) where
       term1 ==# term2 && ty1 ==# ty2
   Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
     cases1 == cases2
-  Record { recVals = vals1 } ==# Record { recVals = vals2 } = vals1 == vals2
+  Record { recFields = vals1 } ==# Record { recFields = vals2 } = vals1 == vals2
   Fix { fixTerms = terms1 } ==# Fix { fixTerms = terms2 } = terms1 == terms2
   Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
   BadTerm _ ==# BadTerm _ = True
@@ -543,12 +532,10 @@ instance Ord b => Ord1 (Term b) where
       out -> out
   compare1 RefineType {} _ = GT
   compare1 _ RefineType {} = LT
-  compare1 CompType { compType = ty1, compPat = pat1, compSpec = spec1 }
-           CompType { compType = ty2, compPat = pat2, compSpec = spec2 } =
+  compare1 CompType { compType = ty1, compCases = cases1 }
+           CompType { compType = ty2, compCases = cases2 } =
     case compare ty1 ty2 of
-      EQ -> case compare1 pat1 pat2 of
-        EQ -> compare1 spec1 spec2
-        out -> out
+      EQ -> compare1 cases1 cases2
       out -> out
   compare1 CompType {} _ = GT
   compare1 _ CompType {} = LT
@@ -592,7 +579,7 @@ instance Ord b => Ord1 (Term b) where
     compare1 cases1 cases2
   compare1 Lambda {} _ = GT
   compare1 _ Lambda {} = LT
-  compare1 Record { recVals = vals1 } Record { recVals = vals2 } =
+  compare1 Record { recFields = vals1 } Record { recFields = vals2 } =
     compare (sortBy keyOrd (HashMap.toList vals1))
             (sortBy keyOrd (HashMap.toList vals2))
   compare1 Record {} _ = GT
@@ -674,9 +661,8 @@ instance (Hashable b, Ord b) => Hashable1 (Term b) where
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` body
   hashWithSalt1 s RefineType { refineType = ty, refineCases = cases } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
-  hashWithSalt1 s CompType { compType = ty, compPat = pat, compSpec = spec } =
-    s `hashWithSalt` (4 :: Int) `hashWithSalt1`
-    pat `hashWithSalt1` ty `hashWithSalt1` spec
+  hashWithSalt1 s CompType { compType = ty, compCases = cases } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s Quantified { quantKind = Forall, quantType = ty,
                                quantCases = cases } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
@@ -694,7 +680,7 @@ instance (Hashable b, Ord b) => Hashable1 (Term b) where
     s `hashWithSalt` (10 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
   hashWithSalt1 s Lambda { lambdaCases = cases } =
     s `hashWithSalt` (11 :: Int) `hashWithSalt1` cases
-  hashWithSalt1 s Record { recVals = vals } =
+  hashWithSalt1 s Record { recFields = vals } =
     s `hashWithSalt` (12 :: Int) `hashWithSalt1`
     sortBy keyOrd (HashMap.toList vals)
   hashWithSalt1 s Fix { fixTerms = terms } =
@@ -761,8 +747,8 @@ instance Functor (Term b) where
     t { recTypeBody = fmap (fmap f) body }
   fmap f t @ RefineType { refineType = ty, refineCases = cases } =
     t { refineType = fmap f ty, refineCases = fmap (fmap f) cases }
-  fmap f t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
-    t { compType = fmap f ty, compPat = fmap f pat, compSpec = fmap f spec }
+  fmap f t @ CompType { compType = ty, compCases = cases } =
+    t { compType = fmap f ty, compCases = fmap (fmap f) cases }
   fmap f t @ Quantified { quantType = ty, quantCases = cases } =
     t { quantType = fmap f ty, quantCases = fmap (fmap f) cases }
   fmap f t @ Call { callArgs = args, callFunc = func } =
@@ -774,7 +760,7 @@ instance Functor (Term b) where
     t { etaTerm = fmap f term, etaType = fmap f ty }
   fmap f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (fmap f) cases }
-  fmap f t @ Record { recVals = vals } = t { recVals = fmap (fmap f) vals }
+  fmap f t @ Record { recFields = vals } = t { recFields = fmap (fmap f) vals }
   fmap f t @ Fix { fixTerms = terms } = t { fixTerms = fmap (fmap f) terms }
   fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
   fmap _ (BadTerm p) = BadTerm p
@@ -811,8 +797,8 @@ instance Foldable (Term b) where
   foldMap f RecordType { recTypeBody = body } = foldMap (foldMap f) body
   foldMap f RefineType { refineType = ty, refineCases = cases } =
     foldMap f ty `mappend` foldMap (foldMap f) cases
-  foldMap f CompType { compType = ty, compPat = pat, compSpec = spec } =
-    foldMap f pat `mappend` foldMap f ty `mappend` foldMap f spec
+  foldMap f CompType { compType = ty, compCases = cases } =
+    foldMap f ty `mappend` foldMap (foldMap f) cases
   foldMap f Quantified { quantType = ty, quantCases = cases } =
     foldMap f ty `mappend` foldMap (foldMap f) cases
   foldMap f Call { callArgs = args, callFunc = func } =
@@ -823,7 +809,7 @@ instance Foldable (Term b) where
   foldMap f Eta { etaTerm = term, etaType = ty } =
     foldMap f term `mappend` foldMap f ty
   foldMap f Lambda { lambdaCases = cases } = foldMap (foldMap f) cases
-  foldMap f Record { recVals = vals } = foldMap (foldMap f) vals
+  foldMap f Record { recFields = vals } = foldMap (foldMap f) vals
   foldMap f Fix { fixTerms = terms } = foldMap (foldMap f) terms
   foldMap f Comp { compBody = body } = foldMap f body
   foldMap _ (BadTerm _) = mempty
@@ -868,10 +854,9 @@ instance Traversable (Term b) where
   traverse f t @ RefineType { refineType = ty, refineCases = cases } =
     (\ty' cases' -> t { refineType = ty', refineCases = cases' }) <$>
       traverse f ty <*> traverse (traverse f) cases
-  traverse f t @ CompType { compType = ty, compPat = pat, compSpec = spec } =
-    (\ty' pat' spec' -> t { compType = ty', compPat = pat',
-                            compSpec = spec' }) <$>
-      traverse f ty <*> traverse f pat <*> traverse f spec
+  traverse f t @ CompType { compType = ty, compCases = cases } =
+    (\ty' cases' -> t { compType = ty', compCases = cases' }) <$>
+      traverse f ty <*> traverse (traverse f) cases
   traverse f t @ Quantified { quantType = ty, quantCases = cases } =
     (\ty' cases' -> t { quantType = ty', quantCases = cases' }) <$>
       traverse f ty <*> traverse (traverse f) cases
@@ -888,8 +873,8 @@ instance Traversable (Term b) where
       traverse f term <*> traverse f ty
   traverse f t @ Lambda { lambdaCases = cases } =
     (\cases' -> t { lambdaCases = cases' }) <$> traverse (traverse f) cases
-  traverse f t @ Record { recVals = vals } =
-    (\vals' -> t { recVals = vals' }) <$> traverse (traverse f) vals
+  traverse f t @ Record { recFields = vals } =
+    (\vals' -> t { recFields = vals' }) <$> traverse (traverse f) vals
   traverse f t @ Fix { fixTerms = terms } =
     (\terms' -> t { fixTerms = terms' }) <$> traverse (traverse f) terms
   traverse f c @ Comp { compBody = body } =
@@ -966,8 +951,8 @@ instance Monad (Term b) where
     t { recTypeBody = fmap (elementSubstTerm f) body }
   t @ RefineType { refineType = ty, refineCases = cases } >>= f =
     t { refineType = ty >>= f, refineCases = fmap (caseSubstTerm f) cases }
-  t @ CompType { compType = ty, compPat = pat, compSpec = spec } >>= f =
-    t { compType = ty >>= f, compPat = pat >>>= f, compSpec = spec >>>= f }
+  t @ CompType { compType = ty, compCases = cases } >>= f =
+    t { compType = ty >>= f, compCases = fmap (caseSubstTerm f) cases }
   t @ Quantified { quantType = ty, quantCases = cases } >>= f =
     t { quantCases = fmap (caseSubstTerm f) cases, quantType = ty >>= f }
   t @ Call { callArgs = args, callFunc = func } >>= f =
@@ -977,7 +962,7 @@ instance Monad (Term b) where
     t { typedTerm = term >>= f, typedType = ty >>= f }
   t @ Lambda { lambdaCases = cases } >>= f =
     t { lambdaCases = fmap (caseSubstTerm f) cases }
-  t @ Record { recVals = vals } >>= f = t { recVals = fmap (>>= f) vals }
+  t @ Record { recFields = vals } >>= f = t { recFields = fmap (>>= f) vals }
   t @ Fix { fixTerms = terms } >>= f = t { fixTerms = fmap (>>>= f) terms }
   t @ Comp { compBody = body } >>= f = t { compBody = compSubstTerm f body }
   t @ Eta { etaTerm = term, etaType = ty } >>= f =
@@ -1097,7 +1082,7 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
       ]
   format Lambda { lambdaCases = cases } =
     braceBlock "Lambda" [ "cases" <+> equals <+> headlessBracketList cases ]
-  format Record { recVals = vals } =
+  format Record { recFields = vals } =
     bracketList "Record" (map formatBind (Map.assocs vals))
   format Fix { fixTerms = terms } =
     bracketList "Fix" (map formatBind (Map.assocs terms))
@@ -1151,4 +1136,598 @@ instance (Default b, Ord b, Eq b, Format b, Format s) => Show (Cmd b s) where
 instance (Default b, Ord b, Eq b, Format b, Format s) =>
          Show (Comp b s) where
   show = show . format
+
+boundPicklerAttr :: (GenericXMLString tag, Show tag,
+                     GenericXMLString text, Show text,
+                     XmlPickler [(tag, text)] bound,
+                     XmlPickler [(tag, text)] free) =>
+                    PU [NodeG [] tag text] (Var bound free)
+boundPicklerAttr =
+  let
+    revfunc (B pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (B, revfunc) (xpElemAttrs (gxFromString "Bound") xpickle)
+
+freePicklerAttr :: (GenericXMLString tag, Show tag,
+                    GenericXMLString text, Show text,
+                    XmlPickler [(tag, text)] bound,
+                    XmlPickler [(tag, text)] free) =>
+                   PU [NodeG [] tag text] (Var bound free)
+freePicklerAttr =
+  let
+    revfunc (F pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (F, revfunc) (xpElemAttrs (gxFromString "Free") xpickle)
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound, XmlPickler [(tag, text)] free) =>
+          XmlPickler [NodeG [] tag text] (Var bound free) where
+  xpickle =
+    let
+      picker B {} = 0
+      picker F {} = 1
+    in
+      xpAlt picker [ boundPicklerAttr, freePicklerAttr ]
 -}
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [(tag, text)] Quantifier where
+  xpickle = xpAlt fromEnum [xpWrap (const Forall, const ())
+                                   (xpAttrFixed (gxFromString "kind")
+                                                (gxFromString "forall")),
+                            xpWrap (const Forall, const ())
+                                   (xpAttrFixed (gxFromString "kind")
+                                                (gxFromString "exists"))]
+
+mapPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler (Attributes tag text) key,
+               XmlPickler [NodeG [] tag text] val,
+               Hashable key, Eq key) =>
+              String -> PU [NodeG [] tag text] (HashMap key val)
+mapPickler entname =
+  xpWrap (HashMap.fromList, HashMap.toList)
+         (xpList (xpElem (gxFromString entname) xpickle xpickle))
+
+deconstructPickler :: (GenericXMLString tag, Show tag,
+                       GenericXMLString text, Show text,
+                       XmlPickler [(tag, text)] bound,
+                       XmlPickler [NodeG [] tag text] bound,
+                       XmlPickler [NodeG [] tag text] free,
+                       XmlPickler [NodeG [] tag text] (const free),
+                       Hashable bound, Eq bound) =>
+             PU [NodeG [] tag text] (Pattern bound const free)
+deconstructPickler =
+  let
+    revfunc Deconstruct { deconstructStrict = strict, deconstructBinds = binds,
+                          deconstructConstructor = sym, deconstructPos = pos } =
+      ((sym, strict), (binds, pos))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((sym, strict), (binds, pos)) ->
+             Deconstruct { deconstructStrict = strict, deconstructBinds = binds,
+                           deconstructConstructor = sym, deconstructPos = pos },
+            revfunc)
+           (xpElem (gxFromString "Deconstruct")
+                   (xpPair xpickle (xpAttr (gxFromString "strict") xpPrim))
+                   (xpPair (xpElemNodes (gxFromString "binds")
+                                        (mapPickler "field"))
+                           (xpElemNodes (gxFromString "pos") xpickle)))
+
+asPickler :: (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+              XmlPickler [(tag, text)] bound,
+              XmlPickler [NodeG [] tag text] bound,
+              XmlPickler [NodeG [] tag text] free,
+              XmlPickler [NodeG [] tag text] (const free),
+              Hashable bound, Eq bound) =>
+             PU [NodeG [] tag text] (Pattern bound const free)
+asPickler =
+  let
+    revfunc As { asName = sym, asBind = pat, asPos = pos } = (sym, (pat, pos))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(sym, (pat, pos)) -> As { asName = sym, asBind = pat,
+                                       asPos = pos }, revfunc)
+           (xpElem (gxFromString "As") xpickle
+                   (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
+                           (xpElemNodes (gxFromString "pair") xpickle)))
+
+namePickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [(tag, text)] bound,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                XmlPickler [NodeG [] tag text] (const free),
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Pattern bound const free)
+namePickler =
+  let
+    revfunc Name { nameSym = sym, namePos = pos } = (sym, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(sym, pos) -> Name { nameSym = sym, namePos = pos }, revfunc)
+           (xpElem (gxFromString "Name") xpickle
+                   (xpElemNodes (gxFromString "pos") xpickle))
+
+constantPickler :: (GenericXMLString tag, Show tag,
+                    GenericXMLString text, Show text,
+                    XmlPickler [NodeG [] tag text] bound,
+                    XmlPickler [NodeG [] tag text] free,
+                    XmlPickler [NodeG [] tag text] (const free),
+                    Hashable bound, Eq bound) =>
+                   PU [NodeG [] tag text] (Pattern bound const free)
+constantPickler =
+  let
+    revfunc (Constant v) = v
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Constant, revfunc) (xpElemNodes (gxFromString "Constant") xpickle)
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound,
+          XmlPickler [NodeG [] tag text] bound,
+          XmlPickler [NodeG [] tag text] free,
+          XmlPickler [NodeG [] tag text] (const free),
+          Hashable bound, Eq bound) =>
+         XmlPickler [NodeG [] tag text] (Pattern bound const free) where
+  xpickle =
+    let
+      picker Deconstruct {} = 0
+      picker As {} = 1
+      picker Name {} = 2
+      picker Constant {} = 3
+    in
+      xpAlt picker [ deconstructPickler, asPickler,
+                     namePickler, constantPickler ]
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound,
+          XmlPickler [NodeG [] tag text] bound,
+          XmlPickler [NodeG [] tag text] free,
+          Hashable bound, Eq bound) =>
+         XmlPickler [NodeG [] tag text] (Case bound free) where
+  xpickle =
+    xpWrap (\(pat, body, pos) -> Case { casePat = pat, caseBody = body,
+                                        casePos = pos },
+            \Case { casePat = pat, caseBody = body, casePos = pos } ->
+            (pat, body, pos))
+           (xpElemNodes (gxFromString "Case")
+                        (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
+                                  (xpElemNodes (gxFromString "body") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound,
+          XmlPickler [NodeG [] tag text] bound,
+          XmlPickler [NodeG [] tag text] free,
+          Hashable bound, Eq bound) =>
+         XmlPickler [NodeG [] tag text] (Element bound free) where
+  xpickle =
+    xpWrap (\(sym, (pat, ty, pos)) -> Element { elemName = sym, elemPat = pat,
+                                                elemType = ty, elemPos = pos },
+            \Element { elemName = sym, elemPat = pat,
+                       elemType = ty, elemPos = pos } -> (sym, (pat, ty, pos)))
+           (xpElem (gxFromString "Element") xpickle
+                   (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
+                             (xpElemNodes (gxFromString "body") xpickle)
+                             (xpElemNodes (gxFromString "pos") xpickle)))
+
+funcTypePickler :: (GenericXMLString tag, Show tag,
+                    GenericXMLString text, Show text,
+                    XmlPickler [(tag, text)] bound,
+                    XmlPickler [NodeG [] tag text] bound,
+                    XmlPickler [NodeG [] tag text] free,
+                    Hashable bound, Eq bound) =>
+                   PU [NodeG [] tag text] (Term bound free)
+funcTypePickler =
+  let
+    revfunc FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
+                       funcTypePos = pos } = (args, retty, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(args, retty, pos) -> FuncType { funcTypeArgs = args,
+                                              funcTypeRetTy = retty,
+                                              funcTypePos = pos }, revfunc)
+           (xpElemNodes (gxFromString "FuncType")
+                        (xpTriple (xpList (xpElemNodes (gxFromString "args")
+                                                       xpickle))
+                                  (xpElemNodes (gxFromString "retty") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
+recordTypePickler :: (GenericXMLString tag, Show tag,
+                      GenericXMLString text, Show text,
+                      XmlPickler [(tag, text)] bound,
+                      XmlPickler [NodeG [] tag text] bound,
+                      XmlPickler [NodeG [] tag text] free,
+                      Hashable bound, Eq bound) =>
+                     PU [NodeG [] tag text] (Term bound free)
+recordTypePickler =
+  let
+    revfunc RecordType { recTypeBody = body, recTypePos = pos } = (body, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(body, pos) -> RecordType { recTypeBody = body, recTypePos = pos },
+            revfunc)
+           (xpElemNodes (gxFromString "RecordType")
+                        (xpPair (xpList (xpElemNodes (gxFromString "body")
+                                                     xpickle))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+refineTypePickler :: (GenericXMLString tag, Show tag,
+                      GenericXMLString text, Show text,
+                      XmlPickler [(tag, text)] bound,
+                      XmlPickler [NodeG [] tag text] bound,
+                      XmlPickler [NodeG [] tag text] free,
+                      Hashable bound, Eq bound) =>
+                     PU [NodeG [] tag text] (Term bound free)
+refineTypePickler =
+  let
+    revfunc RefineType { refineType = ty, refineCases = cases,
+                         refinePos = pos } = (ty, cases, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(ty, cases, pos) -> RefineType { refineType = ty,
+                                              refineCases = cases,
+                                              refinePos = pos },
+            revfunc)
+           (xpElemNodes (gxFromString "RefineType")
+                        (xpTriple (xpElemNodes (gxFromString "type") xpickle)
+                                  (xpList (xpElemNodes (gxFromString "cases")
+                                                       xpickle))
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
+compTypePickler :: (GenericXMLString tag, Show tag,
+                    GenericXMLString text, Show text,
+                    XmlPickler [(tag, text)] bound,
+                    XmlPickler [NodeG [] tag text] bound,
+                    XmlPickler [NodeG [] tag text] free,
+                    Hashable bound, Eq bound) =>
+                   PU [NodeG [] tag text] (Term bound free)
+compTypePickler =
+  let
+    revfunc RefineType { refineType = ty, refineCases = cases,
+                         refinePos = pos } = (ty, cases, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(ty, cases, pos) -> RefineType { refineType = ty,
+                                              refineCases = cases,
+                                              refinePos = pos },
+            revfunc)
+           (xpElemNodes (gxFromString "RefineType")
+                        (xpTriple (xpElemNodes (gxFromString "type") xpickle)
+                                  (xpList (xpElemNodes (gxFromString "cases")
+                                                       xpickle))
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
+quantifiedPickler :: (GenericXMLString tag, Show tag,
+                      GenericXMLString text, Show text,
+                      XmlPickler [(tag, text)] bound,
+                      XmlPickler [NodeG [] tag text] bound,
+                      XmlPickler [NodeG [] tag text] free,
+                      Hashable bound, Eq bound) =>
+                     PU [NodeG [] tag text] (Term bound free)
+quantifiedPickler =
+  let
+    revfunc Quantified { quantKind = kind, quantType = ty, quantCases = cases,
+                         quantPos = pos } = (kind, (ty, cases, pos))
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(kind, (ty, cases, pos)) ->
+             Quantified { quantKind = kind, quantType = ty, quantCases = cases,
+                          quantPos = pos },
+            revfunc)
+           (xpElem (gxFromString "Quantified") xpickle
+                   (xpTriple (xpElemNodes (gxFromString "type") xpickle)
+                             (xpList (xpElemNodes (gxFromString "cases")
+                                                  xpickle))
+                             (xpElemNodes (gxFromString "pos") xpickle)))
+
+callPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [(tag, text)] bound,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Term bound free)
+callPickler =
+  let
+    revfunc Call { callFunc = func, callArgs = args,
+                   callPos = pos } = (func, args, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(func, args, pos) -> Call { callFunc = func, callArgs = args,
+                                         callPos = pos },
+            revfunc)
+           (xpElemNodes (gxFromString "Call")
+                        (xpTriple (xpElemNodes (gxFromString "func") xpickle)
+                                  (xpElemNodes (gxFromString "args")
+                                               (mapPickler "arg"))
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
+typedPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text,
+                 XmlPickler [(tag, text)] bound,
+                 XmlPickler [NodeG [] tag text] bound,
+                 XmlPickler [NodeG [] tag text] free,
+                 Hashable bound, Eq bound) =>
+                PU [NodeG [] tag text] (Term bound free)
+typedPickler =
+  let
+    revfunc Typed { typedTerm = term, typedType = ty,
+                    typedPos = pos } = (term, ty, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(term, ty, pos) -> Typed { typedTerm = term, typedType = ty,
+                                        typedPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Typed")
+                        (xpTriple (xpElemNodes (gxFromString "term") xpickle)
+                                  (xpElemNodes (gxFromString "type") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
+varPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler [NodeG [] tag text] bound,
+               XmlPickler [NodeG [] tag text] free,
+               Hashable bound, Eq bound) =>
+              PU [NodeG [] tag text] (Term bound free)
+varPickler =
+  let
+    revfunc Var { varSym = sym, varPos = pos } = (sym, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(sym, pos) -> Var { varSym = sym, varPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Var")
+                        (xpPair (xpElemNodes (gxFromString "sym") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+lambdaPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [(tag, text)] bound,
+                  XmlPickler [NodeG [] tag text] bound,
+                  XmlPickler [NodeG [] tag text] free,
+                  Hashable bound, Eq bound) =>
+                 PU [NodeG [] tag text] (Term bound free)
+lambdaPickler =
+  let
+    revfunc Lambda { lambdaCases = cases, lambdaPos = pos } = (cases, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(cases, pos) -> Lambda { lambdaCases = cases, lambdaPos = pos },
+            revfunc)
+           (xpElemNodes (gxFromString "Lambda")
+                        (xpPair (xpList (xpElemNodes (gxFromString "cases")
+                                                     xpickle))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+recordPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [(tag, text)] bound,
+                  XmlPickler [NodeG [] tag text] bound,
+                  XmlPickler [NodeG [] tag text] free,
+                  Hashable bound, Eq bound) =>
+                 PU [NodeG [] tag text] (Term bound free)
+recordPickler =
+  let
+    revfunc Record { recFields = vals, recPos = pos } = (vals, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(vals, pos) -> Record { recFields = vals, recPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Record")
+                        (xpPair (xpElemNodes (gxFromString "fields")
+                                             (mapPickler "field"))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+fixPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler [(tag, text)] bound,
+               XmlPickler [NodeG [] tag text] bound,
+               XmlPickler [NodeG [] tag text] free,
+               Hashable bound, Eq bound) =>
+              PU [NodeG [] tag text] (Term bound free)
+fixPickler =
+  let
+    revfunc Fix { fixTerms = terms, fixPos = pos } = (terms, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(terms, pos) -> Fix { fixTerms = terms, fixPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Fix")
+                        (xpPair (xpElemNodes (gxFromString "terms")
+                                             (mapPickler "term"))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+compPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [(tag, text)] bound,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Term bound free)
+compPickler =
+  let
+    revfunc Comp { compBody = body, compPos = pos } = (body, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(body, pos) -> Comp { compBody = body, compPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Comp")
+                        (xpPair (xpElemNodes (gxFromString "body") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+badTermPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text,
+                   XmlPickler [NodeG [] tag text] bound,
+                   XmlPickler [NodeG [] tag text] free,
+                   Hashable bound, Eq bound) =>
+                  PU [NodeG [] tag text] (Term bound free)
+badTermPickler =
+  let
+    revfunc (BadTerm pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (BadTerm, revfunc)
+           (xpElemNodes (gxFromString "BadTerm")
+                        (xpElemNodes (gxFromString "pos") xpickle))
+
+instance (GenericXMLString tag, Show tag,
+          GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound,
+          XmlPickler [NodeG [] tag text] bound,
+          XmlPickler [NodeG [] tag text] free,
+          Hashable bound, Eq bound) =>
+         XmlPickler [NodeG [] tag text] (Term bound free) where
+  xpickle =
+    let
+      picker FuncType {} = 0
+      picker RecordType {} = 1
+      picker RefineType {} = 2
+      picker CompType {} = 3
+      picker Quantified {} = 4
+      picker Call {} = 5
+      picker Typed {} = 6
+      picker Var {} = 7
+      picker Lambda {} = 8
+      picker Record {} = 9
+      picker Fix {} = 10
+      picker Comp {} = 11
+      picker BadTerm {} = 12
+      picker Eta {} = error "Eta not supported"
+    in
+      xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
+                     compTypePickler, quantifiedPickler, callPickler,
+                     typedPickler, varPickler, lambdaPickler, recordPickler,
+                     fixPickler, compPickler, badTermPickler ]
+
+valuePickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text,
+                 XmlPickler [(tag, text)] bound,
+                 XmlPickler [NodeG [] tag text] bound,
+                 XmlPickler [NodeG [] tag text] free,
+                 Hashable bound, Eq bound) =>
+                PU [NodeG [] tag text] (Cmd bound free)
+valuePickler =
+  let
+    revfunc Value { valTerm = term, valPos = pos } = (term, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(term, pos) -> Value { valTerm = term, valPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Value")
+                        (xpPair (xpElemNodes (gxFromString "term") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+evalPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [(tag, text)] bound,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Cmd bound free)
+evalPickler =
+  let
+    revfunc Eval { evalTerm = term, evalPos = pos } = (term, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(term, pos) -> Eval { evalTerm = term, evalPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Eval")
+                        (xpPair (xpElemNodes (gxFromString "term") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+badCmdPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [NodeG [] tag text] bound,
+                  XmlPickler [NodeG [] tag text] free,
+                  Hashable bound, Eq bound) =>
+                 PU [NodeG [] tag text] (Cmd bound free)
+badCmdPickler =
+  let
+    revfunc (BadCmd pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (BadCmd, revfunc)
+           (xpElemNodes (gxFromString "BadCmd")
+                        (xpElemNodes (gxFromString "pos") xpickle))
+
+instance (GenericXMLString tag, Show tag,
+          GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound,
+          XmlPickler [NodeG [] tag text] bound,
+          XmlPickler [NodeG [] tag text] free,
+          Hashable bound, Eq bound) =>
+         XmlPickler [NodeG [] tag text] (Cmd bound free) where
+  xpickle =
+    let
+      picker Value {} = 0
+      picker Eval {} = 1
+      picker BadCmd {} = 2
+    in
+      xpAlt picker [ valuePickler, evalPickler, badCmdPickler ]
+
+seqPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler [(tag, text)] bound,
+               XmlPickler [NodeG [] tag text] bound,
+               XmlPickler [NodeG [] tag text] free,
+               Hashable bound, Eq bound) =>
+              PU [NodeG [] tag text] (Comp bound free)
+seqPickler =
+  let
+    revfunc Seq { seqCmd = cmd, seqPat = pat, seqType = ty,
+                  seqNext = next, seqPos = pos } = (cmd, pat, ty, next, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(cmd, pat, ty, next, pos) -> Seq { seqCmd = cmd, seqPat = pat,
+                                                seqType = ty, seqNext = next,
+                                                seqPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "End")
+                        (xp5Tuple (xpElemNodes (gxFromString "cmd") xpickle)
+                                  (xpElemNodes (gxFromString "pat") xpickle)
+                                  (xpElemNodes (gxFromString "type") xpickle)
+                                  (xpElemNodes (gxFromString "next") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
+endPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler [(tag, text)] bound,
+               XmlPickler [NodeG [] tag text] bound,
+               XmlPickler [NodeG [] tag text] free,
+               Hashable bound, Eq bound) =>
+              PU [NodeG [] tag text] (Comp bound free)
+endPickler =
+  let
+    revfunc End { endCmd = cmd, endPos = pos } = (cmd, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(cmd, pos) -> End { endCmd = cmd, endPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "End")
+                        (xpPair (xpElemNodes (gxFromString "cmd") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+badCompPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text,
+                   XmlPickler [NodeG [] tag text] bound,
+                   XmlPickler [NodeG [] tag text] free,
+                   Hashable bound, Eq bound) =>
+                  PU [NodeG [] tag text] (Comp bound free)
+badCompPickler =
+  let
+    revfunc (BadComp pos) = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (BadComp, revfunc)
+           (xpElemNodes (gxFromString "BadComp")
+                        (xpElemNodes (gxFromString "pos") xpickle))
+
+instance (GenericXMLString tag, Show tag,
+          GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound,
+          XmlPickler [NodeG [] tag text] bound,
+          XmlPickler [NodeG [] tag text] free,
+          Hashable bound, Eq bound) =>
+         XmlPickler [NodeG [] tag text] (Comp bound free) where
+  xpickle =
+    let
+      picker Seq {} = 0
+      picker End {} = 1
+      picker BadComp {} = 2
+    in
+      xpAlt picker [ seqPickler, endPickler, badCompPickler ]
