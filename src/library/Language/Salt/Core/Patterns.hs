@@ -36,65 +36,58 @@
 -- from a pattern and a term.
 module Language.Salt.Core.Patterns(
        patternMatch,
-       patternTypes
+--       patternTypes
        ) where
 
 import Data.Default
+import Data.Hashable
+import Data.HashMap.Strict(HashMap)
 import Language.Salt.Core.Syntax
 
-import qualified Data.Map as Map
-
--- | Given sorted lists of bindings and terms, attempt to match them up
--- and produce a unifier
-zipBinds :: (Default sym, Eq sym, Ord sym) =>
-            Bool -> [(sym, Pattern sym (Term sym) sym)] ->
-            [(sym, Term sym sym)] -> [(sym, Term sym sym)] ->
-            Maybe [(sym, Term sym sym)]
-zipBinds strict allbinds @ ((name, bind) : binds) ((name', term) : terms) result
--- If the names match, then run pattern match
-  | name == name' =
-    do
-      result' <- patternMatchTail result bind term
-      zipBinds strict binds terms result'
--- If the names don't match, and we're not strict, discard the term
--- and keep going
-  | not strict = zipBinds strict allbinds terms result
--- Otherwise, we have an error
-  | otherwise = Nothing
--- Termination condition: run out of both lists, regardless of strictness
-zipBinds _ [] [] result = return result
--- Termination condition: run out of binders, and we're not strict
-zipBinds False [] _ result = return result
--- Everything else is a match error
-zipBinds _ _ _ _ = Nothing
+import qualified Data.HashMap.Strict as HashMap
 
 -- | Tail-recursive work function for pattern matching
-patternMatchTail :: (Default sym, Eq sym, Ord sym) =>
-                    [(sym, (Term sym sym))] ->
+patternMatchTail :: (Default sym, Eq sym, Hashable sym) =>
+                    HashMap sym (Term sym sym) ->
                     Pattern sym (Term sym) sym ->
                     Term sym sym ->
-                    Maybe [(sym, (Term sym sym))]
+                    Maybe (HashMap sym (Term sym sym))
 patternMatchTail result Deconstruct { deconstructConstructor = constructor,
-                                      deconstructStrict = strict,
                                       deconstructBinds = binds } term
-  | constructor == defaultVal =
+  -- The default value is the unused symbol, which means there is no
+  -- constructor (meaning this is a pure record pattern).
+  | constructor == def =
     case term of
-      Record { recVals = vals } ->
-        zipBinds strict (Map.toAscList binds) (Map.toAscList vals) result
+      Record { recFields = fields } ->
+        let
+          foldfun accum sym bind =
+            do
+              justaccum <- accum
+              field <- HashMap.lookup sym fields
+              patternMatchTail justaccum bind field
+        in
+          HashMap.foldlWithKey' foldfun (Just result) binds
       _ -> Nothing
   | otherwise =
     case term of
       Call { callFunc = Var { varSym = func }, callArgs = args } ->
         if func == constructor
-        then zipBinds strict (Map.toAscList binds) (Map.toAscList args) result
+        then let
+            foldfun accum sym bind =
+              do
+                justaccum <- accum
+                arg <- HashMap.lookup sym args
+                patternMatchTail justaccum bind arg
+          in
+            HashMap.foldlWithKey' foldfun (Just result) binds
         else Nothing
       _ -> Nothing
 -- As bindings bind the current term and then continue
 patternMatchTail result As { asName = name, asBind = bind } t =
-  patternMatchTail ((name, t) : result) bind t
+  patternMatchTail (HashMap.insert name t result) bind t
 -- Names grab anything
 patternMatchTail result Name { nameSym = sym } t =
-  return ((sym, t) : result)
+  Just $! HashMap.insert sym t result
 -- Constants must be equal
 patternMatchTail result (Constant t1) t2
   | t1 == t2 = return result
@@ -104,61 +97,55 @@ patternMatchTail result (Constant t1) t2
 -- represented by the binding.  If the match succeeds, return a
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
-patternMatch :: (Default sym, Eq sym, Ord sym) =>
+patternMatch :: (Default sym, Eq sym, Hashable sym) =>
                 Pattern sym (Term sym) sym
              -- ^ The pattern being matched.
              -> Term sym sym
              -- ^ The term attempting to match the pattern.
-             -> Maybe [(sym, (Term sym sym))]
+             -> Maybe (HashMap sym (Term sym sym))
              -- ^ A list of bindings from the pattern, or Nothing.
-patternMatch = patternMatchTail []
-
--- | Given sorted lists of bindings and types, get a list of variable,
--- type pairs that get bound.
-zipTypes :: (Default sym, Eq sym, Ord sym) =>
-            Bool -> [(sym, Pattern sym (Term sym) sym)] ->
-            [(sym, Term sym sym)] -> [(sym, Term sym sym)] ->
-            Maybe [(sym, Term sym sym)]
-zipTypes strict allbinds @ ((name, bind) : binds) ((name', term) : terms) result
--- If the names match, then run pattern match
-  | name == name' =
-    do
-      result' <- patternTypesTail result bind term
-      zipBinds strict binds terms result'
--- If the names don't match, and we're not strict, discard the term
--- and keep going
-  | not strict = zipBinds strict allbinds terms result
--- Otherwise, we have an error
-  | otherwise = Nothing
--- Termination condition: run out of both lists, regardless of strictness
-zipTypes _ [] [] result = return result
--- Termination condition: run out of binders, and we're not strict
-zipTypes False [] _ result = return result
--- Everything else is a match error
-zipTypes _ _ _ _ = Nothing
-
+patternMatch = patternMatchTail HashMap.empty
+{-
+patternTypesTail :: (Default sym, Eq sym, Ord sym) =>
+                    HashMap sym (Term sym sym) ->
+                    Pattern sym (Term sym) sym ->
+                    Term sym sym -> Maybe (HashMap sym (Term sym sym))
 patternTypesTail result Deconstruct { deconstructConstructor = constructor,
-                                      deconstructStrict = strict,
                                       deconstructBinds = binds } term
-  | constructor == defaultVal =
+  | constructor == def =
     case term of
-      Record { recVals = vals } ->
-        zipTypes strict (Map.toAscList binds) (Map.toAscList vals) result
+      Record { recFields = fields } ->
+        let
+          foldfun accum sym bind =
+            do
+              justaccum <- accum
+              field <- HashMap.lookup sym fields
+              patternTypesTail accum bind field
+        in
+          HashMap.foldlWithKey' foldfun result binds
       _ -> Nothing
   | otherwise =
     case term of
       Call { callFunc = Var { varSym = func }, callArgs = args } ->
         if func == constructor
-        then zipTypes strict (Map.toAscList binds) (Map.toAscList args) result
+        then let
+            foldfun accum sym bind =
+              do
+                justaccum <- accum
+                arg <- HashMap.lookup sym args
+                patternTypesTail accum bind arg
+          in
+            HashMap.foldlWithKey' foldfun result binds
         else Nothing
       _ -> Nothing
 -- As bindings bind the current term and then continue
 patternTypesTail result As { asName = name, asBind = bind } t =
-  patternTypesTail ((name, t) : result) bind t
+  patternTypesTail (HashMap.insert name t result) bind t
 -- Name patterns bind the type to the pattern
-patternTypesTail result Name { nameSym = sym } t = Just [(sym, t)]
+patternTypesTail result Name { nameSym = sym } t =
+  Just $! HashMap.insert sym t result
 -- Constants don't bind any symbols
-patternTypesTail result (Constant _) t2 = Just []
+patternTypesTail result (Constant _) t2 = Just result
 
 -- | Take a pattern and a type and extract the typings for all the
 -- variables bound by this pattern.  Note: this is only guaranteed to
@@ -169,6 +156,7 @@ patternTypes :: (Default sym, Eq sym, Ord sym) =>
              -- ^ The pattern being matched.
              -> Term sym sym
              -- ^ The type given to the pattern.
-             -> Maybe [(sym, Term sym sym)]
+             -> Maybe (HashMap sym (Term sym sym))
              -- ^ A list of bindings from the pattern, or Nothing.
-patternMatch = patternTypesTail []
+patternTypes = patternTypesTail HashMap.empty
+-}

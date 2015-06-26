@@ -138,12 +138,12 @@ Library
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
-                        hashtables, filepath, semigroups, dynamic-pp
+                        hashtables, filepath, semigroups, dynamic-pp, data-default
   build-tools:          alex, happy
   hs-source-dirs:       src/library
   exposed-modules:
 --      Language.Salt.Core,
---                        Language.Salt.Core.Patterns,
+                        Language.Salt.Core.Patterns,
                         Language.Salt.Core.Syntax,
 --                        Language.Salt.Core.TypeCheck,
                         Language.Salt.Format
