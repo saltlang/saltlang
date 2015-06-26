@@ -49,6 +49,8 @@ import Bound.Scope.ExtraInstances()
 import Bound.Var.ExtraInstances()
 import Control.Applicative
 import Control.Monad hiding (mapM)
+import Control.Monad.Positions
+import Control.Monad.Symbols
 import Control.Monad.Trans
 import Data.Foldable
 import Data.Hashable
@@ -59,12 +61,13 @@ import Data.List(sortBy)
 import Data.Monoid(mappend, mempty)
 import Data.Position.DWARFPosition
 import Data.Traversable
+import Language.Salt.Format
 import Prelude hiding (foldl, mapM)
 import Prelude.Extras(Eq1(..), Ord1(..))
 import Prelude.Extras.ExtraInstances()
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
---import Text.Format hiding ((<$>))
+import Text.Format hiding ((<$>))
 
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.ByteString.UTF8 as Lazy
@@ -394,10 +397,10 @@ instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
                   deconstructConstructor = constructor2 } =
       (strict1 == strict2) && (constructor1 == constructor2) &&
       (binds1 == binds2)
-  As { asName = name1, asBind = bind1 } ==#
-    As { asName = name2, asBind = bind2 } =
-      (name1 == name2) && (bind1 ==# bind2)
-  Name { nameSym = name1 } ==# Name { nameSym = name2 } = name1 == name2
+  As { asName = sym1, asBind = bind1 } ==#
+    As { asName = sym2, asBind = bind2 } =
+      (sym1 == sym2) && (bind1 ==# bind2)
+  Name { nameSym = sym1 } ==# Name { nameSym = sym2 } = sym1 == sym2
   Constant term1 ==# Constant term2 = term1 ==# term2
   _ ==# _ = False
 
@@ -407,9 +410,9 @@ instance Eq b => Eq1 (Case b) where
     pat1 ==# pat2 && body1 ==# body2
 
 instance Eq b => Eq1 (Element b) where
-  Element { elemType = ty1, elemPat = pat1, elemName = name1 } ==#
-    Element { elemType = ty2, elemPat = pat2, elemName = name2 } =
-    name1 == name2 && ty1 ==# ty2 && pat1 ==# pat2
+  Element { elemType = ty1, elemPat = pat1, elemName = sym1 } ==#
+    Element { elemType = ty2, elemPat = pat2, elemName = sym2 } =
+    sym1 == sym2 && ty1 ==# ty2 && pat1 ==# pat2
 
 instance Eq b => Eq1 (Term b) where
   FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 } ==#
@@ -483,15 +486,15 @@ instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
       out -> out
   compare1 Deconstruct {} _ = GT
   compare1 _ Deconstruct {} = LT
-  compare1 As { asName = name1, asBind = bind1 }
-           As { asName = name2, asBind = bind2 } =
-    case compare name1 name2 of
+  compare1 As { asName = sym1, asBind = bind1 }
+           As { asName = sym2, asBind = bind2 } =
+    case compare sym1 sym2 of
       EQ -> compare1 bind1 bind2
       out -> out
   compare1 As {} _ = GT
   compare1 _ As {} = LT
-  compare1 Name { nameSym = name1 } Name { nameSym = name2 } =
-    compare name1 name2
+  compare1 Name { nameSym = sym1 } Name { nameSym = sym2 } =
+    compare sym1 sym2
   compare1 Name {} _ = GT
   compare1 _ Name {} = LT
   compare1 (Constant term1) (Constant term2) = compare1 term1 term2
@@ -504,9 +507,9 @@ instance Ord b => Ord1 (Case b) where
       out -> out
 
 instance Ord b => Ord1 (Element b) where
-  compare1 Element { elemName = name1, elemPat = pat1, elemType = ty1 }
-           Element { elemName = name2, elemPat = pat2, elemType = ty2 } =
-    case compare name1 name2 of
+  compare1 Element { elemName = sym1, elemPat = pat1, elemType = ty1 }
+           Element { elemName = sym2, elemPat = pat2, elemType = ty2 } =
+    case compare sym1 sym2 of
       EQ -> case compare1 ty1 ty2 of
         EQ -> compare1 pat1 pat2
         out -> out
@@ -640,10 +643,10 @@ instance (Hashable b, Hashable1 t, Ord b) =>
                                 deconstructStrict = strict } =
     (s `hashWithSalt` (1 :: Int) `hashWithSalt` constructor `hashWithSalt`
      strict) `hashWithSalt1` sortBy keyOrd (HashMap.toList binds)
-  hashWithSalt1 s As { asName = name, asBind = bind } =
-    (s `hashWithSalt` (2 :: Int) `hashWithSalt` name) `hashWithSalt1` bind
-  hashWithSalt1 s Name { nameSym = name } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` name
+  hashWithSalt1 s As { asName = sym, asBind = bind } =
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` sym) `hashWithSalt1` bind
+  hashWithSalt1 s Name { nameSym = sym } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` sym
   hashWithSalt1 s (Constant c) = s `hashWithSalt` (4 :: Int) `hashWithSalt1` c
 
 instance (Hashable b, Ord b) => Hashable1 (Case b) where
@@ -651,8 +654,8 @@ instance (Hashable b, Ord b) => Hashable1 (Case b) where
     s `hashWithSalt1` pat `hashWithSalt1` body
 
 instance (Hashable b, Ord b) => Hashable1 (Element b) where
-  hashWithSalt1 s Element { elemName = name, elemPat = pat, elemType = ty } =
-    (s `hashWithSalt` name) `hashWithSalt1` pat `hashWithSalt1` ty
+  hashWithSalt1 s Element { elemName = sym, elemPat = pat, elemType = ty } =
+    (s `hashWithSalt` sym) `hashWithSalt1` pat `hashWithSalt1` ty
 
 instance (Hashable b, Ord b) => Hashable1 (Term b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
@@ -729,7 +732,7 @@ instance Functor t => Functor (Pattern b t) where
   fmap f b @ Deconstruct { deconstructBinds = binds } =
     b { deconstructBinds = fmap (fmap f) binds }
   fmap f b @ As { asBind = bind } = b { asBind = fmap f bind }
-  fmap _ b @ Name { nameSym = name } = b { nameSym = name }
+  fmap _ b @ Name { nameSym = sym } = b { nameSym = sym }
   fmap f (Constant t) = Constant (fmap f t)
 
 instance Functor (Case b) where
@@ -830,7 +833,7 @@ instance Traversable t => Traversable (Pattern b t) where
   traverse f b @ Deconstruct { deconstructBinds = binds } =
     (\binds' -> b { deconstructBinds = binds' }) <$>
     traverse (traverse f) binds
-  traverse _ b @ Name { nameSym = name } = pure (b { nameSym = name })
+  traverse _ b @ Name { nameSym = sym } = pure (b { nameSym = sym })
   traverse f b @ As { asBind = bind } =
     (\bind' -> b { asBind = bind' }) <$> traverse f bind
   traverse f (Constant t) = Constant <$> traverse f t
@@ -908,7 +911,7 @@ instance Bound (Pattern b) where
   b @ Deconstruct { deconstructBinds = binds } >>>= f =
     b { deconstructBinds = fmap (>>>= f) binds }
   b @ As { asBind = bind } >>>= f = b { asBind = bind >>>= f }
-  b @ Name { nameSym = name } >>>= _ = b { nameSym = name }
+  b @ Name { nameSym = sym } >>>= _ = b { nameSym = sym }
   Constant t >>>= f = Constant (t >>= f)
 
 instance Applicative (Term b) where
@@ -997,180 +1000,248 @@ instance Monad (Comp b) where
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
-
-{-
-formatBind :: (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
-              (b, t s) -> Doc
-formatBind (name, bind) = name <+> equals <+> bind
-
 instance Format Quantifier where
-  format Forall = format "Forall"
-  format Exists = format "Exists"
+  format Forall = string "forall"
+  format Exists = string "exists"
 
-instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
-         Format (Pattern b t s) where
-  format Deconstruct { deconstructConstructor = constructor,
-                       deconstructBinds = binds,
-                       deconstructStrict = strict } =
-    braceBlock "Deconstruct" [
-        "constructor" <+> equals <+> constructor,
-        "strict" <+> equals <+> strict,
-        "binds" <+> equals <+>
-        headlessBracketList (map formatBind (Map.assocs binds))
-      ]
-  format As { asBind = bind, asName = name } =
-    braceBlock "As" [
-        "bind" <+> equals <+> bind,
-        "name" <+> equals <+> name
-      ]
-  format Name { nameSym = sym } =
-    braceBlock "Name" [ "sym" <+> equals <+> sym ]
-  format (Constant t) =   block 2 ("val" <+> lparen) (format t) rparen
+instance (MonadPositions m, MonadSymbols m, FormatM m (func free),
+          FormatM m bound, FormatM m free) =>
+         FormatM m (Pattern bound func free) where
+  formatM Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
+                        deconstructStrict = True, deconstructPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      bindsdoc <- formatMap binds
+      return (compoundApplyDoc (string "Deconstruct")
+                               [(string "name", namedoc),
+                                (string "pos", posdoc),
+                                (string "strict", string "true"),
+                                (string "binds", bindsdoc)])
+  formatM Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
+                        deconstructStrict = False, deconstructPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      bindsdoc <- formatMap binds
+      return (compoundApplyDoc (string "Deconstruct")
+                               [(string "name", namedoc),
+                                (string "pos", posdoc),
+                                (string "strict", string "false"),
+                                (string "binds", bindsdoc)])
+  formatM As { asBind = bind, asName = sym, asPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      binddoc <- formatM bind
+      return (compoundApplyDoc (string "As")
+                               [(string "name", namedoc),
+                                (string "pos", posdoc),
+                                (string "bind", binddoc)])
+  formatM Name { nameSym = sym, namePos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "Name")
+                               [(string "name", namedoc),
+                                (string "pos", posdoc)])
+  formatM (Constant e) = formatM e
 
-instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Case b s) where
-  format Case { casePat = pat, caseBody = body } =
-    braceBlock "Case" [
-        "pat" <+> equals <+> pat,
-        "body" <+> equals <+> body
-      ]
+instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+         FormatM m (Case bound free) where
+  formatM Case { casePat = pat, caseBody = body, casePos = pos } =
+    do
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      bodydoc <- formatM body
+      return (compoundApplyDoc (string "Case")
+                               [(string "pos", posdoc),
+                                (string "pattern", patdoc),
+                                (string "body", bodydoc)])
 
-instance (Default b, Ord b, Eq b, Format b, Format s) =>
-         Format (Element b s) where
-  format Element { elemPat = pat, elemType = ty, elemName = name } =
-    braceBlock "Element" [
-        "name" <+> equals <+> name,
-        "pat" <+> equals <+> pat,
-        "type" <+> equals <+> ty
-      ]
-
-instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Term b s) where
-  format FuncType { funcTypeArgs = args, funcTypeRetTy = ret } =
-    braceBlock "FuncType" [
-        "args" <+> equals <+> headlessBracketList args,
-        "ret" <+> equals <+> ret
-      ]
-  format RecordType { recTypeBody = body } =
-    braceBlock "RecordType" [ "body" <+> equals <+> headlessBracketList body ]
-  format RefineType { refineType = ty, refineCases = cases } =
-    braceBlock "RefineType" [
-        "type" <+> equals <+> ty,
-        "cases" <+> equals <+> headlessBracketList cases
-      ]
-  format CompType { compType = ty, compPat = pat, compSpec = spec } =
-    braceBlock "CompType" [
-        "type" <+> equals <+> ty,
-        "pat" <+> equals <+> pat,
-        "spec" <+> equals <+> spec
-      ]
-  format Quantified { quantKind = kind, quantType = ty, quantCases = cases } =
-    braceBlock kind [
-        "type" <+> equals <+> ty,
-        "cases" <+> equals <+> headlessBracketList cases
-      ]
-  format Call { callFunc = func, callArgs = args } =
-    braceBlock "Call" [
-        "func" <+> equals <+> func,
-        "args" <+> equals <+>
-        headlessBracketList (map formatBind (Map.assocs args))
-      ]
-  format Var { varSym = sym } =
-    braceBlock "Var" [ "name" <+> equals <+> format sym ]
-  format Typed { typedTerm = term, typedType = ty } =
-    braceBlock "Typed" [
-        "term" <+> equals <+> term,
-        "type" <+> equals <+> ty
-      ]
-  format Lambda { lambdaCases = cases } =
-    braceBlock "Lambda" [ "cases" <+> equals <+> headlessBracketList cases ]
-  format Record { recFields = vals } =
-    bracketList "Record" (map formatBind (Map.assocs vals))
-  format Fix { fixTerms = terms } =
-    bracketList "Fix" (map formatBind (Map.assocs terms))
-  format Comp { compBody = body } =
-    braceBlock "Comp" ["compBody" <+> equals <+> body]
-  format Eta { etaType = ty, etaTerm = term } =
-    hang ("eta" <+> lparen <> term <> rparen <+> colon) 2
-      (lparen <> ty <> rparen)
-  format (BadTerm _) = format "BadTerm"
-
-instance (Default b, Ord b, Eq b, Format b, Format s) => Format (Cmd b s) where
-  format Value { valTerm = term } =
-    braceBlock "Value" ["term" <+> equals <+> term]
-  format Eval { evalTerm = term } =
-    braceBlock "Eval" ["term" <+> equals <+> term]
-  format (BadCmd _) = format "BadCmd"
-
-instance (Default b, Ord b, Eq b, Format b, Format s) =>
-         Format (Comp b s) where
-  format Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
-    braceBlock "Seq" [
-        "type" <+> equals <+> ty,
-        "pat" <+> equals <+> pat,
-        "cmd" <+> equals <+> cmd,
-        "next" <+> equals <+> next
-      ]
-  format End { endCmd = cmd } =
-    braceBlock "End" [ "cmd" <+> equals <+> format cmd ]
-  format (BadComp _) = format "BadComp"
-
-instance Show Quantifier where
-  show = show . format
-
-instance (Default b, Ord b, Eq b, Format b, Format s, Format (t s)) =>
-         Show (Pattern b t s) where
-  show = show . format
-
-instance (Default b, Ord b, Eq b, Format b, Format s) => Show (Case b s) where
-  show = show . format
-
-instance (Default b, Ord b, Eq b, Format b, Format s) =>
-         Show (Element b s) where
-  show = show . format
-
-instance (Default b, Ord b, Eq b, Format b, Format s) => Show (Term b s) where
-  show = show . format
-
-instance (Default b, Ord b, Eq b, Format b, Format s) => Show (Cmd b s) where
-  show = show . format
-
-instance (Default b, Ord b, Eq b, Format b, Format s) =>
-         Show (Comp b s) where
-  show = show . format
-
-boundPicklerAttr :: (GenericXMLString tag, Show tag,
-                     GenericXMLString text, Show text,
-                     XmlPickler [(tag, text)] bound,
-                     XmlPickler [(tag, text)] free) =>
-                    PU [NodeG [] tag text] (Var bound free)
-boundPicklerAttr =
+formatMap :: (MonadPositions m, MonadSymbols m, FormatM m a, FormatM m b) =>
+             HashMap a b -> m Doc
+formatMap hashmap =
   let
-    revfunc (B pos) = pos
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (B, revfunc) (xpElemAttrs (gxFromString "Bound") xpickle)
+    formatEntry (a, b) =
+      do
+        adoc <- formatM a
+        bdoc <- formatM b
+        return (adoc, bdoc)
+  in do
+    entrydocs <- mapM formatEntry (HashMap.toList hashmap)
+    return $! mapDoc entrydocs
 
-freePicklerAttr :: (GenericXMLString tag, Show tag,
-                    GenericXMLString text, Show text,
-                    XmlPickler [(tag, text)] bound,
-                    XmlPickler [(tag, text)] free) =>
-                   PU [NodeG [] tag text] (Var bound free)
-freePicklerAttr =
-  let
-    revfunc (F pos) = pos
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (F, revfunc) (xpElemAttrs (gxFromString "Free") xpickle)
+instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+         FormatM m (Element bound free) where
+  formatM Element { elemPat = pat, elemType = ty,
+                    elemName = sym, elemPos = pos } =
+    do
+      symdoc <- formatM sym
+      posdoc <- formatM pos
+      patdoc <- formatM pat
+      tydoc <- formatM ty
+      return (compoundApplyDoc (string "Element")
+                               [(string "name", symdoc),
+                                (string "pos", posdoc),
+                                (string "pattern", patdoc),
+                                (string "type", tydoc)])
 
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
-          XmlPickler [(tag, text)] bound, XmlPickler [(tag, text)] free) =>
-          XmlPickler [NodeG [] tag text] (Var bound free) where
-  xpickle =
-    let
-      picker B {} = 0
-      picker F {} = 1
-    in
-      xpAlt picker [ boundPicklerAttr, freePicklerAttr ]
--}
+instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+         FormatM m (Term bound free) where
+  formatM Eta {} = error "Eta is going away"
+  formatM FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
+                     funcTypePos = pos } =
+    do
+      posdoc <- formatM pos
+      argdocs <- mapM formatM args
+      rettydoc <- formatM retty
+      return (compoundApplyDoc (string "FuncType")
+                               [(string "pos", posdoc),
+                                (string "args", listDoc argdocs),
+                                (string "retty", rettydoc)])
+  formatM RecordType { recTypeBody = body, recTypePos = pos } =
+    do
+      posdoc <- formatM pos
+      bodydocs <- mapM formatM body
+      return (compoundApplyDoc (string "RecordType")
+                               [(string "pos", posdoc),
+                                (string "body", listDoc bodydocs)])
+  formatM RefineType { refineType = ty, refineCases = cases, refinePos = pos } =
+    do
+      posdoc <- formatM pos
+      tydoc <- formatM ty
+      casedocs <- mapM formatM cases
+      return (compoundApplyDoc (string "RefineType")
+                               [(string "pos", posdoc),
+                                (string "type", tydoc),
+                                (string "cases", listDoc casedocs)])
+  formatM CompType { compType = ty, compCases = cases, compTypePos = pos } =
+    do
+      posdoc <- formatM pos
+      tydoc <- formatM ty
+      casedocs <- mapM formatM cases
+      return (compoundApplyDoc (string "CompType")
+                               [(string "pos", posdoc),
+                                (string "type", tydoc),
+                                (string "cases", listDoc casedocs)])
+  formatM Quantified { quantType = ty, quantCases = cases,
+                       quantKind = kind, quantPos = pos } =
+    do
+      posdoc <- formatM pos
+      tydoc <- formatM ty
+      casedocs <- mapM formatM cases
+      return (compoundApplyDoc (string "Quantified")
+                               [(string "pos", posdoc),
+                                (string "kind", format kind),
+                                (string "type", tydoc),
+                                (string "cases", listDoc casedocs)])
+  formatM Call { callFunc = func, callArgs = args, callPos = pos } =
+    do
+      posdoc <- formatM pos
+      argsdoc <- formatMap args
+      funcdoc <- formatM func
+      return (compoundApplyDoc (string "Call")
+                               [(string "pos", posdoc),
+                                (string "func", funcdoc),
+                                (string "args", argsdoc)])
+  formatM Typed { typedTerm = term, typedType = ty, typedPos = pos } =
+    do
+      posdoc <- formatM pos
+      termdoc <- formatM term
+      typedoc <- formatM ty
+      return (compoundApplyDoc (string "Typed")
+                               [(string "pos", posdoc),
+                                (string "term", termdoc),
+                                (string "type", typedoc)])
+  formatM Var { varSym = sym, varPos = pos } =
+    do
+      posdoc <- formatM pos
+      symdoc <- formatM sym
+      return (compoundApplyDoc (string "Var")
+                               [(string "pos", posdoc),
+                                (string "sym", symdoc)])
+  formatM Lambda { lambdaCases = cases, lambdaPos = pos } =
+    do
+      posdoc <- formatM pos
+      casedocs <- mapM formatM cases
+      return (compoundApplyDoc (string "Lambda")
+                               [(string "pos", posdoc),
+                                (string "cases", listDoc casedocs)])
+  formatM Record { recFields = fields, recPos = pos } =
+    do
+      posdoc <- formatM pos
+      fieldsdoc <- formatMap fields
+      return (compoundApplyDoc (string "Record")
+                               [(string "pos", posdoc),
+                                (string "fields", fieldsdoc)])
+  formatM Fix { fixTerms = terms, fixPos = pos } =
+    do
+      posdoc <- formatM pos
+      termsdoc <- formatMap terms
+      return (compoundApplyDoc (string "Fix")
+                               [(string "pos", posdoc),
+                                (string "terms", termsdoc)])
+  formatM Comp { compBody = body, compPos = pos } =
+    do
+      posdoc <- formatM pos
+      bodydoc <- formatM body
+      return (compoundApplyDoc (string "Comp")
+                               [(string "pos", posdoc),
+                                (string "body", bodydoc)])
+  formatM (BadTerm pos) =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "BadTerm") [(string "pos", posdoc)])
+
+instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+         FormatM m (Cmd bound free) where
+  formatM Value { valTerm = term, valPos = pos } =
+    do
+      posdoc <- formatM pos
+      termdoc <- formatM term
+      return (compoundApplyDoc (string "Value")
+                               [(string "pos", posdoc),
+                                (string "term", termdoc)])
+  formatM Eval { evalTerm = term, evalPos = pos } =
+    do
+      posdoc <- formatM pos
+      termdoc <- formatM term
+      return (compoundApplyDoc (string "Eval")
+                               [(string "pos", posdoc),
+                                (string "term", termdoc)])
+  formatM (BadCmd pos) =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "BadCmd") [(string "pos", posdoc)])
+
+instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+         FormatM m (Comp bound free) where
+  formatM Seq { seqCmd = cmd, seqPat = pat, seqType = ty,
+                seqNext = next, seqPos = pos } =
+    do
+      posdoc <- formatM pos
+      cmddoc <- formatM cmd
+      patdoc <- formatM pat
+      typedoc <- formatM ty
+      nextdoc <- formatM next
+      return (compoundApplyDoc (string "Seq")
+                               [(string "pos", posdoc),
+                                (string "cmd", cmddoc),
+                                (string "pat", patdoc),
+                                (string "type", typedoc),
+                                (string "next", nextdoc)])
+  formatM End { endCmd = cmd, endPos = pos } =
+    do
+      posdoc <- formatM pos
+      cmddoc <- formatM cmd
+      return (compoundApplyDoc (string "End")
+                               [(string "pos", posdoc),
+                                (string "cmd", cmddoc)])
+  formatM (BadComp pos) =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "BadComp") [(string "pos", posdoc)])
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [(tag, text)] Quantifier where
