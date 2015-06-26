@@ -146,6 +146,7 @@ Library
 --                        Language.Salt.Core.Patterns,
                         Language.Salt.Core.Syntax,
 --                        Language.Salt.Core.TypeCheck,
+                        Language.Salt.Format
                         Language.Salt.Frontend
                         Language.Salt.Message
                         Language.Salt.Surface.AST
