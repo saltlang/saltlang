@@ -560,6 +560,7 @@ collectCompound (syntax, proofs, compounds)
 collectCompound (syntax, proofs, compounds)
                 (AST.Element AST.Truth { AST.truthName = sym,
                                          AST.truthKind = kind,
+                                         AST.truthProof = Nothing,
                                          AST.truthContent = content,
                                          AST.truthPos = pos }) =
   do
@@ -571,6 +572,26 @@ collectCompound (syntax, proofs, compounds)
                 Syntax.Truth { Syntax.truthKind = kind,
                                Syntax.truthVisibility = Public,
                                Syntax.truthContent = collectedContent,
+                               Syntax.truthProof = Nothing,
+                               Syntax.truthPos = pos }
+            } : compounds)
+collectCompound (syntax, proofs, compounds)
+                (AST.Element AST.Truth { AST.truthName = sym,
+                                         AST.truthKind = kind,
+                                         AST.truthProof = Just proof,
+                                         AST.truthContent = content,
+                                         AST.truthPos = pos }) =
+  do
+    collectedContent <- collectExp content
+    collectedProof <- collectExp proof
+    return (syntax, proofs,
+            Syntax.Dynamic {
+              Syntax.dynamicName = sym,
+              Syntax.dynamicTruth =
+                Syntax.Truth { Syntax.truthKind = kind,
+                               Syntax.truthVisibility = Public,
+                               Syntax.truthContent = collectedContent,
+                               Syntax.truthProof = Just collectedProof,
                                Syntax.truthPos = pos }
             } : compounds)
 -- For the rest, collect the tree and add it to the statement list.
@@ -875,6 +896,7 @@ collectElement vis accum
 collectElement vis accum @ (builders, syntax, truths, proofs, elems)
                AST.Truth { AST.truthName = sym,
                            AST.truthKind = kind,
+                           AST.truthProof = Nothing,
                            AST.truthContent = content,
                            AST.truthPos = pos } =
   do
@@ -888,6 +910,30 @@ collectElement vis accum @ (builders, syntax, truths, proofs, elems)
           truth = Syntax.Truth { Syntax.truthKind = kind,
                                  Syntax.truthVisibility = vis,
                                  Syntax.truthContent = collectedContent,
+                                 Syntax.truthProof = Nothing,
+                                 Syntax.truthPos = pos }
+          newtruths = HashMap.insert sym truth truths
+        in
+          return (builders, syntax, newtruths, proofs, elems)
+collectElement vis accum @ (builders, syntax, truths, proofs, elems)
+               AST.Truth { AST.truthName = sym,
+                           AST.truthKind = kind,
+                           AST.truthProof = Just proof,
+                           AST.truthContent = content,
+                           AST.truthPos = pos } =
+  do
+    collectedContent <- collectExp content
+    collectedProof <- collectExp proof
+    if HashMap.member sym truths
+      then do
+        duplicateTruth sym pos
+        return accum
+      else
+        let
+          truth = Syntax.Truth { Syntax.truthKind = kind,
+                                 Syntax.truthVisibility = vis,
+                                 Syntax.truthContent = collectedContent,
+                                 Syntax.truthProof = Just collectedProof,
                                  Syntax.truthPos = pos }
           newtruths = HashMap.insert sym truth truths
         in

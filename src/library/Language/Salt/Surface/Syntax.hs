@@ -124,6 +124,8 @@ data Truth =
     truthVisibility :: !Visibility,
     -- | The truth proposition.
     truthContent :: !Exp,
+    -- | A proof (may or may not be supplied).
+    truthProof :: !(Maybe Exp),
     -- | The position in source from which this arises.
     truthPos :: !Position
   }
@@ -435,10 +437,10 @@ instance Eq Component where
 
 instance Eq Truth where
   Truth { truthKind = kind1, truthVisibility = vis1,
-          truthContent = content1 } ==
+          truthContent = content1, truthProof = proof1 } ==
     Truth { truthKind = kind2, truthVisibility = vis2,
-            truthContent = content2 } =
-      kind1 == kind2 && vis1 == vis2 && content1 == content2
+            truthContent = content2, truthProof = proof2 } =
+      kind1 == kind2 && vis1 == vis2 && content1 == content2 && proof1 == proof2
 
 instance Eq Builder where
   Builder { builderKind = kind1, builderVisibility = vis1,
@@ -560,12 +562,14 @@ instance Ord Component where
 
 instance Ord Truth where
   compare Truth { truthKind = kind1, truthVisibility = vis1,
-                  truthContent = content1 }
+                  truthContent = content1, truthProof = proof1 }
           Truth { truthKind = kind2, truthVisibility = vis2,
-                  truthContent = content2 } =
+                  truthContent = content2, truthProof = proof2 } =
     case compare kind1 kind2 of
       EQ -> case compare vis1 vis2 of
-        EQ -> compare content1 content2
+        EQ -> case compare content1 content2 of
+          EQ -> compare proof1 proof2
+          out -> out
         out -> out
       out -> out
 
@@ -830,8 +834,9 @@ instance Hashable Syntax where
 
 instance Hashable Truth where
   hashWithSalt s Truth { truthKind = kind, truthVisibility = vis,
-                         truthContent = content } =
-    s `hashWithSalt` kind `hashWithSalt` vis `hashWithSalt` content
+                         truthContent = content, truthProof = proof } =
+    s `hashWithSalt` kind `hashWithSalt` vis `hashWithSalt`
+    content `hashWithSalt` proof
 
 instance Hashable Scope where
   hashWithSalt s Scope { scopeBuilders = builders, scopeSyntax = syntax,
@@ -1010,7 +1015,7 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Syntax where
 
 instance (MonadSymbols m, MonadPositions m) => FormatM m Truth where
   formatM Truth { truthVisibility = vis, truthContent = content,
-                  truthKind = kind, truthPos = pos } =
+                  truthKind = kind, truthProof = Nothing, truthPos = pos } =
     do
       posdoc <- formatM pos
       contentdoc <- formatM content
@@ -1018,6 +1023,18 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Truth where
                              [(string "visibility", format vis),
                               (string "kind", format kind),
                               (string "pos", posdoc),
+                              (string "content", contentdoc)])
+  formatM Truth { truthVisibility = vis, truthContent = content,
+                  truthKind = kind, truthProof = Just proof, truthPos = pos } =
+    do
+      posdoc <- formatM pos
+      contentdoc <- formatM content
+      proofdoc <- formatM proof
+      return (constructorDoc (string "Truth")
+                             [(string "visibility", format vis),
+                              (string "kind", format kind),
+                              (string "pos", posdoc),
+                              (string "proof", proofdoc),
                               (string "content", contentdoc)])
 
 formatMap :: (MonadSymbols m, MonadPositions m, FormatM m key, FormatM m val) =>
@@ -1436,15 +1453,17 @@ mapPickler = xpWrap (HashMap.fromList, HashMap.toList)
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Truth where
   xpickle =
-    xpWrap (\((vis, kind), (body, pos)) ->
+    xpWrap (\((vis, kind), (body, proof, pos)) ->
              Truth { truthVisibility = vis, truthContent = body,
-                     truthKind = kind, truthPos = pos },
+                     truthKind = kind, truthProof = proof, truthPos = pos },
             \Truth { truthVisibility = vis, truthKind = kind,
-                    truthContent = body, truthPos = pos } ->
-              ((vis, kind), (body, pos)))
+                    truthContent = body, truthProof = proof, truthPos = pos } ->
+              ((vis, kind), (body, proof, pos)))
            (xpElem (gxFromString "Truth") (xpPair xpickle xpickle)
-                   (xpPair (xpElemNodes (gxFromString "type") xpickle)
-                           (xpElemNodes (gxFromString "pos") xpickle)))
+                   (xpTriple (xpElemNodes (gxFromString "type") xpickle)
+                             (xpOption (xpElemNodes (gxFromString "proof")
+                                                    xpickle))
+                             (xpElemNodes (gxFromString "pos") xpickle)))
 
 defsPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>

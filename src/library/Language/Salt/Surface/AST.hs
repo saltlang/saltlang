@@ -184,6 +184,8 @@ data Element =
       truthName :: !Symbol,
       -- | The truth proposition.
       truthContent :: !Exp,
+      -- | A proof (may or may not be supplied).
+      truthProof :: !(Maybe Exp),
       -- | The position in source from which this arises.
       truthPos :: !Position
     }
@@ -502,9 +504,11 @@ instance Eq Element where
   Fun { funName = name1, funCases = cases1 } ==
     Fun { funName = name2, funCases = cases2 } =
       name1 == name2 && cases1 == cases2
-  Truth { truthName = name1, truthKind = kind1, truthContent = prop1 } ==
-    Truth { truthName = name2, truthKind = kind2, truthContent = prop2 } =
-    name1 == name2 && kind1 == kind2 && prop1 == prop2
+  Truth { truthName = name1, truthKind = kind1,
+          truthContent = prop1, truthProof = proof1 } ==
+    Truth { truthName = name2, truthKind = kind2,
+            truthContent = prop2, truthProof = proof2 } =
+    name1 == name2 && kind1 == kind2 && prop1 == prop2 && proof1 == proof2
   Proof { proofName = name1, proofBody = body1 } ==
     Proof { proofName = name2, proofBody = body2 } =
       name1 == name2 && body1 == body2
@@ -643,11 +647,15 @@ instance Ord Element where
       out -> out
   compare Fun {} _ = GT
   compare _ Fun {} = LT
-  compare Truth { truthName = name1, truthKind = kind1, truthContent = prop1 }
-          Truth { truthName = name2, truthKind = kind2, truthContent = prop2 } =
+  compare Truth { truthName = name1, truthKind = kind1,
+                  truthContent = prop1, truthProof = proof1 }
+          Truth { truthName = name2, truthKind = kind2,
+                  truthContent = prop2, truthProof = proof2 } =
     case compare name1 name2 of
       EQ -> case compare kind1 kind2 of
-        EQ -> compare prop1 prop2
+        EQ -> case compare prop1 prop2 of
+          EQ -> compare proof1 proof2
+          out -> out
         out -> out
       out -> out
   compare Truth {} _ = GT
@@ -844,9 +852,9 @@ instance Hashable Element where
   hashWithSalt s Fun { funName = sym, funCases = cases } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt` sym `hashWithSalt` cases
   hashWithSalt s Truth { truthName = sym, truthKind = kind,
-                         truthContent = prop } =
+                         truthContent = prop, truthProof = proof } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt` sym `hashWithSalt`
-    kind `hashWithSalt` prop
+    kind `hashWithSalt` prop `hashWithSalt` proof
   hashWithSalt s Proof { proofName = sym, proofBody = body } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt` sym `hashWithSalt` body
   hashWithSalt s Import { importExp = exp } =
@@ -1099,7 +1107,8 @@ elementDot Fun { funName = sym, funCases = cases } =
                                string " | <cases> cases") <$>
                       string "shape = \"record\"") <>
             char ';' <$> vcat (map (caseEdge nodeid) caseContents), nodeid)
-elementDot Truth { truthName = sym, truthKind = kind, truthContent = prop } =
+elementDot Truth { truthName = sym, truthKind = kind,
+                   truthContent = prop, truthProof = Nothing } =
   do
     namestr <- name sym
     nodeid <- getNodeID
@@ -1114,6 +1123,26 @@ elementDot Truth { truthName = sym, truthKind = kind, truthContent = prop } =
                       string "shape = \"record\"") <>
             char ';' <$> dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname), nodeid)
+elementDot Truth { truthName = sym, truthKind = kind,
+                   truthContent = prop, truthProof = Just proof } =
+  do
+    namestr <- name sym
+    nodeid <- getNodeID
+    (bodynode, bodyname) <- expDot prop
+    (proofnode, proofname) <- expDot proof
+    return (bodynode <$> proofnode <$> dquoted (string nodeid) <+>
+            brackets (string "label = " <>
+                      dquoted (string "Truth | " <>
+                               string (show kind) <> string " | " <>
+                               string "\\\"" <> bytestring namestr <>
+                               string "\\\"" <>
+                               string " | <body> body" <$>
+                               string " | <proof> proof") <$>
+                      string "shape = \"record\"") <>
+            char ';' <$> dquoted (string nodeid) <> string ":body" <>
+            string " -> " <> dquoted (string bodyname) <$>
+            dquoted (string nodeid) <> string ":proof" <>
+            string " -> " <> dquoted (string proofname), nodeid)
 elementDot Proof { proofName = pname, proofBody = body } =
   do
     nodeid <- getNodeID
@@ -1650,7 +1679,8 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
                               (string "pos", posdoc),
                               (string "cases", listDoc casedocs)])
   formatM Truth { truthName = sym, truthContent = content,
-                  truthKind = kind, truthPos = pos } =
+                  truthKind = kind, truthProof = Nothing,
+                  truthPos = pos } =
     do
       namedoc <- formatM sym
       posdoc <- formatM pos
@@ -1660,6 +1690,20 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
                               (string "kind", format kind),
                               (string "pos", posdoc),
                               (string "content", contentdoc)])
+  formatM Truth { truthName = sym, truthContent = content,
+                  truthKind = kind, truthProof = Just proof,
+                  truthPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      contentdoc <- formatM content
+      proofdoc <- formatM proof
+      return (constructorDoc (string "Truth")
+                             [(string "name", namedoc),
+                              (string "kind", format kind),
+                              (string "pos", posdoc),
+                              (string "content", contentdoc),
+                              (string "proof", proofdoc)])
   formatM Proof { proofName = sym, proofBody = body, proofPos = pos } =
     do
       namedoc <- formatM sym
@@ -2039,17 +2083,19 @@ truthPickler :: (GenericXMLString tag, Show tag,
                 PU [NodeG [] tag text] Element
 truthPickler =
   let
-    revfunc Truth { truthName = sym, truthKind = kind,
-                    truthContent = body, truthPos = pos } =
-      ((sym, kind), (body, pos))
+    revfunc Truth { truthName = sym, truthKind = kind, truthContent = body,
+                    truthProof = proof, truthPos = pos } =
+      ((sym, kind), (body, proof, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((sym, kind), (body, pos)) ->
-             Truth { truthName = sym, truthContent = body,
-                     truthKind = kind, truthPos = pos }, revfunc)
+    xpWrap (\((sym, kind), (body, proof, pos)) ->
+             Truth { truthName = sym, truthContent = body, truthKind = kind,
+                     truthProof = proof, truthPos = pos }, revfunc)
            (xpElem (gxFromString "Truth") (xpPair xpickle xpickle)
-                   (xpPair (xpElemNodes (gxFromString "type") xpickle)
-                           (xpElemNodes (gxFromString "pos") xpickle)))
+                   (xpTriple (xpElemNodes (gxFromString "type") xpickle)
+                             (xpOption (xpElemNodes (gxFromString "type")
+                                                    xpickle))
+                             (xpElemNodes (gxFromString "pos") xpickle)))
 
 proofPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>

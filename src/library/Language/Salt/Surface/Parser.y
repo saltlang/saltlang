@@ -224,6 +224,18 @@ closed_def: type_builder_kind ID args_opt extends
                             builderContent = Body content,
                             builderPos = builderpos }
               }
+          | truth_kind ID args_opt EQUAL exp PROOF LBRACE stm_list RBRACE
+              { let
+                  content = buildExp $5
+                  compoundpos = Token.position $7 <> Token.position $9
+                  pos = snd $1 <> Token.position $9
+                in
+                  Truth { truthName = name $2, truthKind = fst $1,
+                          truthProof =
+                            Just Compound { compoundBody = reverse $8,
+                                            compoundPos = compoundpos },
+                          truthContent = content, truthPos = pos }
+            }
           | PROOF static_exp LBRACE stm_list RBRACE
               { let
                   compoundpos = Token.position $3 <> Token.position $5
@@ -253,7 +265,18 @@ open_def: type_builder_kind ID args_opt extends EQUAL exp
                 pos = snd $1 <> expPosition content
               in
                 Truth { truthName = name $2, truthKind = fst $1,
-                        truthContent = content, truthPos = pos }
+                        truthProof = Nothing, truthContent = content,
+                        truthPos = pos }
+            }
+        | truth_kind ID args_opt EQUAL exp PROOF EQUAL exp
+            { let
+                content = buildExp $5
+                proof = buildExp $8
+                pos = snd $1 <> expPosition proof
+              in
+                Truth { truthName = name $2, truthKind = fst $1,
+                        truthProof = Just proof, truthContent = content,
+                        truthPos = pos }
             }
         | PROOF static_exp EQUAL exp
             { let
