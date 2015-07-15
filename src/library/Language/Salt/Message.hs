@@ -67,7 +67,9 @@ module Language.Salt.Message(
        cannotAccessComponent,
        badComponentName,
        cannotCreateFile,
-       cannotCreateArtifact
+       cannotCreateArtifact,
+       importNestedScope,
+       badStaticExp
        ) where
 
 import Control.Monad.Messages
@@ -232,9 +234,13 @@ data Message =
       -- | The position at which the file or component was referenced.
       cannotAccessPos :: !Position
     }
+    -- | A component does not have the name expected for its filename.
   | BadComponentName {
+      -- | The expected name.
       badComponentNameExpected :: !Strict.ByteString,
+      -- | Possibly the actual component name.
       badComponentNameActual :: !(Maybe Strict.ByteString),
+      -- | The position of the component statement.
       badComponentNamePos :: !Position
     }
     -- | Error creating an artifact.
@@ -245,6 +251,13 @@ data Message =
       cannotCreateFileName :: !Strict.ByteString,
       -- | Error message given by the operating system.
       cannotCreateMsg :: !Strict.ByteString
+    }
+    -- | Attempting to import a nested scope.
+  | ImportNestedScope {
+      importNestedScopePos :: !Position
+    }
+  | BadStaticExp {
+      badStaticExpPos :: !Position
     }
 {-
   -- | An error message representing an undefined proposition in the
@@ -383,6 +396,10 @@ instance Hashable Message where
                                 cannotCreateMsg = msg } =
     s `hashWithSalt` (30 :: Int) `hashWithSalt`
     cname `hashWithSalt` filename `hashWithSalt` msg
+  hashWithSalt s ImportNestedScope { importNestedScopePos = pos } =
+    s `hashWithSalt` (31 :: Int) `hashWithSalt` pos
+  hashWithSalt s BadStaticExp { badStaticExpPos = pos } =
+    s `hashWithSalt` (32 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -416,6 +433,8 @@ instance Msg.Message Message where
   severity CannotAccess {} = Msg.Error
   severity BadComponentName {} = Msg.Error
   severity CannotCreate {} = Msg.Error
+  severity ImportNestedScope {} = Msg.Error
+  severity BadStaticExp {} = Msg.Internal
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -472,7 +491,11 @@ instance Msg.Message Message where
     string "Cannot create file" <+> dquoted (bytestring fname)
   brief CannotCreate { cannotCreateName = Just cname } =
     string "Cannot create file for" <+> bytestring cname
+  brief ImportNestedScope {} = string "Importing from a nested scope"
+  brief BadStaticExp {} = string "Expression is not a static expression"
 
+  details m | Msg.severity m == Msg.Internal =
+    Just $! string "An internal compiler error has occurred."
   details HardTabs {} =
     Just $! string "Use of hard tabs is discouraged; use spaces instead."
   details LongCharLiteral {} =
@@ -553,6 +576,8 @@ instance Msg.MessagePosition BasicPosition Message where
   position CannotAccess { cannotAccessPos = pos } = Just pos
   position BadComponentName { badComponentNamePos = pos } = Just pos
   position CannotCreate {} = Nothing
+  position ImportNestedScope { importNestedScopePos = pos } = Just pos
+  position BadStaticExp { badStaticExpPos = pos } = Just pos
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -894,3 +919,17 @@ cannotCreateArtifact cname fname msg =
                               Just $! Strict.intercalate "." bstrs,
                            cannotCreateFileName = fname,
                            cannotCreateMsg = msg }
+
+-- | Report an import of a nested scope.
+importNestedScope :: MonadMessages Message m =>
+                     Position
+                  -- ^ The position at which the nameless field occurs.
+                  -> m ()
+importNestedScope pos = message ImportNestedScope { importNestedScopePos = pos }
+
+-- | Report a bad static expression.  This is an internal error.
+badStaticExp :: MonadMessages Message m =>
+                Position
+             -- ^ The position at which the nameless field occurs.
+             -> m ()
+badStaticExp pos = message ImportNestedScope { importNestedScopePos = pos }
