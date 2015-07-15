@@ -49,7 +49,8 @@ module Language.Salt.Surface.Syntax(
        Entry(..),
        Fields(..),
        Field(..),
-       Case(..)
+       Case(..),
+       expPosition
        ) where
 
 import Control.Monad.Positions
@@ -180,7 +181,7 @@ data Element =
       importExp :: !Exp,
       -- | The position in source from which this arises.
       importPos :: !Position
-    }
+     }
 
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
@@ -429,6 +430,22 @@ data Case =
     -- | The position in source from which this arises.
     casePos :: !Position
   }
+
+expPosition :: Exp -> Position
+expPosition Compound { compoundPos = pos } = pos
+expPosition Abs { absPos = pos } = pos
+expPosition Match { matchPos = pos } = pos
+expPosition Ascribe { ascribePos = pos } = pos
+expPosition Seq { seqPos = pos } = pos
+expPosition RecordType { recordTypePos = pos } = pos
+expPosition Record { recordPos = pos } = pos
+expPosition Tuple { tuplePos = pos } = pos
+expPosition Project { projectPos = pos } = pos
+expPosition Sym { symPos = pos } = pos
+expPosition With { withPos = pos } = pos
+expPosition Where { wherePos = pos } = pos
+expPosition Anon { anonPos = pos } = pos
+expPosition (Literal l) = literalPosition l
 
 instance Eq Component where
   Component { compExpected = expected1, compScope = scope1 } ==
