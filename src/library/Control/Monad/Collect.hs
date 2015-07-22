@@ -37,7 +37,6 @@ module Control.Monad.Collect(
        Collect,
        runCollectTComponentsT,
        runCollectT,
-       mapCollectT,
        runCollect
        ) where
 
@@ -59,17 +58,18 @@ import Control.Monad.SourceFiles
 import Control.Monad.SourceBuffer
 import Control.Monad.State
 import Control.Monad.Symbols
-import Control.Monad.Writer
 import Data.HashTable.IO(BasicHashTable)
 import Data.Maybe
 import Data.Symbol
+import Language.Salt.Surface.Common
 import Language.Salt.Surface.Syntax
 
 import qualified Data.HashTable.IO as HashTable
 
 type Table = BasicHashTable [Symbol] Component
 
-newtype CollectT m a = CollectT { unpackCollectT :: ReaderT Table m a }
+newtype CollectT m a =
+  CollectT { unpackCollectT :: StateT ScopeID (ReaderT Table m) a }
 
 type Collect = CollectT IO
 
@@ -84,7 +84,7 @@ runCollectTComponentsT :: MonadIO m =>
 runCollectTComponentsT collect comps =
   do
     tab <- liftIO HashTable.new
-    res <- runReaderT (unpackCollectT collect) tab
+    (res, _) <- runReaderT (runStateT (unpackCollectT collect) firstScopeID) tab
     runComponentsT (comps res) tab
 
 runCollectT :: MonadIO m =>
@@ -94,24 +94,30 @@ runCollectT :: MonadIO m =>
 runCollectT c =
   do
     tab <- liftIO HashTable.new
-    runReaderT (unpackCollectT c) tab
+    (out, _) <- runReaderT (runStateT (unpackCollectT c) firstScopeID) tab
+    return out
 
 runCollect :: Collect a
            -- ^ The @Collect@ monad to execute.
            -> IO a
 runCollect = runCollectT
 
-mapCollectT :: (Monad m, Monad n) =>
-               (m a -> n b) -> CollectT m a -> CollectT n b
-mapCollectT f = CollectT . mapReaderT f . unpackCollectT
+scopeID' :: MonadIO m => StateT ScopeID (ReaderT Table m) ScopeID
+scopeID' =
+  do
+    n <- get
+    put $! succ n
+    return n
 
-addComponent' :: MonadIO m => [Symbol] -> Component -> ReaderT Table m ()
+addComponent' :: MonadIO m => [Symbol] -> Component ->
+                 StateT ScopeID (ReaderT Table m) ()
 addComponent' cname comp =
   do
     tab <- ask
     liftIO (HashTable.insert tab cname comp)
 
-componentExists' :: MonadIO m => [Symbol] -> ReaderT Table m Bool
+componentExists' :: MonadIO m =>
+                    [Symbol] -> StateT ScopeID (ReaderT Table m) Bool
 componentExists' cname =
   do
     tab <- ask
@@ -126,7 +132,7 @@ instance Monad m => Applicative (CollectT m) where
   pure = return
   (<*>) = ap
 
-instance (Monad m, Alternative m) => Alternative (CollectT m) where
+instance (MonadPlus m, Alternative m) => Alternative (CollectT m) where
   empty = lift empty
   s1 <|> s2 = CollectT (unpackCollectT s1 <|> unpackCollectT s2)
 
@@ -134,6 +140,7 @@ instance Functor (CollectT m) where
   fmap = fmap
 
 instance MonadIO m => MonadCollect (CollectT m) where
+  scopeID = CollectT scopeID'
   addComponent cname = CollectT . addComponent' cname
   componentExists = CollectT . componentExists'
 
@@ -141,7 +148,7 @@ instance MonadIO m => MonadIO (CollectT m) where
   liftIO = CollectT . liftIO
 
 instance MonadTrans CollectT where
-  lift = CollectT . lift
+  lift = CollectT . lift . lift
 
 instance MonadArtifacts path m => MonadArtifacts path (CollectT m) where
   artifact path = lift . artifact path
@@ -205,15 +212,6 @@ instance MonadSymbols m => MonadSymbols (CollectT m) where
   allNames = lift allNames
   allSyms = lift allSyms
   name = lift . name
-
-instance MonadReader r m => MonadReader r (CollectT m) where
-  ask = lift ask
-  local f = mapCollectT (local f)
-
-instance MonadWriter w m => MonadWriter w (CollectT m) where
-  tell = lift . tell
-  listen = mapCollectT listen
-  pass = mapCollectT pass
 
 instance MonadPlus m => MonadPlus (CollectT m) where
   mzero = lift mzero

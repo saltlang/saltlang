@@ -54,10 +54,13 @@ import Control.Monad.State
 import Control.Monad.Symbols
 import Control.Monad.Writer
 import Data.Symbol
-import Language.Salt.Surface.Syntax
+import Language.Salt.Surface.Common
+import Language.Salt.Surface.Syntax(Component)
 
 -- | Monad class providing functionality for the Collect phase.
 class Monad m => MonadCollect m where
+  -- | Get a fresh 'ScopeID'
+  scopeID :: m ScopeID
   -- | Finish collecting a component
   addComponent :: [Symbol]
                -- ^ The component name.
@@ -70,74 +73,92 @@ class Monad m => MonadCollect m where
                   -> m Bool
 
 instance MonadCollect m => MonadCollect (CommentBufferT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (CommentsT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (ContT c m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance (MonadCollect m, Error e) => MonadCollect (ErrorT e m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (GenposT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (GensymT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (KeywordsT pos tok m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (ListT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (MemoryLoaderT info m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance (MonadCollect m, Monoid msgs) =>
          MonadCollect (MessagesT msgs msg m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (PositionsT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (ReaderT r m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (SkipCommentsT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (SourceFilesT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (FileLoaderT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (StateT s m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (SymbolsT m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
 instance (MonadCollect m, Monoid w) => MonadCollect (WriterT w m) where
+  scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists

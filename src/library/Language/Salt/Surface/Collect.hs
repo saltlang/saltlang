@@ -78,20 +78,19 @@ emptyTempScope :: TempScope
 emptyTempScope = (HashMap.empty, HashMap.empty, HashMap.empty,
                   [], ([], [], [], []))
 
-makeScope :: TempScope -> Syntax.Scope
+makeScope :: (MonadCollect m) => TempScope -> m Syntax.Scope
 makeScope (builders, syntax, truths, proofs,
            (hiddens, privates, protecteds, publics)) =
   let
     elems = listArray (Hidden, Public) [hiddens, privates, protecteds, publics]
-  in
-    Syntax.Scope { Syntax.scopeBuilders = builders,
-                   Syntax.scopeSyntax = syntax,
-                   Syntax.scopeTruths = truths,
-                   Syntax.scopeElems = elems,
-                   Syntax.scopeProofs = proofs }
-
-emptyScope :: Syntax.Scope
-emptyScope = makeScope emptyTempScope
+  in do
+    scopeid <- scopeID
+    return Syntax.Scope { Syntax.scopeID = scopeid,
+                          Syntax.scopeBuilders = builders,
+                          Syntax.scopeSyntax = syntax,
+                          Syntax.scopeTruths = truths,
+                          Syntax.scopeElems = elems,
+                          Syntax.scopeProofs = proofs }
 
 -- | Add a definition into a scope, merging it in with what's already there.
 addDef :: Visibility -> Syntax.Element -> TempScope -> TempScope
@@ -114,7 +113,8 @@ addDef Public elem (builders, syntax, truths, proofs,
 
 -- | Collect a pattern, return the name to which the pattern is bound
 -- at the top level.
-collectNamedPattern :: (MonadMessages Message m, MonadSymbols m) =>
+collectNamedPattern :: (MonadMessages Message m, MonadSymbols m,
+                        MonadCollect m) =>
                        AST.Pattern -> m (Maybe Symbol, Syntax.Pattern)
 -- For an as-pattern, bind the field with that name to its own
 -- name, and further deconstruct the pattern.
@@ -146,7 +146,7 @@ collectNamedPattern pat =
     return (Nothing, collectedPat)
 
 -- | Collect an entry
-collectEntry :: (MonadMessages Message m, MonadSymbols m) =>
+collectEntry :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                 HashMap Symbol Syntax.Entry ->
                 AST.Entry -> m (HashMap Symbol Syntax.Entry)
 -- For a named entry, use the name as the index and the pattern as
@@ -185,7 +185,7 @@ collectEntry accum (AST.Unnamed pat) =
           namelessField (AST.patternPosition pat)
           return accum
 
-collectPattern :: (MonadMessages Message m, MonadSymbols m) =>
+collectPattern :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                   AST.Pattern -> m Syntax.Pattern
 -- For split, collect all fields into a HashMap.
 collectPattern AST.Split { AST.splitFields = fields, AST.splitStrict = strict,
@@ -241,7 +241,7 @@ collectPattern (AST.Exact l) = return (Syntax.Exact l)
 --
 -- > syntax id (postfix | infix (left | right | nonassoc) |
 -- >            prec (< | > | ==) id (. id)* )+
-collectSyntax :: (MonadMessages Message m, MonadSymbols m) =>
+collectSyntax :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                  SyntaxScope -> AST.Exp -> m SyntaxScope
 -- If it's not a seq, it's a syntax error
 collectSyntax accum AST.Seq { AST.seqPos = pos, AST.seqExps = [_] } =
@@ -252,7 +252,7 @@ collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
                                              body } =
   let
     -- | Add a precedence relationship to the current scope.
-    addPrec :: (MonadMessages Message m, MonadSymbols m) =>
+    addPrec :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                HashMap Symbol Syntax.Syntax -> Ordering -> AST.Exp ->
                m (HashMap Symbol Syntax.Syntax)
     addPrec syntax' ord exp =
@@ -273,7 +273,7 @@ collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
 
     -- | Add a fixity to the current scope.  Report an error if
     -- the symbol already has a fixity other than prefix.
-    addFixity :: (MonadMessages Message m, MonadSymbols m) =>
+    addFixity :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                  HashMap Symbol Syntax.Syntax ->
                  Syntax.Fixity -> Position ->
                  m (HashMap Symbol Syntax.Syntax)
@@ -298,7 +298,7 @@ collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
     --
     -- > syntax id prec (< | > | ==) id (. id)
     -- >                             ^
-    precName :: (MonadMessages Message m, MonadSymbols m) =>
+    precName :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                 Ordering -> HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                 m (HashMap Symbol Syntax.Syntax)
     -- If this is the last directive, so add the precedence
@@ -317,7 +317,7 @@ collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
     --
     -- > syntax id prec (< | > | ==) id (. id)*
     -- >                ^
-    precRelation :: (MonadMessages Message m, MonadSymbols m) =>
+    precRelation :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                     HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                     m (HashMap Symbol Syntax.Syntax)
     -- If the list ends prematurely, it's a parse error
@@ -353,7 +353,7 @@ collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
     --
     -- > syntax id infix (left | right | nonassoc) directive*
     -- >                 ^
-    infixAssoc :: (MonadMessages Message m, MonadSymbols m) =>
+    infixAssoc :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                   Position -> HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                   m (HashMap Symbol Syntax.Syntax)
     -- If the top-level expression is a Sym, it must be the
@@ -414,7 +414,8 @@ collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
     -- > syntax id (postfix | infix (left | right | nonassoc) |
     -- >            prec (< | > | ==) id (. id)* )+
     -- >           ^
-    startDirective :: (MonadMessages Message m, MonadSymbols m) =>
+    startDirective :: (MonadMessages Message m, MonadSymbols m,
+                       MonadCollect m) =>
                       HashMap Symbol Syntax.Syntax -> [AST.Exp] ->
                       m (HashMap Symbol Syntax.Syntax)
     -- It's ok for the top-level to be a Sym, as long as it's "postfix".
@@ -490,7 +491,7 @@ type TempDynamicScope = (SyntaxScope, [Syntax.Proof], [Syntax.Compound])
 emptyTempDynamicScope :: TempDynamicScope
 emptyTempDynamicScope = (HashMap.empty, [], [])
 
-collectCompound :: (MonadMessages Message m, MonadSymbols m) =>
+collectCompound :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                    TempDynamicScope -> AST.Compound -> m TempDynamicScope
 -- Add proofs to the list of proofs for the entire dynamic scope.
 collectCompound (syntax, proofs, compounds)
@@ -639,7 +640,7 @@ collectCompound (syntax, proofs, compounds) (AST.Exp exp) =
     return (syntax, proofs, Syntax.Exp collectedExp : compounds)
 
 -- | Collect an expression.
-collectExp :: (MonadMessages Message m, MonadSymbols m) =>
+collectExp :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
               AST.Exp -> m Syntax.Exp
 -- For a compound statement, construct a dynamic scope from all the statements.
 collectExp AST.Compound { AST.compoundBody = body, AST.compoundPos = pos } =
@@ -654,7 +655,8 @@ collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
                         AST.recordPos = pos } =
   let
     -- Fold function.  Only build a HashMap.
-    collectValueField :: (MonadMessages Message m, MonadSymbols m) =>
+    collectValueField :: (MonadMessages Message m, MonadSymbols m,
+                          MonadCollect m) =>
                          HashMap FieldName Syntax.Exp -> AST.Field ->
                          m (HashMap FieldName Syntax.Exp)
     collectValueField accum AST.Field { AST.fieldName = fname,
@@ -753,12 +755,12 @@ collectExp (AST.Literal lit) = return (Syntax.Literal lit)
 
 -- | Collect a list of AST fields into a Syntax fields structure (a HashMap
 -- and an ordering), and report duplicates.
-collectFields :: (MonadMessages Message m, MonadSymbols m) =>
+collectFields :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                  [AST.Field] -> m Syntax.Fields
 collectFields fields =
   let
     -- | Fold function.  Builds both a list and a HashMap.
-    collectField :: (MonadMessages Message m, MonadSymbols m) =>
+    collectField :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                     (HashMap FieldName Syntax.Field, [FieldName]) ->
                     AST.Field ->
                     m (HashMap FieldName Syntax.Field, [FieldName])
@@ -788,7 +790,7 @@ collectFields fields =
            }
 
 -- | Collect a case.  This is straightforward.
-collectCase :: (MonadMessages Message m, MonadSymbols m) =>
+collectCase :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                AST.Case -> m Syntax.Case
 collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
                        AST.casePos = pos } =
@@ -801,7 +803,7 @@ collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
 
 
 -- | Collect a definition.
-collectElement :: (MonadMessages Message m, MonadSymbols m) =>
+collectElement :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                   Visibility
                -- ^ The visibility at which everything is defined.
                -> TempScope
@@ -959,13 +961,13 @@ collectElement _ (builders, syntax, truths, proofs, elems)
 -- | Collect a scope.  This gathers up all the defintions and truths into
 -- HashMaps, and saves the imports and proofs.  Syntax directives then get
 -- parsed and used to update definitions.
-collectScope :: (MonadMessages Message m, MonadSymbols m) =>
+collectScope :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                 AST.Scope -> m Syntax.Scope
 collectScope groups =
   let
     -- | Collect a group.  This rolls all elements of the group into the
     -- temporary scope, with the group's visibility.
-    collectGroup :: (MonadMessages Message m, MonadSymbols m) =>
+    collectGroup :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
                     TempScope
                  -- ^ The 'Scope' into which to accumulate.
                  -> AST.Group
@@ -976,7 +978,7 @@ collectScope groups =
       foldM (collectElement vis) accum elems
   in do
     tmpscope <- foldM collectGroup emptyTempScope groups
-    return $! makeScope tmpscope
+    makeScope tmpscope
 
 -- | The Collect phase of the compiler.  Collect consumes an AST and
 -- produces a Syntax structure.
@@ -1003,7 +1005,7 @@ collectScope groups =
 -- * Multiple truth definitions with the same names.
 -- * Malformed syntax directives.
 -- * Undefined symbols in syntax directives.
-collectAST :: (MonadMessages Message m, MonadSymbols m) =>
+collectAST :: (MonadMessages Message m, MonadSymbols m, MonadCollect m) =>
               Position
            -- ^ Position corresponding to this entire file.
            -> Maybe [Symbol]
@@ -1030,7 +1032,8 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
       in do
         unless (expected == actual) (badComponentName expected' actual filepos)
         accum <- foldM (collectElement Public) emptyTempScope scope
-        return Syntax.Component { Syntax.compScope = makeScope accum,
+        newscope <- makeScope accum
+        return Syntax.Component { Syntax.compScope = newscope,
                                   Syntax.compExpected = Just defname }
     (Nothing, Just actual') ->
       -- We have no expected component name, but do have an actual
@@ -1039,14 +1042,16 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
         defname = last actual'
       in do
         accum <- foldM (collectElement Public) emptyTempScope scope
-        return Syntax.Component { Syntax.compScope = makeScope accum,
+        newscope <- makeScope accum
+        return Syntax.Component { Syntax.compScope = newscope,
                                   Syntax.compExpected = Just defname }
     (Nothing, Nothing) ->
       -- We don't have anything.  There is no expected definition
       -- name, and everything at the top level is public.
       do
         accum <- foldM (collectElement Public) emptyTempScope scope
-        return Syntax.Component { Syntax.compScope = makeScope accum,
+        newscope <- makeScope accum
+        return Syntax.Component { Syntax.compScope = newscope,
                                   Syntax.compExpected = Nothing }
 
 -- | Get the file name for a component.
@@ -1104,8 +1109,11 @@ collectComponent :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                  -> m ()
 collectComponent parseFunc pos cname =
   let
-    emptyComponent = Syntax.Component { Syntax.compExpected = Nothing,
-                                        Syntax.compScope = emptyScope }
+    addEmpty =
+      do
+        emptyScope <- makeScope emptyTempScope
+        addComponent cname Syntax.Component { Syntax.compExpected = Nothing,
+                                              Syntax.compScope = emptyScope }
 
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
       collectComponent parseFunc upos uname
@@ -1115,7 +1123,7 @@ collectComponent parseFunc pos cname =
         -- Call the loader to get the file contents.
         loaded <- loadComponent cname pos
         case loaded of
-          Nothing -> addComponent cname emptyComponent
+          Nothing -> addEmpty
           Just (fname, content) ->
             -- Otherwise, continue
             do
@@ -1128,7 +1136,7 @@ collectComponent parseFunc pos cname =
                     scope <- collectAST fpos (Just cname) ast
                     addComponent cname scope
                     mapM_ collectUse uses
-                Nothing -> addComponent cname emptyComponent
+                Nothing -> addEmpty
   in do
     done <- componentExists cname
     unless done loadAndCollect

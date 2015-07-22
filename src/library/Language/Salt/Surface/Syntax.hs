@@ -90,6 +90,8 @@ data Component =
 -- syntax directives, truths, proofs, and regular definitions.
 data Scope =
   Scope {
+    -- The ID of the scope.
+    scopeID :: ScopeID,
     -- | All the builders defined in this scope.
     scopeBuilders :: !(HashMap Symbol Builder),
     -- | The syntax directives for this scope.
@@ -1511,17 +1513,17 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Scope where
   xpickle =
-    xpWrap (\(builders, syntax, truths, defs, proofs) ->
-             Scope { scopeBuilders = builders, scopeSyntax = syntax,
-                     scopeTruths = truths, scopeElems = defs,
-                     scopeProofs = proofs },
-            \Scope { scopeBuilders = builders, scopeSyntax = syntax,
-                     scopeTruths = truths, scopeElems = defs,
-                     scopeProofs = proofs } ->
-            (builders, syntax, truths, defs, proofs))
-           (xpElemNodes (gxFromString "Scope")
-                        (xp5Tuple mapPickler mapPickler mapPickler
-                                  defsPickler (xpList xpickle)))
+    xpWrap (\(scopeid, (builders, syntax, truths, defs, proofs)) ->
+             Scope { scopeID = scopeid, scopeBuilders = builders,
+                     scopeSyntax = syntax, scopeTruths = truths,
+                     scopeElems = defs, scopeProofs = proofs },
+            \Scope { scopeID = scopeid, scopeBuilders = builders,
+                     scopeSyntax = syntax, scopeTruths = truths,
+                     scopeElems = defs, scopeProofs = proofs } ->
+            (scopeid, (builders, syntax, truths, defs, proofs)))
+           (xpElem (gxFromString "Scope") xpickle
+                   (xp5Tuple mapPickler mapPickler mapPickler
+                             defsPickler (xpList xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Builder where
