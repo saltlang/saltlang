@@ -69,7 +69,7 @@ module Language.Salt.Message(
        cannotCreateFile,
        cannotCreateArtifact,
        importNestedScope,
-       badStaticExp
+       internalError
        ) where
 
 import Control.Monad.Messages
@@ -256,9 +256,13 @@ data Message =
   | ImportNestedScope {
       importNestedScopePos :: !Position
     }
-  | BadStaticExp {
-      badStaticExpPos :: !Position
+    -- | Internal error arising from an unexpected constructor for a static expr
+    -- ession.
+  | InternalError {
+      internalErrorStr :: !Strict.ByteString,
+      internalErrorPos :: !Position
     }
+
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -398,7 +402,7 @@ instance Hashable Message where
     cname `hashWithSalt` filename `hashWithSalt` msg
   hashWithSalt s ImportNestedScope { importNestedScopePos = pos } =
     s `hashWithSalt` (31 :: Int) `hashWithSalt` pos
-  hashWithSalt s BadStaticExp { badStaticExpPos = pos } =
+  hashWithSalt s InternalError { internalErrorPos = pos } =
     s `hashWithSalt` (32 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
@@ -434,7 +438,7 @@ instance Msg.Message Message where
   severity BadComponentName {} = Msg.Error
   severity CannotCreate {} = Msg.Error
   severity ImportNestedScope {} = Msg.Error
-  severity BadStaticExp {} = Msg.Internal
+  severity InternalError {} = Msg.Internal
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -492,7 +496,7 @@ instance Msg.Message Message where
   brief CannotCreate { cannotCreateName = Just cname } =
     string "Cannot create file for" <+> bytestring cname
   brief ImportNestedScope {} = string "Importing from a nested scope"
-  brief BadStaticExp {} = string "Expression is not a static expression"
+  brief InternalError { internalErrorStr = str } = bytestring str
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -577,7 +581,7 @@ instance Msg.MessagePosition BasicPosition Message where
   position BadComponentName { badComponentNamePos = pos } = Just pos
   position CannotCreate {} = Nothing
   position ImportNestedScope { importNestedScopePos = pos } = Just pos
-  position BadStaticExp { badStaticExpPos = pos } = Just pos
+  position InternalError { internalErrorPos = pos } = Just pos
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -928,8 +932,11 @@ importNestedScope :: MonadMessages Message m =>
 importNestedScope pos = message ImportNestedScope { importNestedScopePos = pos }
 
 -- | Report a bad static expression.  This is an internal error.
-badStaticExp :: MonadMessages Message m =>
-                Position
-             -- ^ The position at which the nameless field occurs.
-             -> m ()
-badStaticExp pos = message ImportNestedScope { importNestedScopePos = pos }
+internalError :: MonadMessages Message m =>
+                 Strict.ByteString
+              -- ^ An explanation of the problem
+              -> Position
+              -- ^ The position at which the nameless field occurs.
+              -> m ()
+internalError str pos = message InternalError { internalErrorStr = str,
+                                                internalErrorPos = pos }
