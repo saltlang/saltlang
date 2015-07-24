@@ -39,7 +39,8 @@ module Language.Salt.Core.Syntax(
        Pattern(..),
        Element(..),
        Case(..),
-       Term(..),
+       Intro(..),
+       Elim(..),
        Cmd(..),
        Comp(..)
        ) where
@@ -129,9 +130,9 @@ data Pattern bound const free =
 data Case bound free =
   Case {
     -- | the pattern for this case.
-    casePat :: Pattern bound (Term bound) free,
+    casePat :: Pattern bound (Intro bound) free,
     -- | The body of the case.
-    caseBody :: Scope bound (Term bound) free,
+    caseBody :: Scope bound (Intro bound) free,
     -- | The position in source from which this originates.
     casePos :: !DWARFPosition
   }
@@ -144,9 +145,9 @@ data Element bound free =
     -- | The name of the element.
     elemName :: !bound,
     -- | The binding pattern of the element.
-    elemPat :: Pattern bound (Term bound) free,
+    elemPat :: Pattern bound (Intro bound) free,
     -- | The type of the element.
-    elemType :: Scope bound (Term bound) free,
+    elemType :: Scope bound (Intro bound) free,
     -- | The position in source from which this originates.
     elemPos :: !DWARFPosition
   }
@@ -162,7 +163,7 @@ data Element bound free =
 -- Elimination terms are those terms whose type can be inferred in
 -- type checking.  Introduction terms are those terms that require a
 -- type to be checked against.
-data Term bound free =
+data Intro bound free =
   -- Types.  These do not support decidable equality.  As such, they
   -- cannot be the result of a computation, and cannot appear in
   -- patterns.
@@ -174,7 +175,7 @@ data Term bound free =
       funcTypeArgs :: [Element bound free],
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
-      funcTypeRetTy :: Scope bound (Term bound) free,
+      funcTypeRetTy :: Scope bound (Intro bound) free,
       -- | The position in source from which this originates.
       funcTypePos :: !DWARFPosition
     }
@@ -194,7 +195,7 @@ data Term bound free =
   -- satisfying a given proposition.
   | RefineType {
       -- | The base type.
-      refineType :: Term bound free,
+      refineType :: Intro bound free,
       -- | Binding patterns and propositions for values of the base
       -- type.  These express the constraints on the base type.
       refineCases :: [Case bound free],
@@ -206,7 +207,7 @@ data Term bound free =
   -- behavior.
   | CompType {
       -- | The result type of the computation.
-      compType :: Term bound free,
+      compType :: Intro bound free,
       -- | Binding patterns and behavior specifications for values of
       -- the return type.  These express the constraints on the base
       -- type.
@@ -219,70 +220,20 @@ data Term bound free =
   -- they cannot be the result of a computation, and cannot appear in
   -- a pattern.
 
-  -- | Universal quantifier proposition.
+  -- | Quantified proposition.
   | Quantified {
       -- | The kind of quantification this represents (forall/exists).
       quantKind :: !Quantifier,
       -- | The type of the quantifier variable.  If a sum type is
       -- used, this will be treated similarly to a multi-argument
       -- function.
-      quantType :: Term bound free,
+      quantType :: Intro bound free,
       -- | A case statement which denotes a proposition.
       quantCases :: [Case bound free],
       -- | The position in source from which this originates.
       quantPos :: !DWARFPosition
     }
-
-  -- Elimination Terms.  These terms generate a type in type checking.
-
-  -- | Call term.  Represents a call to a function.  The type of the
-  -- term comes from the called function's return type.
-  --
-  -- As with structures, calls can be named or ordered in surface
-  -- syntax.  Also similar to structures, ordered calls are
-  -- transliterated into named calls with parameter names "1", "2",
-  -- and so on.
-  | Call {
-      -- | The arguments to the call.  These are introduction terms.
-      callArgs :: HashMap bound (Term bound free),
-      -- | The function being called.  This must be an elimination
-      -- term.
-      callFunc :: Term bound free,
-      -- | The position in source from which this originates.
-      callPos :: !DWARFPosition
-    }
-  -- | A typed term.  This is an introduction term with an explicit
-  -- type tag, which makes it an elimination term.
-  | Typed {
-      -- | The introduction term being typed.
-      typedTerm :: Term bound free,
-      -- | The type of the introduction term.
-      typedType :: Term bound free,
-      -- | The position in source from which this originates.
-      typedPos :: !DWARFPosition
-    }
-  -- | A variable symbol.  Since we know the types of all variables,
-  -- this is an elimination term.
-  | Var {
-      -- | The underlying symbol.
-      varSym :: !free,
-      -- | The position in source from which this originates.
-      varPos :: !DWARFPosition
-    }
-
-  -- Introduction Terms.  These terms require a type in type checking.
-
-  -- | An eta expansion.  This is present for type checking only.
-  -- This represents a "frozen" substitution.
-  --
-  -- XXX Quite possibly this will be removed
-  | Eta {
-      etaTerm :: Term bound free,
-      etaType :: Term bound free,
-      -- | The position in source from which this originates.
-      etaPos :: !DWARFPosition
-    }
-  -- | A lambda expression.  Represents a function value.  Lambdas
+-- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
   --
   -- Lambdas will ultimately need to be extended to support
@@ -294,12 +245,23 @@ data Term bound free =
       -- | The position in source from which this originates.
       lambdaPos :: !DWARFPosition
     }
+
+  -- | An eta expansion.  This is present for type checking only.
+  -- This represents a "frozen" substitution.
+  --
+  -- XXX Quite possibly this will be removed
+  | Eta {
+      etaTerm :: Elim bound free,
+      etaType :: Intro bound free,
+      -- | The position in source from which this originates.
+      etaPos :: !DWARFPosition
+    }
   -- | A structure.  Structures can be named or ordered in the surface
   -- syntax.  Ordered structures are transliterated into named
   -- structures, with the fields "1", "2", and so on.
   | Record {
       -- | The bindings for this record.  These are introduction terms.
-      recFields :: HashMap bound (Term bound free),
+      recFields :: !(HashMap bound (Intro bound free)),
       -- | The position in source from which this originates.
       recPos :: !DWARFPosition
     }
@@ -307,7 +269,7 @@ data Term bound free =
   -- bound to a name.  Each of the members of the group may reference
   -- eachother.
   | Fix {
-      fixTerms :: HashMap bound (Scope bound (Term bound) free),
+      fixTerms :: !(HashMap bound (Scope bound (Intro bound) free)),
       -- | The position in source from which this originates.
       fixPos :: !DWARFPosition
     }
@@ -318,9 +280,60 @@ data Term bound free =
       -- | The position in source from which this originates.
       compPos :: !DWARFPosition
     }
+    -- | An elimination term presented as an introduction term.
+  | Elim {
+      -- | The wrapped elimination term.
+      elimTerm :: Elim bound free
+    }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
-  | BadTerm !DWARFPosition
+  | BadIntro {
+      -- | The position in source from which this originates.
+      badIntroPos :: !DWARFPosition
+    }
+
+  -- | Elimination Terms.  These terms generate a type in type checking.
+data Elim bound free =
+  -- | Call term.  Represents a call to a function.  The type of the
+  -- term comes from the called function's return type.
+  --
+  -- As with structures, calls can be named or ordered in surface
+  -- syntax.  Also similar to structures, ordered calls are
+  -- transliterated into named calls with parameter names "1", "2",
+  -- and so on.
+    Call {
+      -- | The arguments to the call.  These are introduction terms.
+      callArgs :: HashMap bound (Intro bound free),
+      -- | The function being called.  This must be an elimination
+      -- term.
+      callFunc :: Elim bound free,
+      -- | The position in source from which this originates.
+      callPos :: !DWARFPosition
+    }
+  -- | A typed term.  This is an introduction term with an explicit
+  -- type tag, which makes it an elimination term.
+  | Typed {
+      -- | The introduction term being typed.
+      typedTerm :: Elim bound free,
+      -- | The type of the introduction term.
+      typedType :: Intro bound free,
+      -- | The position in source from which this originates.
+      typedPos :: !DWARFPosition
+    }
+  -- | A variable symbol.  Since we know the types of all variables,
+  -- this is an elimination term.
+  | Var {
+      -- | The underlying symbol.
+      varSym :: !free,
+      -- | The position in source from which this originates.
+      varPos :: !DWARFPosition
+    }
+  -- | Placeholder for a malformed term, allowing type checking to
+  -- continue in spite of errors.
+  | BadElim {
+      -- | The position in source from which this originates.
+      badElimPos :: !DWARFPosition
+    }
 
 -- | Commands.  These represent individual statements, or combinations
 -- thereof, which do not bind variables.
@@ -338,7 +351,7 @@ data Term bound free =
 data Cmd bound free =
     Value {
       -- | The term representing the value of this command
-      valTerm :: Term bound free,
+      valTerm :: Intro bound free,
       -- | The position in source from which this originates.
       valPos :: !DWARFPosition
     }
@@ -346,13 +359,16 @@ data Cmd bound free =
   -- computations produced by terms.
   | Eval {
       -- | The computation value to evaluate
-      evalTerm :: Term bound free,
+      evalTerm :: Intro bound free,
       -- | The position in source from which this originates.
       evalPos :: !DWARFPosition
     }
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
-  | BadCmd !DWARFPosition
+  | BadCmd {
+      -- | The position in source from which this originates.
+      badCmdPos :: !DWARFPosition
+    }
 
 -- | Computations. Semantically, computations are generators for
 -- sequences of atomic actions, which are not guaranteed to terminate,
@@ -369,9 +385,9 @@ data Comp bound free =
   -- | A sequential composition of terms.
     Seq {
       -- | The pattern to which to bind the result of seqCmd.
-      seqPat :: Pattern bound (Term bound) free,
+      seqPat :: Pattern bound (Intro bound) free,
       -- | The type being bound.
-      seqType :: Term bound free,
+      seqType :: Intro bound free,
       -- | The command to execute.
       seqCmd :: Cmd bound free,
       -- | The next computation to execute.
@@ -388,7 +404,10 @@ data Comp bound free =
     }
   -- | Placeholder for a malformed computation, allowing type checking
   -- to continue in spite of errors.
-  | BadComp !DWARFPosition
+  | BadComp {
+      -- | The position in source from which this originates.
+      badCompPos :: !DWARFPosition
+    }
 
 instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
@@ -414,7 +433,7 @@ instance Eq b => Eq1 (Element b) where
     Element { elemType = ty2, elemPat = pat2, elemName = sym2 } =
     sym1 == sym2 && ty1 ==# ty2 && pat1 ==# pat2
 
-instance Eq b => Eq1 (Term b) where
+instance Eq b => Eq1 (Intro b) where
   FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 } ==#
     FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
       argtys1 ==# argtys2 && retty1 ==# retty2
@@ -429,23 +448,29 @@ instance Eq b => Eq1 (Term b) where
   Quantified { quantKind = kind1, quantType = ty1, quantCases = cases1 } ==#
     Quantified { quantKind = kind2, quantType = ty2, quantCases = cases2 } =
       kind1 == kind2 && ty1 ==# ty2 && cases1 ==# cases2
-  Call { callArgs = args1, callFunc = func1 } ==#
-    Call { callArgs = args2, callFunc = func2 } =
-      args1 == args2 && func1 ==# func2
-  Var { varSym = sym1 } ==# Var { varSym = sym2 } = sym1 == sym2
-  Typed { typedTerm = term1, typedType = ty1 } ==#
-    Typed { typedTerm = term2, typedType = ty2 } =
-      term1 ==# term2 && ty1 ==# ty2
+  Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
+    cases1 == cases2
   Eta { etaTerm = term1, etaType = ty1 } ==#
     Eta { etaTerm = term2, etaType = ty2 } =
       term1 ==# term2 && ty1 ==# ty2
-  Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
-    cases1 == cases2
   Record { recFields = vals1 } ==# Record { recFields = vals2 } = vals1 == vals2
   Fix { fixTerms = terms1 } ==# Fix { fixTerms = terms2 } = terms1 == terms2
   Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
-  BadTerm _ ==# BadTerm _ = True
+  Elim { elimTerm = term1 } ==# Elim { elimTerm = term2 } = term1 ==# term2
+  BadIntro {} ==# BadIntro {} = True
   _ ==# _ = False
+
+instance Eq b => Eq1 (Elim b) where
+  Call { callArgs = args1, callFunc = func1 } ==#
+    Call { callArgs = args2, callFunc = func2 } =
+      args1 == args2 && func1 ==# func2
+  Typed { typedTerm = term1, typedType = ty1 } ==#
+    Typed { typedTerm = term2, typedType = ty2 } =
+      term1 ==# term2 && ty1 ==# ty2
+  Var { varSym = sym1 } ==# Var { varSym = sym2 } = sym1 == sym2
+  BadElim {} ==# BadElim {} = True
+  _ ==# _ = False
+
 
 instance Eq b => Eq1 (Cmd b) where
   Value { valTerm = term1 } ==# Value { valTerm = term2 } = term1 ==# term2
@@ -466,7 +491,8 @@ instance Eq b => Eq1 (Comp b) where
 instance (Eq b, Eq s, Eq1 t) => Eq (Pattern b t s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Case b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Element b s) where (==) = (==#)
-instance (Eq b, Eq s) => Eq (Term b s) where (==) = (==#)
+instance (Eq b, Eq s) => Eq (Intro b s) where (==) = (==#)
+instance (Eq b, Eq s) => Eq (Elim b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Cmd b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
 
@@ -515,7 +541,7 @@ instance Ord b => Ord1 (Element b) where
         out -> out
       out -> out
 
-instance Ord b => Ord1 (Term b) where
+instance Ord b => Ord1 (Intro b) where
   compare1 FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 }
            FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
     case compare1 retty1 retty2 of
@@ -553,24 +579,6 @@ instance Ord b => Ord1 (Term b) where
       out -> out
   compare1 Quantified {} _ = GT
   compare1 _ Quantified {} = LT
-  compare1 Call { callArgs = args1, callFunc = func1 }
-           Call { callArgs = args2, callFunc = func2 } =
-    case compare1 func1 func2 of
-      EQ -> compare (sortBy keyOrd (HashMap.toList args1))
-                    (sortBy keyOrd (HashMap.toList args2))
-      out -> out
-  compare1 Call {} _ = GT
-  compare1 _ Call {} = LT
-  compare1 Var { varSym = sym1 } Var { varSym = sym2 } = compare sym1 sym2
-  compare1 Var {} _ = GT
-  compare1 _ Var {} = LT
-  compare1 Typed { typedTerm = term1, typedType = ty1 }
-           Typed { typedTerm = term2, typedType = ty2 } =
-    case compare1 term1 term2 of
-      EQ -> compare ty1 ty2
-      out -> out
-  compare1 Typed {} _ = GT
-  compare1 _ Typed {} = LT
   compare1 Eta { etaTerm = term1, etaType = ty1 }
            Eta { etaTerm = term2, etaType = ty2 } =
     case compare1 term1 term2 of
@@ -596,7 +604,32 @@ instance Ord b => Ord1 (Term b) where
     compare1 body1 body2
   compare1 Comp {} _ = GT
   compare1 _ Comp {} = LT
-  compare1 (BadTerm _) (BadTerm _) = EQ
+  compare1 Elim { elimTerm = term1 } Elim { elimTerm = term2 } =
+    compare1 term1 term2
+  compare1 Elim {} _ = GT
+  compare1 _ Elim {} = LT
+  compare1 BadIntro {} BadIntro {} = EQ
+
+instance Ord b => Ord1 (Elim b) where
+  compare1 Call { callArgs = args1, callFunc = func1 }
+           Call { callArgs = args2, callFunc = func2 } =
+    case compare1 func1 func2 of
+      EQ -> compare (sortBy keyOrd (HashMap.toList args1))
+                    (sortBy keyOrd (HashMap.toList args2))
+      out -> out
+  compare1 Call {} _ = GT
+  compare1 _ Call {} = LT
+  compare1 Typed { typedTerm = term1, typedType = ty1 }
+           Typed { typedTerm = term2, typedType = ty2 } =
+    case compare1 term1 term2 of
+      EQ -> compare ty1 ty2
+      out -> out
+  compare1 Typed {} _ = GT
+  compare1 _ Typed {} = LT
+  compare1 Var { varSym = sym1 } Var { varSym = sym2 } = compare sym1 sym2
+  compare1 Var {} _ = GT
+  compare1 _ Var {} = LT
+  compare1 BadElim {} BadElim {} = EQ
 
 instance Ord b => Ord1 (Cmd b) where
   compare1 Value { valTerm = term1 } Value { valTerm = term2 } =
@@ -632,7 +665,8 @@ instance (Ord b, Ord s, Ord1 t) => Ord (Pattern b t s) where
   compare = compare1
 instance (Ord b, Ord s) => Ord (Case b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Element b s) where compare = compare1
-instance (Ord b, Ord s) => Ord (Term b s) where compare = compare1
+instance (Ord b, Ord s) => Ord (Intro b s) where compare = compare1
+instance (Ord b, Ord s) => Ord (Elim b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Comp b s) where compare = compare1
 
@@ -657,7 +691,7 @@ instance (Hashable b, Ord b) => Hashable1 (Element b) where
   hashWithSalt1 s Element { elemName = sym, elemPat = pat, elemType = ty } =
     (s `hashWithSalt` sym) `hashWithSalt1` pat `hashWithSalt1` ty
 
-instance (Hashable b, Ord b) => Hashable1 (Term b) where
+instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` argtys `hashWithSalt` retty
   hashWithSalt1 s RecordType { recTypeBody = body } =
@@ -672,26 +706,31 @@ instance (Hashable b, Ord b) => Hashable1 (Term b) where
   hashWithSalt1 s Quantified { quantKind = Exists, quantType = ty,
                                quantCases = cases } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
-  hashWithSalt1 s Call { callArgs = args, callFunc = func } =
-    (s `hashWithSalt` (7 :: Int) `hashWithSalt`
-     sortBy keyOrd (HashMap.toList args)) `hashWithSalt1` func
-  hashWithSalt1 s Var { varSym = sym } =
-    s `hashWithSalt` (8 :: Int) `hashWithSalt` sym
-  hashWithSalt1 s Typed { typedTerm = term, typedType = ty } =
-    s `hashWithSalt` (9 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
   hashWithSalt1 s Eta { etaTerm = term, etaType = ty } =
-    s `hashWithSalt` (10 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
+    s `hashWithSalt` (7 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
   hashWithSalt1 s Lambda { lambdaCases = cases } =
-    s `hashWithSalt` (11 :: Int) `hashWithSalt1` cases
+    s `hashWithSalt` (8 :: Int) `hashWithSalt1` cases
   hashWithSalt1 s Record { recFields = vals } =
-    s `hashWithSalt` (12 :: Int) `hashWithSalt1`
+    s `hashWithSalt` (9 :: Int) `hashWithSalt1`
     sortBy keyOrd (HashMap.toList vals)
   hashWithSalt1 s Fix { fixTerms = terms } =
-    s `hashWithSalt` (13 :: Int) `hashWithSalt1`
+    s `hashWithSalt` (10 :: Int) `hashWithSalt1`
     sortBy keyOrd (HashMap.toList terms)
   hashWithSalt1 s Comp { compBody = body } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt1` body
-  hashWithSalt1 s (BadTerm _) = s `hashWithSalt` (0 :: Int)
+    s `hashWithSalt` (11 :: Int) `hashWithSalt1` body
+  hashWithSalt1 s Elim { elimTerm = term } =
+    s `hashWithSalt` (12 :: Int) `hashWithSalt1` term
+  hashWithSalt1 s BadIntro {} = s `hashWithSalt` (0 :: Int)
+
+instance (Hashable b, Ord b) => Hashable1 (Elim b) where
+  hashWithSalt1 s Call { callArgs = args, callFunc = func } =
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt`
+     sortBy keyOrd (HashMap.toList args)) `hashWithSalt1` func
+  hashWithSalt1 s Typed { typedTerm = term, typedType = ty } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
+  hashWithSalt1 s Var { varSym = sym } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` sym
+  hashWithSalt1 s BadElim {} = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable b, Ord b) => Hashable1 (Cmd b) where
   hashWithSalt1 s Value { valTerm = term } =
@@ -719,7 +758,10 @@ instance (Hashable b, Hashable s, Ord b) => Hashable (Case b s) where
 instance (Hashable b, Hashable s, Ord b) => Hashable (Element b s) where
   hashWithSalt = hashWithSalt1
 
-instance (Hashable b, Hashable s, Ord b) => Hashable (Term b s) where
+instance (Hashable b, Hashable s, Ord b) => Hashable (Intro b s) where
+  hashWithSalt = hashWithSalt1
+
+instance (Hashable b, Hashable s, Ord b) => Hashable (Elim b s) where
   hashWithSalt = hashWithSalt1
 
 instance (Hashable b, Hashable s, Ord b) => Hashable (Cmd b s) where
@@ -743,7 +785,7 @@ instance Functor (Element b) where
   fmap f e @ Element { elemPat = pat, elemType = ty } =
     e { elemPat = fmap f pat, elemType = fmap f ty }
 
-instance Functor (Term b) where
+instance Functor (Intro b) where
   fmap f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     t { funcTypeArgs = fmap (fmap f) argtys, funcTypeRetTy = fmap f retty }
   fmap f t @ RecordType { recTypeBody = body } =
@@ -754,11 +796,6 @@ instance Functor (Term b) where
     t { compType = fmap f ty, compCases = fmap (fmap f) cases }
   fmap f t @ Quantified { quantType = ty, quantCases = cases } =
     t { quantType = fmap f ty, quantCases = fmap (fmap f) cases }
-  fmap f t @ Call { callArgs = args, callFunc = func } =
-    t { callArgs = fmap (fmap f) args, callFunc = fmap f func }
-  fmap f t @ Var { varSym = sym } = t { varSym = f sym }
-  fmap f t @ Typed { typedTerm = term, typedType = ty } =
-    t { typedTerm = fmap f term, typedType = fmap f ty }
   fmap f t @ Eta { etaTerm = term, etaType = ty } =
     t { etaTerm = fmap f term, etaType = fmap f ty }
   fmap f t @ Lambda { lambdaCases = cases } =
@@ -766,7 +803,16 @@ instance Functor (Term b) where
   fmap f t @ Record { recFields = vals } = t { recFields = fmap (fmap f) vals }
   fmap f t @ Fix { fixTerms = terms } = t { fixTerms = fmap (fmap f) terms }
   fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
-  fmap _ (BadTerm p) = BadTerm p
+  fmap f t @ Elim { elimTerm = term } = t { elimTerm = fmap f term }
+  fmap _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
+
+instance Functor (Elim b) where
+  fmap f t @ Call { callArgs = args, callFunc = func } =
+    t { callArgs = fmap (fmap f) args, callFunc = fmap f func }
+  fmap f t @ Typed { typedTerm = term, typedType = ty } =
+    t { typedTerm = fmap f term, typedType = fmap f ty }
+  fmap f t @ Var { varSym = sym } = t { varSym = f sym }
+  fmap _ BadElim { badElimPos = p } = BadElim { badElimPos = p }
 
 instance Functor (Cmd b) where
   fmap f c @ Eval { evalTerm = term } = c { evalTerm = fmap f term }
@@ -794,7 +840,7 @@ instance Foldable (Element b) where
   foldMap f Element { elemPat = pat, elemType = ty } =
     foldMap f pat `mappend` foldMap f ty
 
-instance Foldable (Term b) where
+instance Foldable (Intro b) where
   foldMap f FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     foldMap (foldMap f) argtys `mappend` foldMap f retty
   foldMap f RecordType { recTypeBody = body } = foldMap (foldMap f) body
@@ -804,18 +850,22 @@ instance Foldable (Term b) where
     foldMap f ty `mappend` foldMap (foldMap f) cases
   foldMap f Quantified { quantType = ty, quantCases = cases } =
     foldMap f ty `mappend` foldMap (foldMap f) cases
-  foldMap f Call { callArgs = args, callFunc = func } =
-    foldMap (foldMap f) args `mappend` foldMap f func
-  foldMap f Var { varSym = sym } = f sym
-  foldMap f Typed { typedTerm = term, typedType = ty } =
-    foldMap f term `mappend` foldMap f ty
   foldMap f Eta { etaTerm = term, etaType = ty } =
     foldMap f term `mappend` foldMap f ty
   foldMap f Lambda { lambdaCases = cases } = foldMap (foldMap f) cases
   foldMap f Record { recFields = vals } = foldMap (foldMap f) vals
   foldMap f Fix { fixTerms = terms } = foldMap (foldMap f) terms
   foldMap f Comp { compBody = body } = foldMap f body
-  foldMap _ (BadTerm _) = mempty
+  foldMap f Elim { elimTerm = term } = foldMap f term
+  foldMap _ BadIntro {} = mempty
+
+instance Foldable (Elim b) where
+  foldMap f Call { callArgs = args, callFunc = func } =
+    foldMap (foldMap f) args `mappend` foldMap f func
+  foldMap f Typed { typedTerm = term, typedType = ty } =
+    foldMap f term `mappend` foldMap f ty
+  foldMap f Var { varSym = sym } = f sym
+  foldMap _ BadElim {} = mempty
 
 instance Foldable (Cmd b) where
   foldMap f Value { valTerm = term } = foldMap f term
@@ -848,7 +898,7 @@ instance Traversable (Element b) where
     (\pat' ty' -> c { elemPat = pat', elemType = ty' }) <$>
       traverse f pat <*> traverse f ty
 
-instance Traversable (Term b) where
+instance Traversable (Intro b) where
   traverse f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     (\argtys' retty' -> t { funcTypeArgs = argtys', funcTypeRetTy = retty' }) <$>
       traverse (traverse f) argtys <*> traverse f retty
@@ -863,14 +913,6 @@ instance Traversable (Term b) where
   traverse f t @ Quantified { quantType = ty, quantCases = cases } =
     (\ty' cases' -> t { quantType = ty', quantCases = cases' }) <$>
       traverse f ty <*> traverse (traverse f) cases
-  traverse f t @ Call { callArgs = args, callFunc = func } =
-    (\args' func' -> t { callArgs = args', callFunc = func' }) <$>
-      traverse (traverse f) args <*> traverse f func
-  traverse f t @ Var { varSym = sym } =
-    (\sym' -> t { varSym = sym' }) <$> f sym
-  traverse f t @ Typed { typedTerm = term, typedType = ty } =
-    (\term' ty' -> t { typedTerm = term', typedType = ty' }) <$>
-      traverse f term <*> traverse f ty
   traverse f t @ Eta { etaTerm = term, etaType = ty } =
     (\term' ty' -> t { etaTerm = term', etaType = ty' }) <$>
       traverse f term <*> traverse f ty
@@ -882,7 +924,20 @@ instance Traversable (Term b) where
     (\terms' -> t { fixTerms = terms' }) <$> traverse (traverse f) terms
   traverse f c @ Comp { compBody = body } =
     (\body' -> c { compBody = body' }) <$> traverse f body
-  traverse _ (BadTerm p) = pure (BadTerm p)
+  traverse f t @ Elim { elimTerm = term } =
+    (\term' -> t { elimTerm = term' }) <$> traverse f term
+  traverse _ BadIntro { badIntroPos = p } = pure BadIntro { badIntroPos = p }
+
+instance Traversable (Elim b) where
+  traverse f t @ Call { callArgs = args, callFunc = func } =
+    (\args' func' -> t { callArgs = args', callFunc = func' }) <$>
+      traverse (traverse f) args <*> traverse f func
+  traverse f t @ Typed { typedTerm = term, typedType = ty } =
+    (\term' ty' -> t { typedTerm = term', typedType = ty' }) <$>
+      traverse f term <*> traverse f ty
+  traverse f t @ Var { varSym = sym } =
+    (\sym' -> t { varSym = sym' }) <$> f sym
+  traverse _ BadElim { badElimPos = p } = pure BadElim { badElimPos = p }
 
 instance Traversable (Cmd b) where
   traverse f c @ Value { valTerm = term } =
@@ -914,7 +969,11 @@ instance Bound (Pattern b) where
   b @ Name { nameSym = sym } >>>= _ = b { nameSym = sym }
   Constant t >>>= f = Constant (t >>= f)
 
-instance Applicative (Term b) where
+instance Applicative (Intro b) where
+  pure = return
+  (<*>) = ap
+
+instance Applicative (Elim b) where
   pure = return
   (<*>) = ap
 
@@ -922,81 +981,155 @@ instance Applicative (Comp b) where
   pure = return
   (<*>) = ap
 
-caseSubstTerm :: (a -> Term c b) -> Case c a -> Case c b
-caseSubstTerm f c @ Case { casePat = pat, caseBody = body } =
+caseSubstIntro :: (a -> Intro c b) -> Case c a -> Case c b
+caseSubstIntro f c @ Case { casePat = pat, caseBody = body } =
   c { casePat = pat >>>= f, caseBody = body >>>= f }
 
-elementSubstTerm :: (a -> Term c b) -> Element c a -> Element c b
-elementSubstTerm f e @ Element { elemPat = pat, elemType = ty } =
+elementSubstIntro :: (a -> Intro c b) -> Element c a -> Element c b
+elementSubstIntro f e @ Element { elemPat = pat, elemType = ty } =
   e { elemPat = pat >>>= f, elemType = ty >>>= f }
 
-cmdSubstTerm :: (a -> Term c b) -> Cmd c a -> Cmd c b
-cmdSubstTerm f c @ Value { valTerm = term } = c { valTerm = term >>= f }
-cmdSubstTerm f c @ Eval { evalTerm = term } = c { evalTerm = term >>= f }
-cmdSubstTerm _ (BadCmd p) = BadCmd p
+elimSubstIntro :: (a -> Intro c b) -> Elim c a -> Elim c b
+elimSubstIntro f t @ Call { callArgs = args, callFunc = func } =
+  t { callArgs = fmap (>>= f) args, callFunc = elimSubstIntro f func }
+elimSubstIntro f t @ Typed { typedTerm = term, typedType = ty } =
+  t { typedTerm = elimSubstIntro f term, typedType = ty >>= f }
+elimSubstIntro _ Var {} = error "Should not see this case"
+elimSubstIntro _ BadElim { badElimPos = p } = BadElim { badElimPos = p }
 
-compSubstTerm :: (a -> Term c b) -> Comp c a -> Comp c b
-compSubstTerm f c @ Seq { seqCmd = cmd, seqNext = next,
+cmdSubstIntro :: (a -> Intro c b) -> Cmd c a -> Cmd c b
+cmdSubstIntro f c @ Value { valTerm = term } = c { valTerm = term >>= f }
+cmdSubstIntro f c @ Eval { evalTerm = term } = c { evalTerm = term >>= f }
+cmdSubstIntro _ (BadCmd p) = BadCmd p
+
+compSubstIntro :: (a -> Intro c b) -> Comp c a -> Comp c b
+compSubstIntro f c @ Seq { seqCmd = cmd, seqNext = next,
                           seqType = ty, seqPat = pat } =
-  c { seqType = ty >>= f, seqPat = pat >>>= f, seqCmd = cmdSubstTerm f cmd,
-      seqNext = next >>>= compSubstTerm f . return }
-compSubstTerm f c @ End { endCmd = cmd } =
-  c { endCmd = cmdSubstTerm f cmd }
-compSubstTerm _ (BadComp p) = BadComp p
+  c { seqType = ty >>= f, seqPat = pat >>>= f, seqCmd = cmdSubstIntro f cmd,
+      seqNext = next >>>= compSubstIntro f . return }
+compSubstIntro f c @ End { endCmd = cmd } =
+  c { endCmd = cmdSubstIntro f cmd }
+compSubstIntro _ (BadComp p) = BadComp p
 
-instance Monad (Term b) where
-  return sym = Var { varSym = sym, varPos = injectpos }
+instance Monad (Intro b) where
+  return sym = Elim { elimTerm = Var { varSym = sym, varPos = injectpos } }
 
   t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } >>= f =
-    t { funcTypeArgs = fmap (elementSubstTerm f) argtys,
+    t { funcTypeArgs = fmap (elementSubstIntro f) argtys,
         funcTypeRetTy = retty >>>= f }
   t @ RecordType { recTypeBody = body } >>= f =
-    t { recTypeBody = fmap (elementSubstTerm f) body }
+    t { recTypeBody = fmap (elementSubstIntro f) body }
   t @ RefineType { refineType = ty, refineCases = cases } >>= f =
-    t { refineType = ty >>= f, refineCases = fmap (caseSubstTerm f) cases }
+    t { refineType = ty >>= f, refineCases = fmap (caseSubstIntro f) cases }
   t @ CompType { compType = ty, compCases = cases } >>= f =
-    t { compType = ty >>= f, compCases = fmap (caseSubstTerm f) cases }
+    t { compType = ty >>= f, compCases = fmap (caseSubstIntro f) cases }
   t @ Quantified { quantType = ty, quantCases = cases } >>= f =
-    t { quantCases = fmap (caseSubstTerm f) cases, quantType = ty >>= f }
-  t @ Call { callArgs = args, callFunc = func } >>= f =
-    t { callArgs = fmap (>>= f) args, callFunc = func >>= f }
-  Var { varSym = sym } >>= f = f sym
-  t @ Typed { typedTerm = term, typedType = ty } >>= f =
-    t { typedTerm = term >>= f, typedType = ty >>= f }
+    t { quantCases = fmap (caseSubstIntro f) cases, quantType = ty >>= f }
   t @ Lambda { lambdaCases = cases } >>= f =
-    t { lambdaCases = fmap (caseSubstTerm f) cases }
+    t { lambdaCases = fmap (caseSubstIntro f) cases }
   t @ Record { recFields = vals } >>= f = t { recFields = fmap (>>= f) vals }
   t @ Fix { fixTerms = terms } >>= f = t { fixTerms = fmap (>>>= f) terms }
-  t @ Comp { compBody = body } >>= f = t { compBody = compSubstTerm f body }
+  t @ Comp { compBody = body } >>= f = t { compBody = compSubstIntro f body }
+  Elim { elimTerm = Var { varSym = sym } } >>= f = f sym
+  t @ Elim { elimTerm = term } >>= f = t { elimTerm = elimSubstIntro f term }
   t @ Eta { etaTerm = term, etaType = ty } >>= f =
-    t { etaTerm = term >>= f, etaType = ty >>= f }
-  BadTerm p >>= _ = BadTerm p
+    t { etaTerm = elimSubstIntro f term, etaType = ty >>= f }
+  BadIntro { badIntroPos = p } >>= _ = BadIntro { badIntroPos = p }
 
-termSubstComp :: (a -> Comp c b) -> a -> Term c b
-termSubstComp f sym =
+caseSubstElim :: (a -> Elim c b) -> Case c a -> Case c b
+caseSubstElim f c @ Case { casePat = pat, caseBody = body } =
+  c { casePat = pat >>>= (Elim . f), caseBody = body >>>= (Elim . f) }
+
+elementSubstElim :: (a -> Elim c b) -> Element c a -> Element c b
+elementSubstElim f e @ Element { elemPat = pat, elemType = ty } =
+  e { elemPat = pat >>>= (Elim . f), elemType = ty >>>= (Elim . f) }
+
+cmdSubstElim :: (a -> Elim c b) -> Cmd c a -> Cmd c b
+cmdSubstElim f c @ Value { valTerm = term } =
+  c { valTerm = introSubstElim f term }
+cmdSubstElim f c @ Eval { evalTerm = term } =
+  c { evalTerm = introSubstElim f term }
+cmdSubstElim _ (BadCmd p) = BadCmd p
+
+compSubstElim :: (a -> Elim c b) -> Comp c a -> Comp c b
+compSubstElim f c @ Seq { seqCmd = cmd, seqNext = next,
+                          seqType = ty, seqPat = pat } =
+  c { seqType = introSubstElim f ty, seqPat = pat >>>= Elim . f,
+      seqCmd = cmdSubstElim f cmd,
+      seqNext = next >>>= compSubstElim f . return }
+compSubstElim f c @ End { endCmd = cmd } =
+  c { endCmd = cmdSubstElim f cmd }
+compSubstElim _ (BadComp p) = BadComp p
+
+introSubstElim :: (a -> Elim c b) -> Intro c a -> Intro c b
+introSubstElim f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
+  t { funcTypeArgs = fmap (elementSubstElim f) argtys,
+      funcTypeRetTy = retty >>>= (Elim . f) }
+introSubstElim f t @ RecordType { recTypeBody = body } =
+  t { recTypeBody = fmap (elementSubstElim f) body }
+introSubstElim f t @ RefineType { refineType = ty, refineCases = cases } =
+  t { refineType = introSubstElim f ty,
+      refineCases = fmap (caseSubstElim f) cases }
+introSubstElim f t @ CompType { compType = ty, compCases = cases } =
+  t { compType = introSubstElim f ty, compCases = fmap (caseSubstElim f) cases }
+introSubstElim f t @ Quantified { quantType = ty, quantCases = cases } =
+  t { quantCases = fmap (caseSubstElim f) cases,
+      quantType = introSubstElim f ty }
+introSubstElim f t @ Lambda { lambdaCases = cases } =
+    t { lambdaCases = fmap (caseSubstElim f) cases }
+introSubstElim f t @ Record { recFields = vals } =
+  t { recFields = fmap (introSubstElim f) vals }
+introSubstElim f t @ Fix { fixTerms = terms } =
+  t { fixTerms = fmap (>>>= Elim . f) terms }
+introSubstElim f t @ Comp { compBody = body } =
+  t { compBody = compSubstElim f body }
+introSubstElim f Elim { elimTerm = term } = Elim { elimTerm = term >>= f }
+introSubstElim f t @ Eta { etaTerm = term, etaType = ty } =
+  t { etaTerm = term >>= f, etaType = introSubstElim f ty }
+introSubstElim _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
+
+instance Monad (Elim b) where
+  return sym = Var { varSym = sym, varPos = injectpos }
+
+  t @ Call { callArgs = args, callFunc = func } >>= f =
+    t { callArgs = fmap (introSubstElim f) args, callFunc = func >>= f }
+  t @ Typed { typedTerm = term, typedType = ty } >>= f =
+    t { typedTerm = term >>= f, typedType = introSubstElim f ty }
+  Var { varSym = sym } >>= f = f sym
+  BadElim { badElimPos = p } >>= _ = BadElim { badElimPos = p }
+
+introSubstComp :: (a -> Comp c b) -> a -> Intro c b
+introSubstComp f sym =
   case f sym of
     End { endCmd = Eval { evalTerm = term } } -> term
     End { endCmd = Value { valTerm = term } } -> term
-    End { endCmd = BadCmd p } -> BadTerm p
+    End { endCmd = BadCmd p } -> BadIntro p
     body @ Seq { seqPos = pos } -> Comp { compBody = body, compPos = pos }
-    BadComp p -> BadTerm p
+    BadComp { badCompPos = p } -> BadIntro { badIntroPos = p }
 
 cmdSubstComp :: (a -> Comp c b) -> Cmd c a -> Cmd c b
 cmdSubstComp f c @ Value { valTerm = term } =
-  c { valTerm = term >>= termSubstComp f }
+  c { valTerm = term >>= introSubstComp f }
 cmdSubstComp f c @ Eval { evalTerm = term } =
-  c { evalTerm = term >>= termSubstComp f }
+  c { evalTerm = term >>= introSubstComp f }
 cmdSubstComp _ (BadCmd p) = BadCmd p
 
 instance Monad (Comp b) where
   return sym =
-    End { endCmd = Eval { evalTerm = Var { varSym = sym, varPos = injectpos },
-                          evalPos = injectpos },
-          endPos = injectpos }
+    End {
+      endCmd = Eval {
+                 evalTerm = Elim {
+                              elimTerm = Var { varSym = sym,
+                                               varPos = injectpos }
+                              },
+                 evalPos = injectpos
+               },
+      endPos = injectpos
+    }
 
   c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
-    c { seqType = ty >>= termSubstComp f, seqNext = next >>>= f,
-        seqPat = pat >>>= termSubstComp f, seqCmd = cmdSubstComp f cmd }
+    c { seqType = ty >>= introSubstComp f, seqNext = next >>>= f,
+        seqPat = pat >>>= introSubstComp f, seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
@@ -1088,7 +1221,7 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
                                 (string "type", tydoc)])
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
-         FormatM m (Term bound free) where
+         FormatM m (Intro bound free) where
   formatM Eta {} = error "Eta is going away"
   formatM FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
                      funcTypePos = pos } =
@@ -1136,31 +1269,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
                                 (string "kind", format kind),
                                 (string "type", tydoc),
                                 (string "cases", listDoc casedocs)])
-  formatM Call { callFunc = func, callArgs = args, callPos = pos } =
-    do
-      posdoc <- formatM pos
-      argsdoc <- formatMap args
-      funcdoc <- formatM func
-      return (compoundApplyDoc (string "Call")
-                               [(string "pos", posdoc),
-                                (string "func", funcdoc),
-                                (string "args", argsdoc)])
-  formatM Typed { typedTerm = term, typedType = ty, typedPos = pos } =
-    do
-      posdoc <- formatM pos
-      termdoc <- formatM term
-      typedoc <- formatM ty
-      return (compoundApplyDoc (string "Typed")
-                               [(string "pos", posdoc),
-                                (string "term", termdoc),
-                                (string "type", typedoc)])
-  formatM Var { varSym = sym, varPos = pos } =
-    do
-      posdoc <- formatM pos
-      symdoc <- formatM sym
-      return (compoundApplyDoc (string "Var")
-                               [(string "pos", posdoc),
-                                (string "sym", symdoc)])
   formatM Lambda { lambdaCases = cases, lambdaPos = pos } =
     do
       posdoc <- formatM pos
@@ -1189,10 +1297,46 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
       return (compoundApplyDoc (string "Comp")
                                [(string "pos", posdoc),
                                 (string "body", bodydoc)])
-  formatM (BadTerm pos) =
+  formatM Elim { elimTerm = term } =
+    do
+      termdoc <- formatM term
+      return (compoundApplyDoc (string "Elim") [(string "term", termdoc)])
+  formatM BadIntro { badIntroPos = pos } =
     do
       posdoc <- formatM pos
-      return (compoundApplyDoc (string "BadTerm") [(string "pos", posdoc)])
+      return (compoundApplyDoc (string "BadIntro") [(string "pos", posdoc)])
+
+instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+         FormatM m (Elim bound free) where
+  formatM Call { callFunc = func, callArgs = args, callPos = pos } =
+    do
+      posdoc <- formatM pos
+      argsdoc <- formatMap args
+      funcdoc <- formatM func
+      return (compoundApplyDoc (string "Call")
+                               [(string "pos", posdoc),
+                                (string "func", funcdoc),
+                                (string "args", argsdoc)])
+  formatM Typed { typedTerm = term, typedType = ty, typedPos = pos } =
+    do
+      posdoc <- formatM pos
+      termdoc <- formatM term
+      typedoc <- formatM ty
+      return (compoundApplyDoc (string "Typed")
+                               [(string "pos", posdoc),
+                                (string "term", termdoc),
+                                (string "type", typedoc)])
+  formatM Var { varSym = sym, varPos = pos } =
+    do
+      posdoc <- formatM pos
+      symdoc <- formatM sym
+      return (compoundApplyDoc (string "Var")
+                               [(string "pos", posdoc),
+                                (string "sym", symdoc)])
+  formatM BadElim { badElimPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "BadElim") [(string "pos", posdoc)])
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
          FormatM m (Cmd bound free) where
@@ -1391,7 +1535,7 @@ funcTypePickler :: (GenericXMLString tag, Show tag,
                     XmlPickler [NodeG [] tag text] bound,
                     XmlPickler [NodeG [] tag text] free,
                     Hashable bound, Eq bound) =>
-                   PU [NodeG [] tag text] (Term bound free)
+                   PU [NodeG [] tag text] (Intro bound free)
 funcTypePickler =
   let
     revfunc FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
@@ -1413,7 +1557,7 @@ recordTypePickler :: (GenericXMLString tag, Show tag,
                       XmlPickler [NodeG [] tag text] bound,
                       XmlPickler [NodeG [] tag text] free,
                       Hashable bound, Eq bound) =>
-                     PU [NodeG [] tag text] (Term bound free)
+                     PU [NodeG [] tag text] (Intro bound free)
 recordTypePickler =
   let
     revfunc RecordType { recTypeBody = body, recTypePos = pos } = (body, pos)
@@ -1432,7 +1576,7 @@ refineTypePickler :: (GenericXMLString tag, Show tag,
                       XmlPickler [NodeG [] tag text] bound,
                       XmlPickler [NodeG [] tag text] free,
                       Hashable bound, Eq bound) =>
-                     PU [NodeG [] tag text] (Term bound free)
+                     PU [NodeG [] tag text] (Intro bound free)
 refineTypePickler =
   let
     revfunc RefineType { refineType = ty, refineCases = cases,
@@ -1455,7 +1599,7 @@ compTypePickler :: (GenericXMLString tag, Show tag,
                     XmlPickler [NodeG [] tag text] bound,
                     XmlPickler [NodeG [] tag text] free,
                     Hashable bound, Eq bound) =>
-                   PU [NodeG [] tag text] (Term bound free)
+                   PU [NodeG [] tag text] (Intro bound free)
 compTypePickler =
   let
     revfunc RefineType { refineType = ty, refineCases = cases,
@@ -1478,7 +1622,7 @@ quantifiedPickler :: (GenericXMLString tag, Show tag,
                       XmlPickler [NodeG [] tag text] bound,
                       XmlPickler [NodeG [] tag text] free,
                       Hashable bound, Eq bound) =>
-                     PU [NodeG [] tag text] (Term bound free)
+                     PU [NodeG [] tag text] (Intro bound free)
 quantifiedPickler =
   let
     revfunc Quantified { quantKind = kind, quantType = ty, quantCases = cases,
@@ -1495,13 +1639,144 @@ quantifiedPickler =
                                                   xpickle))
                              (xpElemNodes (gxFromString "pos") xpickle)))
 
+lambdaPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [(tag, text)] bound,
+                  XmlPickler [NodeG [] tag text] bound,
+                  XmlPickler [NodeG [] tag text] free,
+                  Hashable bound, Eq bound) =>
+                 PU [NodeG [] tag text] (Intro bound free)
+lambdaPickler =
+  let
+    revfunc Lambda { lambdaCases = cases, lambdaPos = pos } = (cases, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(cases, pos) -> Lambda { lambdaCases = cases, lambdaPos = pos },
+            revfunc)
+           (xpElemNodes (gxFromString "Lambda")
+                        (xpPair (xpList (xpElemNodes (gxFromString "cases")
+                                                     xpickle))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+recordPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [(tag, text)] bound,
+                  XmlPickler [NodeG [] tag text] bound,
+                  XmlPickler [NodeG [] tag text] free,
+                  Hashable bound, Eq bound) =>
+                 PU [NodeG [] tag text] (Intro bound free)
+recordPickler =
+  let
+    revfunc Record { recFields = vals, recPos = pos } = (vals, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(vals, pos) -> Record { recFields = vals, recPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Record")
+                        (xpPair (xpElemNodes (gxFromString "fields")
+                                             (mapPickler "field"))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+fixPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler [(tag, text)] bound,
+               XmlPickler [NodeG [] tag text] bound,
+               XmlPickler [NodeG [] tag text] free,
+               Hashable bound, Eq bound) =>
+              PU [NodeG [] tag text] (Intro bound free)
+fixPickler =
+  let
+    revfunc Fix { fixTerms = terms, fixPos = pos } = (terms, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(terms, pos) -> Fix { fixTerms = terms, fixPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Fix")
+                        (xpPair (xpElemNodes (gxFromString "terms")
+                                             (mapPickler "term"))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+compPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [(tag, text)] bound,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Intro bound free)
+compPickler =
+  let
+    revfunc Comp { compBody = body, compPos = pos } = (body, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(body, pos) -> Comp { compBody = body, compPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Comp")
+                        (xpPair (xpElemNodes (gxFromString "body") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+elimPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [(tag, text)] bound,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Intro bound free)
+elimPickler =
+  let
+    revfunc Elim { elimTerm = term } = term
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Elim, revfunc)
+           (xpElemNodes (gxFromString "Elim")
+                        (xpElemNodes (gxFromString "term") xpickle))
+
+badIntroPickler :: (GenericXMLString tag, Show tag,
+                    GenericXMLString text, Show text,
+                    XmlPickler [NodeG [] tag text] bound,
+                    XmlPickler [NodeG [] tag text] free,
+                    Hashable bound, Eq bound) =>
+                   PU [NodeG [] tag text] (Intro bound free)
+badIntroPickler =
+  let
+    revfunc BadIntro { badIntroPos = pos } = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (BadIntro, revfunc)
+           (xpElemNodes (gxFromString "BadIntro")
+                        (xpElemNodes (gxFromString "pos") xpickle))
+
+instance (GenericXMLString tag, Show tag,
+          GenericXMLString text, Show text,
+          XmlPickler [(tag, text)] bound,
+          XmlPickler [NodeG [] tag text] bound,
+          XmlPickler [NodeG [] tag text] free,
+          Hashable bound, Eq bound) =>
+         XmlPickler [NodeG [] tag text] (Intro bound free) where
+  xpickle =
+    let
+      picker FuncType {} = 0
+      picker RecordType {} = 1
+      picker RefineType {} = 2
+      picker CompType {} = 3
+      picker Quantified {} = 4
+      picker Lambda {} = 5
+      picker Record {} = 6
+      picker Fix {} = 7
+      picker Comp {} = 8
+      picker Elim {} = 9
+      picker BadIntro {} = 10
+      picker Eta {} = error "Eta not supported"
+    in
+      xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
+                     compTypePickler, quantifiedPickler, lambdaPickler,
+                     recordPickler, fixPickler, compPickler,
+                     elimPickler, badIntroPickler ]
+
+
 callPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
                 XmlPickler [(tag, text)] bound,
                 XmlPickler [NodeG [] tag text] bound,
                 XmlPickler [NodeG [] tag text] free,
                 Hashable bound, Eq bound) =>
-               PU [NodeG [] tag text] (Term bound free)
+               PU [NodeG [] tag text] (Elim bound free)
 callPickler =
   let
     revfunc Call { callFunc = func, callArgs = args,
@@ -1523,7 +1798,7 @@ typedPickler :: (GenericXMLString tag, Show tag,
                  XmlPickler [NodeG [] tag text] bound,
                  XmlPickler [NodeG [] tag text] free,
                  Hashable bound, Eq bound) =>
-                PU [NodeG [] tag text] (Term bound free)
+                PU [NodeG [] tag text] (Elim bound free)
 typedPickler =
   let
     revfunc Typed { typedTerm = term, typedType = ty,
@@ -1542,7 +1817,7 @@ varPickler :: (GenericXMLString tag, Show tag,
                XmlPickler [NodeG [] tag text] bound,
                XmlPickler [NodeG [] tag text] free,
                Hashable bound, Eq bound) =>
-              PU [NodeG [] tag text] (Term bound free)
+              PU [NodeG [] tag text] (Elim bound free)
 varPickler =
   let
     revfunc Var { varSym = sym, varPos = pos } = (sym, pos)
@@ -1553,91 +1828,19 @@ varPickler =
                         (xpPair (xpElemNodes (gxFromString "sym") xpickle)
                                 (xpElemNodes (gxFromString "pos") xpickle)))
 
-lambdaPickler :: (GenericXMLString tag, Show tag,
-                  GenericXMLString text, Show text,
-                  XmlPickler [(tag, text)] bound,
-                  XmlPickler [NodeG [] tag text] bound,
-                  XmlPickler [NodeG [] tag text] free,
-                  Hashable bound, Eq bound) =>
-                 PU [NodeG [] tag text] (Term bound free)
-lambdaPickler =
-  let
-    revfunc Lambda { lambdaCases = cases, lambdaPos = pos } = (cases, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(cases, pos) -> Lambda { lambdaCases = cases, lambdaPos = pos },
-            revfunc)
-           (xpElemNodes (gxFromString "Lambda")
-                        (xpPair (xpList (xpElemNodes (gxFromString "cases")
-                                                     xpickle))
-                                (xpElemNodes (gxFromString "pos") xpickle)))
-
-recordPickler :: (GenericXMLString tag, Show tag,
-                  GenericXMLString text, Show text,
-                  XmlPickler [(tag, text)] bound,
-                  XmlPickler [NodeG [] tag text] bound,
-                  XmlPickler [NodeG [] tag text] free,
-                  Hashable bound, Eq bound) =>
-                 PU [NodeG [] tag text] (Term bound free)
-recordPickler =
-  let
-    revfunc Record { recFields = vals, recPos = pos } = (vals, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(vals, pos) -> Record { recFields = vals, recPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Record")
-                        (xpPair (xpElemNodes (gxFromString "fields")
-                                             (mapPickler "field"))
-                                (xpElemNodes (gxFromString "pos") xpickle)))
-
-fixPickler :: (GenericXMLString tag, Show tag,
-               GenericXMLString text, Show text,
-               XmlPickler [(tag, text)] bound,
-               XmlPickler [NodeG [] tag text] bound,
-               XmlPickler [NodeG [] tag text] free,
-               Hashable bound, Eq bound) =>
-              PU [NodeG [] tag text] (Term bound free)
-fixPickler =
-  let
-    revfunc Fix { fixTerms = terms, fixPos = pos } = (terms, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(terms, pos) -> Fix { fixTerms = terms, fixPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Fix")
-                        (xpPair (xpElemNodes (gxFromString "terms")
-                                             (mapPickler "term"))
-                                (xpElemNodes (gxFromString "pos") xpickle)))
-
-compPickler :: (GenericXMLString tag, Show tag,
-                GenericXMLString text, Show text,
-                XmlPickler [(tag, text)] bound,
-                XmlPickler [NodeG [] tag text] bound,
-                XmlPickler [NodeG [] tag text] free,
-                Hashable bound, Eq bound) =>
-               PU [NodeG [] tag text] (Term bound free)
-compPickler =
-  let
-    revfunc Comp { compBody = body, compPos = pos } = (body, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(body, pos) -> Comp { compBody = body, compPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Comp")
-                        (xpPair (xpElemNodes (gxFromString "body") xpickle)
-                                (xpElemNodes (gxFromString "pos") xpickle)))
-
-badTermPickler :: (GenericXMLString tag, Show tag,
+badElimPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text,
                    XmlPickler [NodeG [] tag text] bound,
                    XmlPickler [NodeG [] tag text] free,
                    Hashable bound, Eq bound) =>
-                  PU [NodeG [] tag text] (Term bound free)
-badTermPickler =
+                  PU [NodeG [] tag text] (Elim bound free)
+badElimPickler =
   let
-    revfunc (BadTerm pos) = pos
+    revfunc BadElim { badElimPos = pos } = pos
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (BadTerm, revfunc)
-           (xpElemNodes (gxFromString "BadTerm")
+    xpWrap (BadElim, revfunc)
+           (xpElemNodes (gxFromString "BadElim")
                         (xpElemNodes (gxFromString "pos") xpickle))
 
 instance (GenericXMLString tag, Show tag,
@@ -1646,28 +1849,15 @@ instance (GenericXMLString tag, Show tag,
           XmlPickler [NodeG [] tag text] bound,
           XmlPickler [NodeG [] tag text] free,
           Hashable bound, Eq bound) =>
-         XmlPickler [NodeG [] tag text] (Term bound free) where
+         XmlPickler [NodeG [] tag text] (Elim bound free) where
   xpickle =
     let
-      picker FuncType {} = 0
-      picker RecordType {} = 1
-      picker RefineType {} = 2
-      picker CompType {} = 3
-      picker Quantified {} = 4
-      picker Call {} = 5
-      picker Typed {} = 6
-      picker Var {} = 7
-      picker Lambda {} = 8
-      picker Record {} = 9
-      picker Fix {} = 10
-      picker Comp {} = 11
-      picker BadTerm {} = 12
-      picker Eta {} = error "Eta not supported"
+      picker Call {} = 0
+      picker Typed {} = 1
+      picker Var {} = 2
+      picker BadElim {} = 3
     in
-      xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
-                     compTypePickler, quantifiedPickler, callPickler,
-                     typedPickler, varPickler, lambdaPickler, recordPickler,
-                     fixPickler, compPickler, badTermPickler ]
+      xpAlt picker [ callPickler, typedPickler, varPickler, badElimPickler ]
 
 valuePickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text,

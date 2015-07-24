@@ -48,10 +48,10 @@ import qualified Data.HashMap.Strict as HashMap
 
 -- | Tail-recursive work function for pattern matching
 patternMatchTail :: (Default sym, Eq sym, Hashable sym) =>
-                    HashMap sym (Term sym sym) ->
-                    Pattern sym (Term sym) sym ->
-                    Term sym sym ->
-                    Maybe (HashMap sym (Term sym sym))
+                    HashMap sym (Intro sym sym) ->
+                    Pattern sym (Intro sym) sym ->
+                    Intro sym sym ->
+                    Maybe (HashMap sym (Intro sym sym))
 patternMatchTail result Deconstruct { deconstructConstructor = constructor,
                                       deconstructBinds = binds } term
   -- The default value is the unused symbol, which means there is no
@@ -70,7 +70,8 @@ patternMatchTail result Deconstruct { deconstructConstructor = constructor,
       _ -> Nothing
   | otherwise =
     case term of
-      Call { callFunc = Var { varSym = func }, callArgs = args } ->
+      Elim { elimTerm = Call { callFunc = Var { varSym = func },
+                               callArgs = args } } ->
         if func == constructor
         then let
             foldfun accum sym bind =
@@ -98,18 +99,18 @@ patternMatchTail result (Constant t1) t2
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
 patternMatch :: (Default sym, Eq sym, Hashable sym) =>
-                Pattern sym (Term sym) sym
+                Pattern sym (Intro sym) sym
              -- ^ The pattern being matched.
-             -> Term sym sym
+             -> Intro sym sym
              -- ^ The term attempting to match the pattern.
-             -> Maybe (HashMap sym (Term sym sym))
+             -> Maybe (HashMap sym (Intro sym sym))
              -- ^ A list of bindings from the pattern, or Nothing.
 patternMatch = patternMatchTail HashMap.empty
 {-
 patternTypesTail :: (Default sym, Eq sym, Ord sym) =>
-                    HashMap sym (Term sym sym) ->
-                    Pattern sym (Term sym) sym ->
-                    Term sym sym -> Maybe (HashMap sym (Term sym sym))
+                    HashMap sym (Intro sym sym) ->
+                    Pattern sym (Intro sym) sym ->
+                    Intro sym sym -> Maybe (HashMap sym (Intro sym sym))
 patternTypesTail result Deconstruct { deconstructConstructor = constructor,
                                       deconstructBinds = binds } term
   | constructor == def =
@@ -152,11 +153,11 @@ patternTypesTail result (Constant _) t2 = Just result
 -- work for well-typed patterns; if the pattern does not have the
 -- given type, it may fail.
 patternTypes :: (Default sym, Eq sym, Ord sym) =>
-                Pattern sym (Term sym) sym
+                Pattern sym (Intro sym) sym
              -- ^ The pattern being matched.
-             -> Term sym sym
+             -> Intro sym sym
              -- ^ The type given to the pattern.
-             -> Maybe (HashMap sym (Term sym sym))
+             -> Maybe (HashMap sym (Intro sym sym))
              -- ^ A list of bindings from the pattern, or Nothing.
 patternTypes = patternTypesTail HashMap.empty
 -}
