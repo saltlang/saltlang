@@ -93,27 +93,17 @@ Source-Repository head
   Location: git@github.com:emc2/arith-encode.git
 
 
-{-
-Test-Suite unit-tests
-    type:               exitcode-stdio-1.0
-    build-depends:      base, Cabal, HUnit-Plus, proglang-util, containers,
-                        bound, prelude-extras, hashable-extras, unordered-containers,
-                        hashable, mtl, directory
-    hs-source-dirs:     src test
-    test-module:        UnitTest
-    ghc-options:        -fhpc
-    other-modules:      Control.Monad.Proof.Class
-                        Control.Monad.ProofRecorder
-                        Distribution.TestSuite.HUnit
-                        Language.Salt.Core.Proofs.ProofScript
-                        Language.Salt.Core.Syntax
-                        Test.UnitTests
-                        Test.UnitTests.Control
-                        Test.UnitTests.Control.Monad
-                        Test.UnitTests.Control.Monad.ProofRecorder
-                        Test.Utils.ComboTests
-                        Test.Utils.ScratchDirs
--}
+Test-Suite library-UnitTest
+  default-language:     Haskell2010
+  type:                 exitcode-stdio-1.0
+  Main-Is:              UnitTest.hs
+  hs-source-dirs:       src/library test/library
+  build-depends:        base >= 4.4.0 && < 5, Cabal >= 1.16.0, compiler-misc, bound,
+                        containers, prelude-extras, mtl, hashable, hashable-extras,
+                        bytestring, utf8-string, hexpat, hexpat-pickle, array,
+                        filepath, blaze-builder, dynamic-pp, unordered-containers,
+                        semigroups, data-default, HUnit-Plus
+  ghc-options:          -fhpc
 
 Executable saltc
   default-language:     Haskell2010
