@@ -27,12 +27,27 @@
 -- OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
+{-# LANGUAGE OverloadedStrings #-}
 
-module Tests.Language.Salt.Core(tests) where
+module Tests.Language.Salt.Core.Syntax(tests) where
 
+import Bound
+import Data.Position.DWARFPosition
+import Language.Salt.Core.Syntax
 import Test.HUnitPlus.Base
 
-import qualified Tests.Language.Salt.Core.Syntax as Syntax
+elimSubst :: [Test]
+elimSubst =
+  let
+    substvar :: Elim Int Int
+    substvar = Var { varSym = 0, varPos = Synthetic "Var" }
+
+    valvar :: Elim Int Int
+    valvar = Var { varSym = 1, varPos = Synthetic "substituted" }
+    in [ (substitute 0 valvar substvar) ~?= valvar ]
+
+testlist :: [Test]
+testlist = []
 
 tests :: Test
-tests = "Core" ~: [ Syntax.tests ]
+tests = "Syntax" ~: testlist

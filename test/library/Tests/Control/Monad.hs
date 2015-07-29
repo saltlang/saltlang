@@ -33,4 +33,4 @@ module Tests.Control.Monad(tests) where
 import Test.HUnitPlus.Base
 
 tests :: Test
-tests = "Monad" ~: []
+tests = "Monad" ~: ([] :: [Test])

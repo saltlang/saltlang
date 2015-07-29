@@ -33,4 +33,4 @@ module Tests.Language.Salt.Surface(tests) where
 import Test.HUnitPlus.Base
 
 tests :: Test
-tests = "Surface" ~: []
+tests = "Surface" ~: ([] :: [Test])
