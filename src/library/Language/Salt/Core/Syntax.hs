@@ -71,7 +71,8 @@ import Text.XML.Expat.Tree(NodeG)
 import Text.Format hiding ((<$>))
 
 import qualified Data.HashMap.Strict as HashMap
-import qualified Data.ByteString.UTF8 as Lazy
+import qualified Data.ByteString.UTF8 as Strict
+import qualified Data.ByteString.Lazy.UTF8 as Lazy
 
 -- | Quantifier types.
 data Quantifier =
@@ -957,7 +958,7 @@ instance Traversable (Comp b) where
   traverse _ (BadComp p) = pure (BadComp p)
 
 injectpos :: DWARFPosition
-injectpos = Synthetic { synthDesc = Lazy.fromString "Monad return" }
+injectpos = Synthetic { synthDesc = Strict.fromString "Monad return" }
 
 instance MonadTrans (Pattern b) where
   lift = Constant
@@ -1137,6 +1138,48 @@ instance Format Quantifier where
   format Forall = string "forall"
   format Exists = string "exists"
 
+instance (Format (func free), Format bound, Format free) =>
+         Format (Pattern bound func free) where
+  format Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
+                       deconstructStrict = True } =
+    let
+      namedoc = format sym
+      bindsdoc = formatMap binds
+    in
+      compoundApplyDoc (string "Deconstruct")
+                       [(string "name", namedoc),
+                        (string "strict", string "true"),
+                        (string "binds", bindsdoc)]
+  format Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
+                        deconstructStrict = False } =
+    let
+      namedoc = format sym
+      bindsdoc = formatMap binds
+    in
+      compoundApplyDoc (string "Deconstruct")
+                       [(string "name", namedoc),
+                        (string "strict", string "false"),
+                        (string "binds", bindsdoc)]
+  format As { asBind = bind, asName = sym } =
+    let
+      namedoc = format sym
+      binddoc = format bind
+    in
+      compoundApplyDoc (string "As")
+                       [(string "name", namedoc),
+                        (string "bind", binddoc)]
+  format Name { nameSym = sym } =
+    let
+      namedoc = format sym
+    in
+      compoundApplyDoc (string "Name")
+                       [(string "name", namedoc)]
+  format (Constant e) = format e
+
+instance (Format (func free), Format bound, Format free) =>
+         Show (Pattern bound func free) where
+  show = Lazy.toString . renderOptimal 80 False . format
+
 instance (MonadPositions m, MonadSymbols m, FormatM m (func free),
           FormatM m bound, FormatM m free) =>
          FormatM m (Pattern bound func free) where
@@ -1145,7 +1188,7 @@ instance (MonadPositions m, MonadSymbols m, FormatM m (func free),
     do
       namedoc <- formatM sym
       posdoc <- formatM pos
-      bindsdoc <- formatMap binds
+      bindsdoc <- formatMapM binds
       return (compoundApplyDoc (string "Deconstruct")
                                [(string "name", namedoc),
                                 (string "pos", posdoc),
@@ -1156,7 +1199,7 @@ instance (MonadPositions m, MonadSymbols m, FormatM m (func free),
     do
       namedoc <- formatM sym
       posdoc <- formatM pos
-      bindsdoc <- formatMap binds
+      bindsdoc <- formatMapM binds
       return (compoundApplyDoc (string "Deconstruct")
                                [(string "name", namedoc),
                                 (string "pos", posdoc),
@@ -1180,6 +1223,19 @@ instance (MonadPositions m, MonadSymbols m, FormatM m (func free),
                                 (string "pos", posdoc)])
   formatM (Constant e) = formatM e
 
+instance (Format bound, Format free) => Format (Case bound free) where
+  format Case { casePat = pat, caseBody = body } =
+    let
+      patdoc = format pat
+      bodydoc = format body
+    in
+      compoundApplyDoc (string "Case")
+                       [(string "pattern", patdoc),
+                        (string "body", bodydoc)]
+
+instance (Format bound, Format free) => Show (Case bound free) where
+  show = Lazy.toString . renderOptimal 80 False . format
+
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
          FormatM m (Case bound free) where
   formatM Case { casePat = pat, caseBody = body, casePos = pos } =
@@ -1192,9 +1248,9 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
                                 (string "pattern", patdoc),
                                 (string "body", bodydoc)])
 
-formatMap :: (MonadPositions m, MonadSymbols m, FormatM m a, FormatM m b) =>
-             HashMap a b -> m Doc
-formatMap hashmap =
+formatMapM :: (MonadPositions m, MonadSymbols m, FormatM m a, FormatM m b) =>
+              HashMap a b -> m Doc
+formatMapM hashmap =
   let
     formatEntry (a, b) =
       do
@@ -1204,6 +1260,35 @@ formatMap hashmap =
   in do
     entrydocs <- mapM formatEntry (HashMap.toList hashmap)
     return $! mapDoc entrydocs
+
+formatMap :: (Format a, Format b) => HashMap a b -> Doc
+formatMap hashmap =
+  let
+    formatEntry (a, b) =
+      let
+        adoc = format a
+        bdoc = format b
+      in
+        (adoc, bdoc)
+
+    entrydocs = map formatEntry (HashMap.toList hashmap)
+  in
+    mapDoc entrydocs
+
+instance (Format bound, Format free) => Format (Element bound free) where
+  format Element { elemPat = pat, elemType = ty, elemName = sym } =
+    let
+      symdoc = format sym
+      patdoc = format pat
+      tydoc = format ty
+    in
+      compoundApplyDoc (string "Element")
+                       [(string "name", symdoc),
+                        (string "pattern", patdoc),
+                        (string "type", tydoc)]
+
+instance (Format bound, Format free) => Show (Element bound free) where
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
          FormatM m (Element bound free) where
@@ -1219,6 +1304,76 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
                                 (string "pos", posdoc),
                                 (string "pattern", patdoc),
                                 (string "type", tydoc)])
+
+instance (Format bound, Format free) => Format (Intro bound free) where
+  format Eta {} = error "Eta is going away"
+  format FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
+    let
+      argdocs = map format args
+      rettydoc = format retty
+    in
+      compoundApplyDoc (string "FuncType")
+                       [(string "args", listDoc argdocs),
+                        (string "retty", rettydoc)]
+  format RecordType { recTypeBody = body } =
+    let
+      bodydocs = map format body
+    in
+      compoundApplyDoc (string "RecordType") [(string "body", listDoc bodydocs)]
+  format RefineType { refineType = ty, refineCases = cases } =
+    let
+      tydoc = format ty
+      casedocs = map format cases
+    in
+      compoundApplyDoc (string "RefineType")
+                       [(string "type", tydoc),
+                        (string "cases", listDoc casedocs)]
+  format CompType { compType = ty, compCases = cases } =
+    let
+      tydoc = format ty
+      casedocs = map format cases
+    in
+      compoundApplyDoc (string "CompType")
+                       [(string "type", tydoc),
+                        (string "cases", listDoc casedocs)]
+  format Quantified { quantType = ty, quantCases = cases, quantKind = kind } =
+    let
+      tydoc = format ty
+      casedocs = map format cases
+    in
+      compoundApplyDoc (string "Quantified")
+                       [(string "kind", format kind),
+                        (string "type", tydoc),
+                        (string "cases", listDoc casedocs)]
+  format Lambda { lambdaCases = cases } =
+    let
+      casedocs = map format cases
+    in
+      compoundApplyDoc (string "Lambda") [(string "cases", listDoc casedocs)]
+  format Record { recFields = fields } =
+    let
+      fieldsdoc = formatMap fields
+    in
+      compoundApplyDoc (string "Record") [(string "fields", fieldsdoc)]
+  format Fix { fixTerms = terms } =
+    let
+      termsdoc = formatMap terms
+    in
+      compoundApplyDoc (string "Fix") [(string "terms", termsdoc)]
+  format Comp { compBody = body } =
+    let
+      bodydoc = format body
+    in
+      compoundApplyDoc (string "Comp") [(string "body", bodydoc)]
+  format Elim { elimTerm = term } =
+    let
+      termdoc = format term
+    in
+      compoundApplyDoc (string "Elim") [(string "term", termdoc)]
+  format BadIntro {} = string "BadIntro"
+
+instance (Format bound, Format free) => Show (Intro bound free) where
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
          FormatM m (Intro bound free) where
@@ -1279,14 +1434,14 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
   formatM Record { recFields = fields, recPos = pos } =
     do
       posdoc <- formatM pos
-      fieldsdoc <- formatMap fields
+      fieldsdoc <- formatMapM fields
       return (compoundApplyDoc (string "Record")
                                [(string "pos", posdoc),
                                 (string "fields", fieldsdoc)])
   formatM Fix { fixTerms = terms, fixPos = pos } =
     do
       posdoc <- formatM pos
-      termsdoc <- formatMap terms
+      termsdoc <- formatMapM terms
       return (compoundApplyDoc (string "Fix")
                                [(string "pos", posdoc),
                                 (string "terms", termsdoc)])
@@ -1306,12 +1461,39 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
       posdoc <- formatM pos
       return (compoundApplyDoc (string "BadIntro") [(string "pos", posdoc)])
 
+instance (Format bound, Format free) => Format (Elim bound free) where
+  format Call { callFunc = func, callArgs = args } =
+    let
+      argsdoc = formatMap args
+      funcdoc = format func
+    in
+      compoundApplyDoc (string "Call")
+                       [(string "func", funcdoc),
+                        (string "args", argsdoc)]
+  format Typed { typedTerm = term, typedType = ty } =
+    let
+      termdoc = format term
+      typedoc = format ty
+    in
+      compoundApplyDoc (string "Typed")
+                       [(string "term", termdoc),
+                        (string "type", typedoc)]
+  format Var { varSym = sym } =
+    let
+      symdoc = format sym
+    in
+      compoundApplyDoc (string "Var") [(string "sym", symdoc)]
+  format BadElim {} = string "BadElim"
+
+instance (Format bound, Format free) => Show (Elim bound free) where
+  show = Lazy.toString . renderOptimal 80 False . format
+
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
          FormatM m (Elim bound free) where
   formatM Call { callFunc = func, callArgs = args, callPos = pos } =
     do
       posdoc <- formatM pos
-      argsdoc <- formatMap args
+      argsdoc <- formatMapM args
       funcdoc <- formatM func
       return (compoundApplyDoc (string "Call")
                                [(string "pos", posdoc),
@@ -1338,6 +1520,22 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
       posdoc <- formatM pos
       return (compoundApplyDoc (string "BadElim") [(string "pos", posdoc)])
 
+instance (Format bound, Format free) => Format (Cmd bound free) where
+  format Value { valTerm = term } =
+    let
+      termdoc = format term
+    in
+      compoundApplyDoc (string "Value") [(string "term", termdoc)]
+  format Eval { evalTerm = term } =
+    let
+      termdoc = format term
+    in
+      compoundApplyDoc (string "Eval") [(string "term", termdoc)]
+  format BadCmd {} = string "BadCmd"
+
+instance (Format bound, Format free) => Show (Cmd bound free) where
+  show = Lazy.toString . renderOptimal 80 False . format
+
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
          FormatM m (Cmd bound free) where
   formatM Value { valTerm = term, valPos = pos } =
@@ -1358,6 +1556,29 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
     do
       posdoc <- formatM pos
       return (compoundApplyDoc (string "BadCmd") [(string "pos", posdoc)])
+
+instance (Format bound, Format free) => Format (Comp bound free) where
+  format Seq { seqCmd = cmd, seqPat = pat, seqType = ty, seqNext = next } =
+    let
+      cmddoc = format cmd
+      patdoc = format pat
+      typedoc = format ty
+      nextdoc = format next
+    in
+      compoundApplyDoc (string "Seq")
+                       [(string "cmd", cmddoc),
+                        (string "pat", patdoc),
+                        (string "type", typedoc),
+                        (string "next", nextdoc)]
+  format End { endCmd = cmd } =
+    let
+      cmddoc = format cmd
+    in
+      compoundApplyDoc (string "End") [(string "cmd", cmddoc)]
+  format BadComp {} = string "BadComp"
+
+instance (Format bound, Format free) => Show (Comp bound free) where
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
          FormatM m (Comp bound free) where
