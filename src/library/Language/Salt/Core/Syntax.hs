@@ -35,6 +35,7 @@
 -- into Core, which is then type-checked and compiled.  Core is
 -- generally not meant for human consumption.
 module Language.Salt.Core.Syntax(
+       Literal(..),
        Quantifier(..),
        Pattern(..),
        Element(..),
@@ -61,6 +62,7 @@ import Data.HashMap.Strict(HashMap)
 import Data.List(sortBy)
 import Data.Monoid(mappend, mempty)
 import Data.Position.DWARFPosition
+import Data.Ratio
 import Data.Traversable
 import Language.Salt.Format
 import Prelude hiding (foldl, mapM)
@@ -73,6 +75,30 @@ import Text.Format hiding ((<$>))
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
+
+-- | A literal value.
+data Literal =
+    -- | A number literal.
+    Num {
+      -- | The number value.
+      numVal :: !Rational,
+      -- | The position in source from which this arises.
+      numPos :: !DWARFPosition
+    }
+    -- | A string literal.
+  | Str {
+      -- | The string value.
+      strVal :: !Strict.ByteString,
+      -- | The position in source from which this arises.
+      strPos :: !DWARFPosition
+    }
+    -- | A Character literal.
+  | Char {
+      -- | The character value.
+      charVal :: !Char,
+      -- | The position in source from which this arises.
+      charPos :: !DWARFPosition
+    }
 
 -- | Quantifier types.
 data Quantifier =
@@ -286,6 +312,9 @@ data Intro bound free =
       -- | The wrapped elimination term.
       elimTerm :: Elim bound free
     }
+  | Literal {
+      literalVal :: !Literal
+    }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
   | BadIntro {
@@ -315,7 +344,7 @@ data Elim bound free =
   -- type tag, which makes it an elimination term.
   | Typed {
       -- | The introduction term being typed.
-      typedTerm :: Elim bound free,
+      typedTerm :: Intro bound free,
       -- | The type of the introduction term.
       typedType :: Intro bound free,
       -- | The position in source from which this originates.
@@ -410,6 +439,12 @@ data Comp bound free =
       badCompPos :: !DWARFPosition
     }
 
+instance Eq Literal where
+  Num { numVal = n1 } == Num { numVal = n2 } = n1 == n2
+  Str { strVal = s1 } == Str { strVal = s2 } = s1 == s2
+  Char { charVal = c1 } == Char { charVal = c2 } = c1 == c2
+  _ == _ = False
+
 instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                 deconstructConstructor = constructor1 } ==#
@@ -458,6 +493,7 @@ instance Eq b => Eq1 (Intro b) where
   Fix { fixTerms = terms1 } ==# Fix { fixTerms = terms2 } = terms1 == terms2
   Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
   Elim { elimTerm = term1 } ==# Elim { elimTerm = term2 } = term1 ==# term2
+  Literal { literalVal = lit1 } ==# Literal { literalVal = lit2 } = lit1 == lit2
   BadIntro {} ==# BadIntro {} = True
   _ ==# _ = False
 
@@ -486,7 +522,7 @@ instance Eq b => Eq1 (Comp b) where
   End { endCmd = Eval { evalTerm = Comp { compBody = c1 } } } ==# c2 = c1 ==# c2
   c1 ==# End { endCmd = Eval { evalTerm = Comp { compBody = c2 } } } = c1 ==# c2
   End { endCmd = cmd1 } ==# End { endCmd = cmd2 } = cmd1 ==# cmd2
-  BadComp _ ==# BadComp _ = True
+  BadComp {} ==# BadComp {} = True
   _ ==# _ = False
 
 instance (Eq b, Eq s, Eq1 t) => Eq (Pattern b t s) where (==) = (==#)
@@ -499,6 +535,15 @@ instance (Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
 
 keyOrd :: Ord a => (a, b) -> (a, b) -> Ordering
 keyOrd (a1, _) (a2, _) = compare a1 a2
+
+instance Ord Literal where
+  compare Num { numVal = n1 } Num { numVal = n2 } = compare n1 n2
+  compare Num {} _ = LT
+  compare _ Num {} = GT
+  compare Str { strVal = s1 } Str { strVal = s2 } = compare s1 s2
+  compare Str {} _ = LT
+  compare _ Str {} = GT
+  compare Char { charVal = c1 } Char { charVal = c2 } = compare c1 c2
 
 instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
   compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
@@ -609,6 +654,10 @@ instance Ord b => Ord1 (Intro b) where
     compare1 term1 term2
   compare1 Elim {} _ = GT
   compare1 _ Elim {} = LT
+  compare1 Literal { literalVal = lit1 } Literal { literalVal = lit2 } =
+    compare lit1 lit2
+  compare1 Literal {} _ = LT
+  compare1 _ Literal {} = GT
   compare1 BadIntro {} BadIntro {} = EQ
 
 instance Ord b => Ord1 (Elim b) where
@@ -641,7 +690,7 @@ instance Ord b => Ord1 (Cmd b) where
     compare1 term1 term2
   compare1 Eval {} _ = GT
   compare1 _ Eval {} = LT
-  compare1 (BadCmd _) (BadCmd _) = EQ
+  compare1 BadCmd {} BadCmd {} = EQ
 
 instance Ord b => Ord1 (Comp b) where
   compare1 Seq { seqType = ty1, seqPat = pat1,
@@ -660,7 +709,7 @@ instance Ord b => Ord1 (Comp b) where
   compare1 End { endCmd = cmd1 } End { endCmd = cmd2 } = compare1 cmd1 cmd2
   compare1 End {} _ = GT
   compare1 _ End {} = LT
-  compare1 (BadComp _) (BadComp _) = EQ
+  compare1 BadComp {} BadComp {} = EQ
 
 instance (Ord b, Ord s, Ord1 t) => Ord (Pattern b t s) where
   compare = compare1
@@ -670,6 +719,14 @@ instance (Ord b, Ord s) => Ord (Intro b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Elim b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Comp b s) where compare = compare1
+
+instance Hashable Literal where
+  hashWithSalt s Num { numVal = n } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` n
+  hashWithSalt s Str { strVal = str } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` str
+  hashWithSalt s Char { charVal = c } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` c
 
 instance (Hashable b, Hashable1 t, Ord b) =>
          Hashable1 (Pattern b t) where
@@ -721,6 +778,8 @@ instance (Hashable b, Ord b) => Hashable1 (Intro b) where
     s `hashWithSalt` (11 :: Int) `hashWithSalt1` body
   hashWithSalt1 s Elim { elimTerm = term } =
     s `hashWithSalt` (12 :: Int) `hashWithSalt1` term
+  hashWithSalt1 s Literal { literalVal = term } =
+    s `hashWithSalt` (13 :: Int) `hashWithSalt` term
   hashWithSalt1 s BadIntro {} = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable b, Ord b) => Hashable1 (Elim b) where
@@ -805,6 +864,7 @@ instance Functor (Intro b) where
   fmap f t @ Fix { fixTerms = terms } = t { fixTerms = fmap (fmap f) terms }
   fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
   fmap f t @ Elim { elimTerm = term } = t { elimTerm = fmap f term }
+  fmap _ Literal { literalVal = lit } = Literal { literalVal = lit }
   fmap _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 
 instance Functor (Elim b) where
@@ -858,6 +918,7 @@ instance Foldable (Intro b) where
   foldMap f Fix { fixTerms = terms } = foldMap (foldMap f) terms
   foldMap f Comp { compBody = body } = foldMap f body
   foldMap f Elim { elimTerm = term } = foldMap f term
+  foldMap _ Literal {} = mempty
   foldMap _ BadIntro {} = mempty
 
 instance Foldable (Elim b) where
@@ -927,6 +988,7 @@ instance Traversable (Intro b) where
     (\body' -> c { compBody = body' }) <$> traverse f body
   traverse f t @ Elim { elimTerm = term } =
     (\term' -> t { elimTerm = term' }) <$> traverse f term
+  traverse _ Literal { literalVal = lit } = pure Literal { literalVal = lit }
   traverse _ BadIntro { badIntroPos = p } = pure BadIntro { badIntroPos = p }
 
 instance Traversable (Elim b) where
@@ -994,7 +1056,7 @@ elimSubstIntro :: (a -> Intro c b) -> Elim c a -> Elim c b
 elimSubstIntro f t @ Call { callArgs = args, callFunc = func } =
   t { callArgs = fmap (>>= f) args, callFunc = elimSubstIntro f func }
 elimSubstIntro f t @ Typed { typedTerm = term, typedType = ty } =
-  t { typedTerm = elimSubstIntro f term, typedType = ty >>= f }
+  t { typedTerm = term >>= f, typedType = ty >>= f }
 elimSubstIntro _ Var {} = error "Should not see this case"
 elimSubstIntro _ BadElim { badElimPos = p } = BadElim { badElimPos = p }
 
@@ -1035,6 +1097,7 @@ instance Monad (Intro b) where
   t @ Elim { elimTerm = term } >>= f = t { elimTerm = elimSubstIntro f term }
   t @ Eta { etaTerm = term, etaType = ty } >>= f =
     t { etaTerm = elimSubstIntro f term, etaType = ty >>= f }
+  Literal { literalVal = lit } >>= _ = Literal { literalVal = lit }
   BadIntro { badIntroPos = p } >>= _ = BadIntro { badIntroPos = p }
 
 caseSubstElim :: (a -> Elim c b) -> Case c a -> Case c b
@@ -1087,6 +1150,7 @@ introSubstElim f t @ Comp { compBody = body } =
 introSubstElim f Elim { elimTerm = term } = Elim { elimTerm = term >>= f }
 introSubstElim f t @ Eta { etaTerm = term, etaType = ty } =
   t { etaTerm = term >>= f, etaType = introSubstElim f ty }
+introSubstElim _ Literal { literalVal = lit } = Literal { literalVal = lit }
 introSubstElim _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 
 instance Monad (Elim b) where
@@ -1095,7 +1159,7 @@ instance Monad (Elim b) where
   t @ Call { callArgs = args, callFunc = func } >>= f =
     t { callArgs = fmap (introSubstElim f) args, callFunc = func >>= f }
   t @ Typed { typedTerm = term, typedType = ty } >>= f =
-    t { typedTerm = term >>= f, typedType = introSubstElim f ty }
+    t { typedTerm = introSubstElim f term, typedType = introSubstElim f ty }
   Var { varSym = sym } >>= f = f sym
   BadElim { badElimPos = p } >>= _ = BadElim { badElimPos = p }
 
@@ -1133,6 +1197,37 @@ instance Monad (Comp b) where
         seqPat = pat >>>= introSubstComp f, seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
+
+instance Format Literal where
+  format Num { numVal = num } =
+    compoundApplyDoc (string "Num") [(string "val", string (show num))]
+  format Str { strVal = str } =
+    compoundApplyDoc (string "Str") [(string "val", bytestring str)]
+  format Char { charVal = chr } =
+    compoundApplyDoc (string "Char") [(string "val", char chr)]
+
+instance Show Literal where
+  show = Lazy.toString . renderOptimal 80 False . format
+
+instance MonadPositions m => FormatM m Literal where
+  formatM Num { numVal = num, numPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "Num")
+                               [(string "val", string (show num)),
+                                (string "pos", posdoc)])
+  formatM Str { strVal = str, strPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "Str")
+                               [(string "val", bytestring str),
+                                (string "pos", posdoc)])
+  formatM Char { charVal = chr, charPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "Char")
+                               [(string "val", char chr),
+                                (string "pos", posdoc)])
 
 instance Format Quantifier where
   format Forall = string "forall"
@@ -1370,6 +1465,11 @@ instance (Format bound, Format free) => Format (Intro bound free) where
       termdoc = format term
     in
       compoundApplyDoc (string "Elim") [(string "term", termdoc)]
+  format Literal { literalVal = lit } =
+    let
+      termdoc = format lit
+    in
+      compoundApplyDoc (string "Literal") [(string "val", termdoc)]
   format BadIntro {} = string "BadIntro"
 
 instance (Format bound, Format free) => Show (Intro bound free) where
@@ -1456,6 +1556,10 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
     do
       termdoc <- formatM term
       return (compoundApplyDoc (string "Elim") [(string "term", termdoc)])
+  formatM Literal { literalVal = lit } =
+    do
+      litdoc <- formatM lit
+      return (compoundApplyDoc (string "Literal") [(string "literal", litdoc)])
   formatM BadIntro { badIntroPos = pos } =
     do
       posdoc <- formatM pos
@@ -1607,6 +1711,60 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
     do
       posdoc <- formatM pos
       return (compoundApplyDoc (string "BadComp") [(string "pos", posdoc)])
+
+numPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Literal
+numPickler =
+  let
+    revfunc Num { numVal = num, numPos = pos } =
+      ((numerator num, denominator num), pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\((numer, denom), pos) -> Num { numVal = numer % denom,
+                                            numPos = pos }, revfunc)
+           (xpElem (gxFromString "Num")
+                   (xpPair (xpAttr (gxFromString "numerator") xpPrim)
+                           (xpAttr (gxFromString "denominator") xpPrim))
+                   (xpElemNodes (gxFromString "pos") xpickle))
+
+strPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text) =>
+              PU [NodeG [] tag text] Literal
+strPickler =
+  let
+    revfunc Str { strVal = str, strPos = pos } = (gxFromByteString str, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(str, pos) -> Str { strVal = gxToByteString str,
+                                 strPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Str")
+                        (xpPair (xpElemNodes (gxFromString "value")
+                                             (xpContent xpText0))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+charPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Literal
+charPickler =
+  let
+    revfunc Char { charVal = chr, charPos = pos } = (chr, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(chr, pos) -> Char { charVal = chr, charPos = pos }, revfunc)
+           (xpElem (gxFromString "Char")
+                   (xpAttr (gxFromString "value") xpPrim)
+                   (xpElemNodes (gxFromString "pos") xpickle))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Literal where
+  xpickle =
+    let
+      picker Num {} = 0
+      picker Str {} = 1
+      picker Char {} = 2
+    in
+      xpAlt picker [numPickler, strPickler, charPickler]
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [(tag, text)] Quantifier where
@@ -1948,6 +2106,22 @@ elimPickler =
            (xpElemNodes (gxFromString "Elim")
                         (xpElemNodes (gxFromString "term") xpickle))
 
+literalPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text,
+                   XmlPickler [(tag, text)] bound,
+                   XmlPickler [NodeG [] tag text] bound,
+                   XmlPickler [NodeG [] tag text] free,
+                   Hashable bound, Eq bound) =>
+                  PU [NodeG [] tag text] (Intro bound free)
+literalPickler =
+  let
+    revfunc Literal { literalVal = lit } = lit
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Literal, revfunc)
+           (xpElemNodes (gxFromString "Literal")
+                        (xpElemNodes (gxFromString "literal") xpickle))
+
 badIntroPickler :: (GenericXMLString tag, Show tag,
                     GenericXMLString text, Show text,
                     XmlPickler [NodeG [] tag text] bound,
@@ -1982,13 +2156,14 @@ instance (GenericXMLString tag, Show tag,
       picker Fix {} = 7
       picker Comp {} = 8
       picker Elim {} = 9
-      picker BadIntro {} = 10
+      picker Literal {} = 10
+      picker BadIntro {} = 11
       picker Eta {} = error "Eta not supported"
     in
       xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
                      compTypePickler, quantifiedPickler, lambdaPickler,
                      recordPickler, fixPickler, compPickler,
-                     elimPickler, badIntroPickler ]
+                     elimPickler, literalPickler, badIntroPickler ]
 
 
 callPickler :: (GenericXMLString tag, Show tag,
