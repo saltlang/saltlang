@@ -103,7 +103,6 @@ Test-Suite library-UnitTest
                         bytestring, utf8-string, hexpat, hexpat-pickle, array,
                         filepath, blaze-builder, dynamic-pp, unordered-containers,
                         semigroups, data-default, HUnit-Plus
-  ghc-options:          -fhpc
 
 Executable saltc
   default-language:     Haskell2010

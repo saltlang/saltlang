@@ -36,18 +36,86 @@ import Data.Position.DWARFPosition
 import Language.Salt.Core.Syntax
 import Test.HUnitPlus.Base
 
+import qualified Data.HashMap.Strict as HashMap
+
 elimSubst :: [Test]
 elimSubst =
   let
+    unittype :: Intro Int Int
+    unittype = RecordType { recTypeBody = [], recTypePos = Synthetic "0" }
+
+    typetype :: Elim Int Int
+    typetype = Var { varSym = -1, varPos = Synthetic "1" }
+
+    unitval :: Intro Int Int
+    unitval = Record { recFields = HashMap.empty, recPos = Synthetic "2" }
+
     substvar :: Elim Int Int
-    substvar = Var { varSym = 0, varPos = Synthetic "Var" }
+    substvar = Var { varSym = 0, varPos = Synthetic "3" }
+
+    substvar2 :: Elim Int Int
+    substvar2 = Var { varSym = 2, varPos = Synthetic "4" }
+
+    substunitcall :: Elim Int Int -> Elim Int Int
+    substunitcall func = Call { callArgs = HashMap.singleton 0 unitval,
+                                callFunc = func, callPos = Synthetic "5" }
+
+    substfuncty :: Intro Int Int -> Elim Int Int
+    substfuncty arg = FuncType { }
+
+    substcall :: Elim Int Int -> Intro Int Int -> Elim Int Int
+    substcall func arg = Call { callArgs = HashMap.singleton 0 arg,
+                                callFunc = func, callPos = Synthetic "6" }
 
     valvar :: Elim Int Int
-    valvar = Var { varSym = 1, varPos = Synthetic "substituted" }
-    in [ (substitute 0 valvar substvar) ~?= valvar ]
+    valvar = Var { varSym = 1, varPos = Synthetic "7" }
+
+    substtyped :: Intro Int Int -> Intro Int Int -> Elim Int Int
+    substtyped term ty = Typed { typedTerm = term, typedType = ty,
+                                 typedPos = Synthetic "8" }
+
+  in [ "var___var" ~: substitute 0 valvar substvar @?= valvar,
+       "var___var2" ~: substitute 0 valvar substvar2 @?= substvar2,
+       "unitcall___var" ~:
+         substitute 0 valvar (substunitcall substvar) @?=
+           (substunitcall valvar),
+       "unitcall___var2" ~:
+         substitute 0 valvar (substunitcall substvar2) @?=
+           (substunitcall substvar2),
+       "call___var_var" ~:
+         substitute 0 valvar (substcall substvar (Elim substvar)) @?=
+           (substcall valvar (Elim valvar)),
+       "call___var2_var" ~:
+         substitute 0 valvar (substcall substvar2 (Elim substvar)) @?=
+           (substcall substvar2 (Elim valvar)),
+       "call___var_var2" ~:
+         substitute 0 valvar (substcall substvar (Elim substvar2)) @?=
+           (substcall valvar (Elim substvar2)),
+       "call___var_var2" ~:
+         substitute 0 valvar (substcall substvar2 (Elim substvar2)) @?=
+           (substcall substvar2 (Elim substvar2)),
+       "typed___unit_unit" ~:
+         substitute 0 valvar (substtyped unitval unittype) @?=
+           (substtyped unitval unittype),
+       "typed___var_unit" ~:
+         substitute 0 valvar (substtyped (Elim substvar) unittype) @?=
+           (substtyped (Elim valvar) unittype),
+       "typed___var_var" ~:
+         substitute 0 valvar (substtyped (Elim substvar) (Elim substvar)) @?=
+           (substtyped (Elim valvar) (Elim valvar)),
+       "typed___var2_var" ~:
+         substitute 0 valvar (substtyped (Elim substvar2) (Elim substvar)) @?=
+           (substtyped (Elim substvar2) (Elim valvar)),
+       "typed___var_var2" ~:
+         substitute 0 valvar (substtyped (Elim substvar) (Elim substvar2)) @?=
+           (substtyped (Elim valvar) (Elim substvar2)),
+       "typed___var2_var2" ~:
+         substitute 0 valvar (substtyped (Elim substvar2) (Elim substvar2)) @?=
+           (substtyped (Elim substvar2) (Elim substvar2))
+     ]
 
 testlist :: [Test]
-testlist = []
+testlist = [ "elim_subst" ~: elimSubst ]
 
 tests :: Test
 tests = "Syntax" ~: testlist
