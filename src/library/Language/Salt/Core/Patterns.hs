@@ -49,7 +49,7 @@ import qualified Data.HashMap.Strict as HashMap
 -- | Tail-recursive work function for pattern matching
 patternMatchTail :: (Default sym, Eq sym, Hashable sym) =>
                     HashMap sym (Intro sym sym) ->
-                    Pattern sym (Intro sym) sym ->
+                    Pattern sym ->
                     Intro sym sym ->
                     Maybe (HashMap sym (Intro sym sym))
 patternMatchTail result Deconstruct { deconstructConstructor = constructor,
@@ -90,16 +90,18 @@ patternMatchTail result As { asName = name, asBind = bind } t =
 patternMatchTail result Name { nameSym = sym } t =
   Just $! HashMap.insert sym t result
 -- Constants must be equal
-patternMatchTail result (Constant t1) t2
-  | t1 == t2 = return result
+patternMatchTail result Exact { exactLiteral = exact }
+                        Literal { literalVal = val }
+  | exact == val = return result
   | otherwise = Nothing
+patternMatchTail _ Exact {} _ = Nothing
 
 -- | Take a pattern and a term and attempt to match the pattern
 -- represented by the binding.  If the match succeeds, return a
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
 patternMatch :: (Default sym, Eq sym, Hashable sym) =>
-                Pattern sym (Intro sym) sym
+                Pattern sym
              -- ^ The pattern being matched.
              -> Intro sym sym
              -- ^ The term attempting to match the pattern.

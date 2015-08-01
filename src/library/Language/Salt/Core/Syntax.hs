@@ -53,7 +53,6 @@ import Control.Applicative
 import Control.Monad hiding (mapM)
 import Control.Monad.Positions
 import Control.Monad.Symbols
-import Control.Monad.Trans
 import Data.Foldable
 import Data.Hashable
 import Data.Hashable.Extras
@@ -81,24 +80,19 @@ data Literal =
     -- | A number literal.
     Num {
       -- | The number value.
-      numVal :: !Rational,
-      -- | The position in source from which this arises.
-      numPos :: !DWARFPosition
+      numVal :: !Rational
     }
     -- | A string literal.
   | Str {
       -- | The string value.
-      strVal :: !Strict.ByteString,
-      -- | The position in source from which this arises.
-      strPos :: !DWARFPosition
+      strVal :: !Strict.ByteString
     }
     -- | A Character literal.
   | Char {
       -- | The character value.
-      charVal :: !Char,
-      -- | The position in source from which this arises.
-      charPos :: !DWARFPosition
+      charVal :: !Char
     }
+    deriving (Ord, Eq)
 
 -- | Quantifier types.
 data Quantifier =
@@ -110,7 +104,7 @@ data Quantifier =
 
 -- | A pattern binding.  Represents how to deconstruct a value and
 -- bind it to variables.
-data Pattern bound const free =
+data Pattern bound =
     -- | A deconstruction.  Takes a type apart.  Some types have
     -- constructors; nameless record types don't (they should use the
     -- "unused" symbol).
@@ -120,7 +114,7 @@ data Pattern bound const free =
       deconstructConstructor :: !bound,
       -- | The fields in the record being bound.  Note: all fields are
       -- given names by transliteration.
-      deconstructBinds :: HashMap bound (Pattern bound const free),
+      deconstructBinds :: HashMap bound (Pattern bound),
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
@@ -133,7 +127,7 @@ data Pattern bound const free =
       -- | The outer name, to which the entire datatype is bound.
       asName :: !bound,
       -- | The inner binding, which further deconstructs the binding.
-      asBind :: Pattern bound const free,
+      asBind :: Pattern bound,
       -- | The position in source from which this originates.
       asPos :: !DWARFPosition
     }
@@ -142,7 +136,7 @@ data Pattern bound const free =
     --
     -- In the intended use case, we have a special symbol representing
     -- a wildcard (namely, the unused symbol), so we don't bother
-    -- defining another constructor for it.
+    -- defining another constructor for wildcards.
   | Name {
       -- | The bound variable type being bound.
       nameSym :: !bound,
@@ -150,14 +144,19 @@ data Pattern bound const free =
       namePos :: !DWARFPosition
     }
     -- | A constant.  Constrains the binding to the given value.
-  | Constant (const free)
+  | Exact {
+      -- | The literal.
+      exactLiteral :: !Literal,
+      -- | The position in source from which this originates.
+      exactPos :: !DWARFPosition
+    }
 
 -- | A case.  Consists of a pattern and a body wrapped in a scope.
 -- Used to describe functions and computations with parameters.
 data Case bound free =
   Case {
     -- | the pattern for this case.
-    casePat :: Pattern bound (Intro bound) free,
+    casePat :: Pattern bound,
     -- | The body of the case.
     caseBody :: Scope bound (Intro bound) free,
     -- | The position in source from which this originates.
@@ -172,7 +171,7 @@ data Element bound free =
     -- | The name of the element.
     elemName :: !bound,
     -- | The binding pattern of the element.
-    elemPat :: Pattern bound (Intro bound) free,
+    elemPat :: Pattern bound,
     -- | The type of the element.
     elemType :: Scope bound (Intro bound) free,
     -- | The position in source from which this originates.
@@ -312,8 +311,12 @@ data Intro bound free =
       -- | The wrapped elimination term.
       elimTerm :: Elim bound free
     }
+    -- | A literal value.
   | Literal {
-      literalVal :: !Literal
+      -- | The literal value.
+      literalVal :: !Literal,
+      -- | The position in source from which this originates.
+      literalPos :: !DWARFPosition
     }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
@@ -415,7 +418,7 @@ data Comp bound free =
   -- | A sequential composition of terms.
     Seq {
       -- | The pattern to which to bind the result of seqCmd.
-      seqPat :: Pattern bound (Intro bound) free,
+      seqPat :: Pattern bound,
       -- | The type being bound.
       seqType :: Intro bound free,
       -- | The command to execute.
@@ -439,13 +442,7 @@ data Comp bound free =
       badCompPos :: !DWARFPosition
     }
 
-instance Eq Literal where
-  Num { numVal = n1 } == Num { numVal = n2 } = n1 == n2
-  Str { strVal = s1 } == Str { strVal = s2 } = s1 == s2
-  Char { charVal = c1 } == Char { charVal = c2 } = c1 == c2
-  _ == _ = False
-
-instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
+instance Eq1 Pattern where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                 deconstructConstructor = constructor1 } ==#
     Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -456,7 +453,7 @@ instance (Eq b, Eq1 t) => Eq1 (Pattern b t) where
     As { asName = sym2, asBind = bind2 } =
       (sym1 == sym2) && (bind1 ==# bind2)
   Name { nameSym = sym1 } ==# Name { nameSym = sym2 } = sym1 == sym2
-  Constant term1 ==# Constant term2 = term1 ==# term2
+  Exact { exactLiteral = lit1 } ==# Exact { exactLiteral = lit2 } = lit1 == lit2
   _ ==# _ = False
 
 instance Eq b => Eq1 (Case b) where
@@ -525,7 +522,7 @@ instance Eq b => Eq1 (Comp b) where
   BadComp {} ==# BadComp {} = True
   _ ==# _ = False
 
-instance (Eq b, Eq s, Eq1 t) => Eq (Pattern b t s) where (==) = (==#)
+instance (Eq b) => Eq (Pattern b) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Case b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Element b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Intro b s) where (==) = (==#)
@@ -536,16 +533,7 @@ instance (Eq b, Eq s) => Eq (Comp b s) where (==) = (==#)
 keyOrd :: Ord a => (a, b) -> (a, b) -> Ordering
 keyOrd (a1, _) (a2, _) = compare a1 a2
 
-instance Ord Literal where
-  compare Num { numVal = n1 } Num { numVal = n2 } = compare n1 n2
-  compare Num {} _ = LT
-  compare _ Num {} = GT
-  compare Str { strVal = s1 } Str { strVal = s2 } = compare s1 s2
-  compare Str {} _ = LT
-  compare _ Str {} = GT
-  compare Char { charVal = c1 } Char { charVal = c2 } = compare c1 c2
-
-instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
+instance Ord1 Pattern where
   compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                          deconstructConstructor = constructor1 }
            Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -569,7 +557,8 @@ instance (Ord b, Ord1 t) => Ord1 (Pattern b t) where
     compare sym1 sym2
   compare1 Name {} _ = GT
   compare1 _ Name {} = LT
-  compare1 (Constant term1) (Constant term2) = compare1 term1 term2
+  compare1 Exact { exactLiteral = val1 } Exact { exactLiteral = val2 } =
+    compare val1 val2
 
 instance Ord b => Ord1 (Case b) where
   compare1 Case { casePat = pat1, caseBody = body1 }
@@ -711,8 +700,7 @@ instance Ord b => Ord1 (Comp b) where
   compare1 _ End {} = LT
   compare1 BadComp {} BadComp {} = EQ
 
-instance (Ord b, Ord s, Ord1 t) => Ord (Pattern b t s) where
-  compare = compare1
+instance (Ord b) => Ord (Pattern b) where compare = compare1
 instance (Ord b, Ord s) => Ord (Case b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Element b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Intro b s) where compare = compare1
@@ -728,26 +716,13 @@ instance Hashable Literal where
   hashWithSalt s Char { charVal = c } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` c
 
-instance (Hashable b, Hashable1 t, Ord b) =>
-         Hashable1 (Pattern b t) where
-  hashWithSalt1 s Deconstruct { deconstructConstructor = constructor,
-                                deconstructBinds = binds,
-                                deconstructStrict = strict } =
-    (s `hashWithSalt` (1 :: Int) `hashWithSalt` constructor `hashWithSalt`
-     strict) `hashWithSalt1` sortBy keyOrd (HashMap.toList binds)
-  hashWithSalt1 s As { asName = sym, asBind = bind } =
-    (s `hashWithSalt` (2 :: Int) `hashWithSalt` sym) `hashWithSalt1` bind
-  hashWithSalt1 s Name { nameSym = sym } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` sym
-  hashWithSalt1 s (Constant c) = s `hashWithSalt` (4 :: Int) `hashWithSalt1` c
-
 instance (Hashable b, Ord b) => Hashable1 (Case b) where
   hashWithSalt1 s Case { casePat = pat, caseBody = body } =
-    s `hashWithSalt1` pat `hashWithSalt1` body
+    (s `hashWithSalt` pat) `hashWithSalt1` body
 
 instance (Hashable b, Ord b) => Hashable1 (Element b) where
   hashWithSalt1 s Element { elemName = sym, elemPat = pat, elemType = ty } =
-    (s `hashWithSalt` sym) `hashWithSalt1` pat `hashWithSalt1` ty
+    (s `hashWithSalt` sym `hashWithSalt` pat) `hashWithSalt1` ty
 
 instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
@@ -802,15 +777,24 @@ instance (Hashable b, Ord b) => Hashable1 (Cmd b) where
 instance (Hashable b, Ord b) => Hashable1 (Comp b) where
   hashWithSalt1 s Seq { seqCmd = cmd, seqNext = next,
                         seqType = ty, seqPat = pat } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt1` ty `hashWithSalt1`
-    pat `hashWithSalt1` cmd `hashWithSalt1` next
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` pat) `hashWithSalt1`
+    ty `hashWithSalt1` cmd `hashWithSalt1` next
   hashWithSalt1 s End { endCmd = cmd } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` cmd
   hashWithSalt1 s (BadComp _) = s `hashWithSalt` (0 :: Int)
 
-instance (Hashable b, Hashable1 t, Hashable a, Ord b) =>
-         Hashable (Pattern b t a) where
-  hashWithSalt = hashWithSalt1
+instance (Hashable b, Ord b) => Hashable (Pattern b) where
+  hashWithSalt s Deconstruct { deconstructConstructor = constructor,
+                                deconstructBinds = binds,
+                                deconstructStrict = strict } =
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` constructor `hashWithSalt`
+     strict) `hashWithSalt` sortBy keyOrd (HashMap.toList binds)
+  hashWithSalt s As { asName = sym, asBind = bind } =
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` sym) `hashWithSalt` bind
+  hashWithSalt s Name { nameSym = sym } =
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` sym
+  hashWithSalt s Exact { exactLiteral = c } =
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` c
 
 instance (Hashable b, Hashable s, Ord b) => Hashable (Case b s) where
   hashWithSalt = hashWithSalt1
@@ -830,20 +814,12 @@ instance (Hashable b, Hashable s, Ord b) => Hashable (Cmd b s) where
 instance (Hashable b, Hashable s, Ord b) => Hashable (Comp b s) where
   hashWithSalt = hashWithSalt1
 
-instance Functor t => Functor (Pattern b t) where
-  fmap f b @ Deconstruct { deconstructBinds = binds } =
-    b { deconstructBinds = fmap (fmap f) binds }
-  fmap f b @ As { asBind = bind } = b { asBind = fmap f bind }
-  fmap _ b @ Name { nameSym = sym } = b { nameSym = sym }
-  fmap f (Constant t) = Constant (fmap f t)
-
 instance Functor (Case b) where
-  fmap f c @ Case { casePat = pat, caseBody = body } =
-    c { casePat = fmap f pat, caseBody = fmap f body }
+  fmap f c @ Case { caseBody = body } = c { caseBody = fmap f body }
 
 instance Functor (Element b) where
   fmap f e @ Element { elemPat = pat, elemType = ty } =
-    e { elemPat = fmap f pat, elemType = fmap f ty }
+    e { elemPat = pat, elemType = fmap f ty }
 
 instance Functor (Intro b) where
   fmap f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
@@ -864,7 +840,8 @@ instance Functor (Intro b) where
   fmap f t @ Fix { fixTerms = terms } = t { fixTerms = fmap (fmap f) terms }
   fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
   fmap f t @ Elim { elimTerm = term } = t { elimTerm = fmap f term }
-  fmap _ Literal { literalVal = lit } = Literal { literalVal = lit }
+  fmap _ Literal { literalVal = lit, literalPos = p } =
+    Literal { literalVal = lit, literalPos = p }
   fmap _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 
 instance Functor (Elim b) where
@@ -883,23 +860,15 @@ instance Functor (Cmd b) where
 instance Functor (Comp b) where
   fmap f c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
     c { seqCmd = fmap f cmd, seqNext = fmap f next,
-        seqType = fmap f ty, seqPat = fmap f pat }
+        seqType = fmap f ty, seqPat = pat }
   fmap f c @ End { endCmd = cmd } = c { endCmd = fmap f cmd }
   fmap _ (BadComp p) = BadComp p
 
-instance Foldable t => Foldable (Pattern b t) where
-  foldMap f Deconstruct { deconstructBinds = binds } = foldMap (foldMap f) binds
-  foldMap f As { asBind = bind } = foldMap f bind
-  foldMap f (Constant t) = foldMap f t
-  foldMap _ Name {} = mempty
-
 instance Foldable (Case b) where
-  foldMap f Case { casePat = pat, caseBody = body } =
-    foldMap f pat `mappend` foldMap f body
+  foldMap f Case { caseBody = body } = foldMap f body
 
 instance Foldable (Element b) where
-  foldMap f Element { elemPat = pat, elemType = ty } =
-    foldMap f pat `mappend` foldMap f ty
+  foldMap f Element { elemType = ty } = foldMap f ty
 
 instance Foldable (Intro b) where
   foldMap f FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
@@ -935,30 +904,18 @@ instance Foldable (Cmd b) where
   foldMap _ (BadCmd _) = mempty
 
 instance Foldable (Comp b) where
-  foldMap f Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
-    foldMap f ty `mappend` foldMap f pat `mappend`
-    foldMap f cmd `mappend` foldMap f next
+  foldMap f Seq { seqType = ty, seqCmd = cmd, seqNext = next } =
+    foldMap f ty `mappend` foldMap f cmd `mappend` foldMap f next
   foldMap f End { endCmd = cmd } = foldMap f cmd
   foldMap _ (BadComp _) = mempty
 
-instance Traversable t => Traversable (Pattern b t) where
-  traverse f b @ Deconstruct { deconstructBinds = binds } =
-    (\binds' -> b { deconstructBinds = binds' }) <$>
-    traverse (traverse f) binds
-  traverse _ b @ Name { nameSym = sym } = pure (b { nameSym = sym })
-  traverse f b @ As { asBind = bind } =
-    (\bind' -> b { asBind = bind' }) <$> traverse f bind
-  traverse f (Constant t) = Constant <$> traverse f t
-
 instance Traversable (Case b) where
-  traverse f c @ Case { casePat = pat, caseBody = body } =
-    (\pat' body' -> c { casePat = pat', caseBody = body' }) <$>
-      traverse f pat <*> traverse f body
+  traverse f c @ Case { caseBody = body } =
+    (\body' -> c { caseBody = body' }) <$> traverse f body
 
 instance Traversable (Element b) where
-  traverse f c @ Element { elemPat = pat, elemType = ty } =
-    (\pat' ty' -> c { elemPat = pat', elemType = ty' }) <$>
-      traverse f pat <*> traverse f ty
+  traverse f c @ Element { elemType = ty } =
+    (\ty' -> c { elemType = ty' }) <$> traverse f ty
 
 instance Traversable (Intro b) where
   traverse f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
@@ -988,7 +945,8 @@ instance Traversable (Intro b) where
     (\body' -> c { compBody = body' }) <$> traverse f body
   traverse f t @ Elim { elimTerm = term } =
     (\term' -> t { elimTerm = term' }) <$> traverse f term
-  traverse _ Literal { literalVal = lit } = pure Literal { literalVal = lit }
+  traverse _ Literal { literalVal = lit, literalPos = p } =
+    pure Literal { literalVal = lit, literalPos = p }
   traverse _ BadIntro { badIntroPos = p } = pure BadIntro { badIntroPos = p }
 
 instance Traversable (Elim b) where
@@ -1010,28 +968,26 @@ instance Traversable (Cmd b) where
   traverse _ (BadCmd c) = pure (BadCmd c)
 
 instance Traversable (Comp b) where
-  traverse f c @ Seq { seqCmd = cmd, seqNext = next,
-                       seqType = ty, seqPat = pat } =
-    (\ty' pat' cmd' next' -> c { seqCmd = cmd', seqNext = next',
-                                 seqType = ty', seqPat = pat' }) <$>
-      traverse f ty <*> traverse f pat <*> traverse f cmd <*> traverse f next
+  traverse f c @ Seq { seqCmd = cmd, seqNext = next, seqType = ty } =
+    (\ty' cmd' next' -> c { seqCmd = cmd', seqNext = next', seqType = ty' }) <$>
+      traverse f ty <*> traverse f cmd <*> traverse f next
   traverse f c @ End { endCmd = cmd } =
     (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
   traverse _ (BadComp p) = pure (BadComp p)
 
 injectpos :: DWARFPosition
 injectpos = Synthetic { synthDesc = Strict.fromString "Monad return" }
-
+{-
 instance MonadTrans (Pattern b) where
-  lift = Constant
+  lift = Exact
 
 instance Bound (Pattern b) where
   b @ Deconstruct { deconstructBinds = binds } >>>= f =
     b { deconstructBinds = fmap (>>>= f) binds }
   b @ As { asBind = bind } >>>= f = b { asBind = bind >>>= f }
   b @ Name { nameSym = sym } >>>= _ = b { nameSym = sym }
-  Constant t >>>= f = Constant (t >>= f)
-
+  Exact t >>>= f = Exact (t >>= f)
+-}
 instance Applicative (Intro b) where
   pure = return
   (<*>) = ap
@@ -1045,12 +1001,10 @@ instance Applicative (Comp b) where
   (<*>) = ap
 
 caseSubstIntro :: (a -> Intro c b) -> Case c a -> Case c b
-caseSubstIntro f c @ Case { casePat = pat, caseBody = body } =
-  c { casePat = pat >>>= f, caseBody = body >>>= f }
+caseSubstIntro f c @ Case { caseBody = body } = c { caseBody = body >>>= f }
 
 elementSubstIntro :: (a -> Intro c b) -> Element c a -> Element c b
-elementSubstIntro f e @ Element { elemPat = pat, elemType = ty } =
-  e { elemPat = pat >>>= f, elemType = ty >>>= f }
+elementSubstIntro f e @ Element { elemType = ty } = e { elemType = ty >>>= f }
 
 elimSubstIntro :: (a -> Intro c b) -> Elim c a -> Elim c b
 elimSubstIntro f t @ Call { callArgs = args, callFunc = func } =
@@ -1066,9 +1020,8 @@ cmdSubstIntro f c @ Eval { evalTerm = term } = c { evalTerm = term >>= f }
 cmdSubstIntro _ (BadCmd p) = BadCmd p
 
 compSubstIntro :: (a -> Intro c b) -> Comp c a -> Comp c b
-compSubstIntro f c @ Seq { seqCmd = cmd, seqNext = next,
-                          seqType = ty, seqPat = pat } =
-  c { seqType = ty >>= f, seqPat = pat >>>= f, seqCmd = cmdSubstIntro f cmd,
+compSubstIntro f c @ Seq { seqCmd = cmd, seqNext = next, seqType = ty } =
+  c { seqType = ty >>= f, seqCmd = cmdSubstIntro f cmd,
       seqNext = next >>>= compSubstIntro f . return }
 compSubstIntro f c @ End { endCmd = cmd } =
   c { endCmd = cmdSubstIntro f cmd }
@@ -1097,16 +1050,17 @@ instance Monad (Intro b) where
   t @ Elim { elimTerm = term } >>= f = t { elimTerm = elimSubstIntro f term }
   t @ Eta { etaTerm = term, etaType = ty } >>= f =
     t { etaTerm = elimSubstIntro f term, etaType = ty >>= f }
-  Literal { literalVal = lit } >>= _ = Literal { literalVal = lit }
+  Literal { literalVal = lit, literalPos = p } >>= _ =
+    Literal { literalVal = lit, literalPos = p }
   BadIntro { badIntroPos = p } >>= _ = BadIntro { badIntroPos = p }
 
 caseSubstElim :: (a -> Elim c b) -> Case c a -> Case c b
-caseSubstElim f c @ Case { casePat = pat, caseBody = body } =
-  c { casePat = pat >>>= (Elim . f), caseBody = body >>>= (Elim . f) }
+caseSubstElim f c @ Case { caseBody = body } =
+  c { caseBody = body >>>= (Elim . f) }
 
 elementSubstElim :: (a -> Elim c b) -> Element c a -> Element c b
-elementSubstElim f e @ Element { elemPat = pat, elemType = ty } =
-  e { elemPat = pat >>>= (Elim . f), elemType = ty >>>= (Elim . f) }
+elementSubstElim f e @ Element { elemType = ty } =
+  e { elemType = ty >>>= (Elim . f) }
 
 cmdSubstElim :: (a -> Elim c b) -> Cmd c a -> Cmd c b
 cmdSubstElim f c @ Value { valTerm = term } =
@@ -1116,10 +1070,8 @@ cmdSubstElim f c @ Eval { evalTerm = term } =
 cmdSubstElim _ (BadCmd p) = BadCmd p
 
 compSubstElim :: (a -> Elim c b) -> Comp c a -> Comp c b
-compSubstElim f c @ Seq { seqCmd = cmd, seqNext = next,
-                          seqType = ty, seqPat = pat } =
-  c { seqType = introSubstElim f ty, seqPat = pat >>>= Elim . f,
-      seqCmd = cmdSubstElim f cmd,
+compSubstElim f c @ Seq { seqCmd = cmd, seqNext = next, seqType = ty } =
+  c { seqType = introSubstElim f ty, seqCmd = cmdSubstElim f cmd,
       seqNext = next >>>= compSubstElim f . return }
 compSubstElim f c @ End { endCmd = cmd } =
   c { endCmd = cmdSubstElim f cmd }
@@ -1150,7 +1102,8 @@ introSubstElim f t @ Comp { compBody = body } =
 introSubstElim f Elim { elimTerm = term } = Elim { elimTerm = term >>= f }
 introSubstElim f t @ Eta { etaTerm = term, etaType = ty } =
   t { etaTerm = term >>= f, etaType = introSubstElim f ty }
-introSubstElim _ Literal { literalVal = lit } = Literal { literalVal = lit }
+introSubstElim _ Literal { literalVal = lit, literalPos = p } =
+  Literal { literalVal = lit, literalPos = p }
 introSubstElim _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 
 instance Monad (Elim b) where
@@ -1192,9 +1145,9 @@ instance Monad (Comp b) where
       endPos = injectpos
     }
 
-  c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } >>= f =
+  c @ Seq { seqType = ty, seqCmd = cmd, seqNext = next } >>= f =
     c { seqType = ty >>= introSubstComp f, seqNext = next >>>= f,
-        seqPat = pat >>>= introSubstComp f, seqCmd = cmdSubstComp f cmd }
+        seqCmd = cmdSubstComp f cmd }
   c @ End { endCmd = cmd } >>= f = c { endCmd = cmdSubstComp f cmd }
   BadComp p >>= _ = BadComp p
 
@@ -1209,32 +1162,14 @@ instance Format Literal where
 instance Show Literal where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance MonadPositions m => FormatM m Literal where
-  formatM Num { numVal = num, numPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "Num")
-                               [(string "val", string (show num)),
-                                (string "pos", posdoc)])
-  formatM Str { strVal = str, strPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "Str")
-                               [(string "val", bytestring str),
-                                (string "pos", posdoc)])
-  formatM Char { charVal = chr, charPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "Char")
-                               [(string "val", char chr),
-                                (string "pos", posdoc)])
+instance Monad m => FormatM m Literal where
+  formatM = return . format
 
 instance Format Quantifier where
   format Forall = string "forall"
   format Exists = string "exists"
 
-instance (Format (func free), Format bound, Format free) =>
-         Format (Pattern bound func free) where
+instance Format bound => Format (Pattern bound) where
   format Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
                        deconstructStrict = True } =
     let
@@ -1267,17 +1202,18 @@ instance (Format (func free), Format bound, Format free) =>
     let
       namedoc = format sym
     in
-      compoundApplyDoc (string "Name")
-                       [(string "name", namedoc)]
-  format (Constant e) = format e
+      compoundApplyDoc (string "Name") [(string "name", namedoc)]
+  format Exact { exactLiteral = e } =
+    let
+      litdoc = format e
+    in
+      compoundApplyDoc (string "Exact") [(string "literal", litdoc)]
 
-instance (Format (func free), Format bound, Format free) =>
-         Show (Pattern bound func free) where
+instance Format bound => Show (Pattern bound) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m (func free),
-          FormatM m bound, FormatM m free) =>
-         FormatM m (Pattern bound func free) where
+instance (MonadPositions m, MonadSymbols m, FormatM m bound) =>
+         FormatM m (Pattern bound) where
   formatM Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
                         deconstructStrict = True, deconstructPos = pos } =
     do
@@ -1316,7 +1252,13 @@ instance (MonadPositions m, MonadSymbols m, FormatM m (func free),
       return (compoundApplyDoc (string "Name")
                                [(string "name", namedoc),
                                 (string "pos", posdoc)])
-  formatM (Constant e) = formatM e
+  formatM Exact { exactLiteral = e, exactPos = p } =
+    do
+      posdoc <- formatM p
+      litdoc <- formatM e
+      return (compoundApplyDoc (string "Exact")
+                               [(string "literal", litdoc),
+                                (string "pos", posdoc)])
 
 instance (Format bound, Format free) => Format (Case bound free) where
   format Case { casePat = pat, caseBody = body } =
@@ -1556,10 +1498,12 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
     do
       termdoc <- formatM term
       return (compoundApplyDoc (string "Elim") [(string "term", termdoc)])
-  formatM Literal { literalVal = lit } =
+  formatM Literal { literalVal = lit, literalPos = pos } =
     do
+      posdoc <- formatM pos
       litdoc <- formatM lit
-      return (compoundApplyDoc (string "Literal") [(string "literal", litdoc)])
+      return (compoundApplyDoc (string "Literal") [(string "literal", litdoc),
+                                                   (string "pos", posdoc)])
   formatM BadIntro { badIntroPos = pos } =
     do
       posdoc <- formatM pos
@@ -1717,44 +1661,38 @@ numPickler :: (GenericXMLString tag, Show tag,
               PU [NodeG [] tag text] Literal
 numPickler =
   let
-    revfunc Num { numVal = num, numPos = pos } =
-      ((numerator num, denominator num), pos)
+    revfunc Num { numVal = num } = (numerator num, denominator num)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((numer, denom), pos) -> Num { numVal = numer % denom,
-                                            numPos = pos }, revfunc)
-           (xpElem (gxFromString "Num")
-                   (xpPair (xpAttr (gxFromString "numerator") xpPrim)
-                           (xpAttr (gxFromString "denominator") xpPrim))
-                   (xpElemNodes (gxFromString "pos") xpickle))
+    xpWrap (\(numer, denom) -> Num { numVal = numer % denom }, revfunc)
+           (xpElemAttrs (gxFromString "Num")
+                        (xpPair (xpAttr (gxFromString "numerator") xpPrim)
+                                (xpAttr (gxFromString "denominator") xpPrim)))
 
 strPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Literal
 strPickler =
   let
-    revfunc Str { strVal = str, strPos = pos } = (gxFromByteString str, pos)
+    revfunc Str { strVal = str } = gxFromByteString str
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(str, pos) -> Str { strVal = gxToByteString str,
-                                 strPos = pos }, revfunc)
+    xpWrap (\str -> Str { strVal = gxToByteString str }, revfunc)
            (xpElemNodes (gxFromString "Str")
-                        (xpPair (xpElemNodes (gxFromString "value")
-                                             (xpContent xpText0))
-                                (xpElemNodes (gxFromString "pos") xpickle)))
+                        (xpElemNodes (gxFromString "value")
+                                     (xpContent xpText0)))
 
 charPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
                PU [NodeG [] tag text] Literal
 charPickler =
   let
-    revfunc Char { charVal = chr, charPos = pos } = (chr, pos)
+    revfunc Char { charVal = chr } = chr
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(chr, pos) -> Char { charVal = chr, charPos = pos }, revfunc)
-           (xpElem (gxFromString "Char")
-                   (xpAttr (gxFromString "value") xpPrim)
-                   (xpElemNodes (gxFromString "pos") xpickle))
+    xpWrap (\chr -> Char { charVal = chr }, revfunc)
+           (xpElemAttrs (gxFromString "Char")
+                        (xpAttr (gxFromString "value") xpPrim))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Literal where
@@ -1789,10 +1727,8 @@ deconstructPickler :: (GenericXMLString tag, Show tag,
                        GenericXMLString text, Show text,
                        XmlPickler [(tag, text)] bound,
                        XmlPickler [NodeG [] tag text] bound,
-                       XmlPickler [NodeG [] tag text] free,
-                       XmlPickler [NodeG [] tag text] (const free),
                        Hashable bound, Eq bound) =>
-             PU [NodeG [] tag text] (Pattern bound const free)
+             PU [NodeG [] tag text] (Pattern bound)
 deconstructPickler =
   let
     revfunc Deconstruct { deconstructStrict = strict, deconstructBinds = binds,
@@ -1813,10 +1749,8 @@ deconstructPickler =
 asPickler :: (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
               XmlPickler [(tag, text)] bound,
               XmlPickler [NodeG [] tag text] bound,
-              XmlPickler [NodeG [] tag text] free,
-              XmlPickler [NodeG [] tag text] (const free),
               Hashable bound, Eq bound) =>
-             PU [NodeG [] tag text] (Pattern bound const free)
+             PU [NodeG [] tag text] (Pattern bound)
 asPickler =
   let
     revfunc As { asName = sym, asBind = pat, asPos = pos } = (sym, (pat, pos))
@@ -1832,10 +1766,8 @@ namePickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
                 XmlPickler [(tag, text)] bound,
                 XmlPickler [NodeG [] tag text] bound,
-                XmlPickler [NodeG [] tag text] free,
-                XmlPickler [NodeG [] tag text] (const free),
                 Hashable bound, Eq bound) =>
-               PU [NodeG [] tag text] (Pattern bound const free)
+               PU [NodeG [] tag text] (Pattern bound)
 namePickler =
   let
     revfunc Name { nameSym = sym, namePos = pos } = (sym, pos)
@@ -1848,30 +1780,29 @@ namePickler =
 constantPickler :: (GenericXMLString tag, Show tag,
                     GenericXMLString text, Show text,
                     XmlPickler [NodeG [] tag text] bound,
-                    XmlPickler [NodeG [] tag text] free,
-                    XmlPickler [NodeG [] tag text] (const free),
                     Hashable bound, Eq bound) =>
-                   PU [NodeG [] tag text] (Pattern bound const free)
+                   PU [NodeG [] tag text] (Pattern bound)
 constantPickler =
   let
-    revfunc (Constant v) = v
+    revfunc Exact { exactLiteral = v, exactPos = pos } = (v, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (Constant, revfunc) (xpElemNodes (gxFromString "Constant") xpickle)
+    xpWrap (\(v, pos) -> Exact { exactLiteral = v, exactPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Exact")
+                        (xpPair (xpElemNodes (gxFromString "literal") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [(tag, text)] bound,
           XmlPickler [NodeG [] tag text] bound,
-          XmlPickler [NodeG [] tag text] free,
-          XmlPickler [NodeG [] tag text] (const free),
           Hashable bound, Eq bound) =>
-         XmlPickler [NodeG [] tag text] (Pattern bound const free) where
+         XmlPickler [NodeG [] tag text] (Pattern bound) where
   xpickle =
     let
       picker Deconstruct {} = 0
       picker As {} = 1
       picker Name {} = 2
-      picker Constant {} = 3
+      picker Exact {} = 3
     in
       xpAlt picker [ deconstructPickler, asPickler,
                      namePickler, constantPickler ]
@@ -2115,12 +2046,14 @@ literalPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] (Intro bound free)
 literalPickler =
   let
-    revfunc Literal { literalVal = lit } = lit
+    revfunc Literal { literalVal = lit, literalPos = pos } = (lit, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (Literal, revfunc)
+    xpWrap (\(lit, pos) -> Literal { literalVal = lit, literalPos = pos },
+            revfunc)
            (xpElemNodes (gxFromString "Literal")
-                        (xpElemNodes (gxFromString "literal") xpickle))
+                        (xpPair (xpElemNodes (gxFromString "literal") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 badIntroPickler :: (GenericXMLString tag, Show tag,
                     GenericXMLString text, Show text,
