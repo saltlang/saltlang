@@ -163,8 +163,8 @@ data Case bound free =
     casePos :: !DWARFPosition
   }
 
--- | An element.  This is either an argument in a product type or a
--- field in a sum type.  The pattern introduces variables in
+-- | An element.  This is either an argument in a function type or a
+-- field in a record type.  The pattern introduces variables in
 -- subsequent elements.
 data Element bound free =
   Element {
