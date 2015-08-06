@@ -69,17 +69,21 @@ module Language.Salt.Message(
        cannotCreateFile,
        cannotCreateArtifact,
        importNestedScope,
-       internalError
+       internalError,
+       callNonFunc,
+       noMatch
        ) where
 
 import Control.Monad.Messages
+import Control.Monad.Positions
 import Control.Monad.Symbols
 import Data.Hashable
 import Data.Position.BasicPosition
+import Data.Position.DWARFPosition(DWARFPosition, basicPosition)
 import Language.Salt.Surface.Token
 import Data.Symbol
 import Text.Format
---import Language.Salt.Core.Syntax
+import Language.Salt.Core.Syntax
 
 import qualified Data.ByteString as Strict
 import qualified Data.ByteString.Lazy as Lazy
@@ -262,7 +266,14 @@ data Message =
       internalErrorStr :: !Strict.ByteString,
       internalErrorPos :: !Position
     }
-
+  | CallNonFunc {
+      callNonFuncTerm :: !Doc,
+      callNonFuncPos :: !Position
+    }
+  | NoMatch {
+      noMatchTerm :: !Doc,
+      noMatchPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -404,6 +415,10 @@ instance Hashable Message where
     s `hashWithSalt` (31 :: Int) `hashWithSalt` pos
   hashWithSalt s InternalError { internalErrorPos = pos } =
     s `hashWithSalt` (32 :: Int) `hashWithSalt` pos
+  hashWithSalt s CallNonFunc { callNonFuncPos = pos } =
+    s `hashWithSalt` (33 :: Int) `hashWithSalt` pos
+  hashWithSalt s NoMatch { noMatchPos = pos } =
+    s `hashWithSalt` (34 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -439,6 +454,8 @@ instance Msg.Message Message where
   severity CannotCreate {} = Msg.Error
   severity ImportNestedScope {} = Msg.Error
   severity InternalError {} = Msg.Internal
+  severity CallNonFunc {} = Msg.Internal
+  severity NoMatch {} = Msg.Internal
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -497,6 +514,8 @@ instance Msg.Message Message where
     string "Cannot create file for" <+> bytestring cname
   brief ImportNestedScope {} = string "Importing from a nested scope"
   brief InternalError { internalErrorStr = str } = bytestring str
+  brief CallNonFunc {} = string "Call to non-function during evaluation"
+  brief NoMatch {} = string "No pattern matching term"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -541,6 +560,10 @@ instance Msg.Message Message where
     Just $! fillSep [ string "Error while creating file",
                       dquoted (bytestring fname) <> colon,
                       bytestring msg ]
+  details CallNonFunc { callNonFuncTerm = term } =
+    Just $! fillSep [string "value", term, string "is not a function"]
+  details NoMatch { noMatchTerm = term } =
+    Just $! fillSep [string "value", term, string "could not be matched"]
   details _ = Nothing
 
   highlighting HardTabs {} = Msg.Background
@@ -582,6 +605,8 @@ instance Msg.MessagePosition BasicPosition Message where
   position CannotCreate {} = Nothing
   position ImportNestedScope { importNestedScopePos = pos } = Just pos
   position InternalError { internalErrorPos = pos } = Just pos
+  position CallNonFunc { callNonFuncPos = pos } = Just pos
+  position NoMatch { noMatchPos = pos } = Just pos
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -940,3 +965,33 @@ internalError :: MonadMessages Message m =>
               -> m ()
 internalError str pos = message InternalError { internalErrorStr = str,
                                                 internalErrorPos = pos }
+
+-- | Report a call to a non-function in evaluation.
+callNonFunc :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
+                FormatM m bound, FormatM m free) =>
+               Elim bound free
+            -- ^ The non-function term being called.
+            -> DWARFPosition
+            -- ^ The position at which the call occurs.
+            -> m ()
+callNonFunc term pos =
+  let
+    basicpos = basicPosition pos
+  in do
+    termdoc <- formatM term
+    message CallNonFunc { callNonFuncTerm = termdoc, callNonFuncPos = basicpos }
+
+-- | Report an unmatched value in a pattern match.
+noMatch :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
+            FormatM m bound, FormatM m free) =>
+           Elim bound free
+        -- ^ The unmatched term.
+        -> DWARFPosition
+        -- ^ The position at which the match occurs.
+        -> m ()
+noMatch term pos =
+  let
+    basicpos = basicPosition pos
+  in do
+    termdoc <- formatM term
+    message NoMatch { noMatchTerm = termdoc, noMatchPos = basicpos }
