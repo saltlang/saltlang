@@ -47,11 +47,11 @@ import Language.Salt.Core.Syntax
 import qualified Data.HashMap.Strict as HashMap
 
 -- | Tail-recursive work function for pattern matching
-patternMatchTail :: (Default sym, Eq sym, Hashable sym) =>
-                    HashMap sym (Intro sym sym) ->
-                    Pattern sym ->
-                    Intro sym sym ->
-                    Maybe (HashMap sym (Intro sym sym))
+patternMatchTail :: (Default bound, Eq bound, Hashable bound) =>
+                    HashMap bound (Intro bound free) ->
+                    Pattern bound ->
+                    Intro bound free ->
+                    Maybe (HashMap bound (Intro bound free))
 patternMatchTail result Deconstruct { deconstructConstructor = constructor,
                                       deconstructBinds = binds } term
   -- The default value is the unused symbol, which means there is no
@@ -70,9 +70,16 @@ patternMatchTail result Deconstruct { deconstructConstructor = constructor,
       _ -> Nothing
   | otherwise =
     case term of
-      Elim { elimTerm = Call { callFunc = Var { varSym = func },
-                               callArgs = args } } ->
-        if func == constructor
+      Elim { elimTerm =
+                Call { callFunc =
+                          Typed { typedTerm =
+                                     Constructor {
+                                       constructorSym = constructor'
+                                     }
+                                },
+                       callArgs = args }
+           } ->
+        if constructor == constructor'
         then let
             foldfun accum sym bind =
               do
@@ -100,12 +107,12 @@ patternMatchTail _ Exact {} _ = Nothing
 -- represented by the binding.  If the match succeeds, return a
 -- unifier in the form of a map from bound variables to terms.  If the
 -- match fails, return nothing.
-patternMatch :: (Default sym, Eq sym, Hashable sym) =>
-                Pattern sym
+patternMatch :: (Default bound, Eq bound, Hashable bound) =>
+                Pattern bound
              -- ^ The pattern being matched.
-             -> Intro sym sym
+             -> Intro bound free
              -- ^ The term attempting to match the pattern.
-             -> Maybe (HashMap sym (Intro sym sym))
+             -> Maybe (HashMap bound (Intro bound free))
              -- ^ A list of bindings from the pattern, or Nothing.
 patternMatch = patternMatchTail HashMap.empty
 {-

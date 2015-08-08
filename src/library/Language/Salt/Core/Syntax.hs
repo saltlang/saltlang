@@ -321,11 +321,11 @@ data Intro bound free =
     -- | A symbol whose meaning is understood implicitly by the
     -- compiler.  This includes intrinsic functions, as well as
     -- anything that is auto-generated during transliteration.
-  | Intrinsic {
-      -- | The name of the intrinsic.
-      intrinsicSym :: !bound,
+  | Constructor {
+      -- | The name of the constructor.
+      constructorSym :: !bound,
       -- | The position in source from which this originates.
-      intrinsicPos :: !DWARFPosition
+      constructorPos :: !DWARFPosition
     }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
@@ -500,8 +500,8 @@ instance Eq b => Eq1 (Intro b) where
   Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
   Elim { elimTerm = term1 } ==# Elim { elimTerm = term2 } = term1 ==# term2
   Literal { literalVal = lit1 } ==# Literal { literalVal = lit2 } = lit1 == lit2
-  Intrinsic { intrinsicSym = sym1 } ==# Intrinsic { intrinsicSym = sym2 } =
-    sym1 == sym2
+  Constructor { constructorSym = sym1 } ==#
+    Constructor { constructorSym = sym2 } = sym1 == sym2
   BadIntro {} ==# BadIntro {} = True
   _ ==# _ = False
 
@@ -658,10 +658,11 @@ instance Ord b => Ord1 (Intro b) where
     compare lit1 lit2
   compare1 Literal {} _ = LT
   compare1 _ Literal {} = GT
-  compare1 Intrinsic { intrinsicSym = sym1 } Intrinsic { intrinsicSym = sym2 } =
+  compare1 Constructor { constructorSym = sym1 }
+           Constructor { constructorSym = sym2 } =
     compare sym1 sym2
-  compare1 Intrinsic {} _ = LT
-  compare1 _ Intrinsic {} = GT
+  compare1 Constructor {} _ = LT
+  compare1 _ Constructor {} = GT
   compare1 BadIntro {} BadIntro {} = EQ
 
 instance Ord b => Ord1 (Elim b) where
@@ -770,7 +771,7 @@ instance (Hashable b, Ord b) => Hashable1 (Intro b) where
     s `hashWithSalt` (12 :: Int) `hashWithSalt1` term
   hashWithSalt1 s Literal { literalVal = term } =
     s `hashWithSalt` (13 :: Int) `hashWithSalt` term
-  hashWithSalt1 s Intrinsic { intrinsicSym = sym } =
+  hashWithSalt1 s Constructor { constructorSym = sym } =
     s `hashWithSalt` (14 :: Int) `hashWithSalt` sym
   hashWithSalt1 s BadIntro {} = s `hashWithSalt` (0 :: Int)
 
@@ -859,8 +860,8 @@ instance Functor (Intro b) where
   fmap f t @ Elim { elimTerm = term } = t { elimTerm = fmap f term }
   fmap _ Literal { literalVal = lit, literalPos = p } =
     Literal { literalVal = lit, literalPos = p }
-  fmap _ Intrinsic { intrinsicSym = sym, intrinsicPos = p } =
-    Intrinsic { intrinsicSym = sym, intrinsicPos = p }
+  fmap _ Constructor { constructorSym = sym, constructorPos = p } =
+    Constructor { constructorSym = sym, constructorPos = p }
   fmap _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 
 instance Functor (Elim b) where
@@ -907,7 +908,7 @@ instance Foldable (Intro b) where
   foldMap f Comp { compBody = body } = foldMap f body
   foldMap f Elim { elimTerm = term } = foldMap f term
   foldMap _ Literal {} = mempty
-  foldMap _ Intrinsic {} = mempty
+  foldMap _ Constructor {} = mempty
   foldMap _ BadIntro {} = mempty
 
 instance Foldable (Elim b) where
@@ -965,8 +966,8 @@ instance Traversable (Intro b) where
     (\body' -> c { compBody = body' }) <$> traverse f body
   traverse f t @ Elim { elimTerm = term } =
     (\term' -> t { elimTerm = term' }) <$> traverse f term
-  traverse _ Intrinsic { intrinsicSym = sym, intrinsicPos = p } =
-    pure Intrinsic { intrinsicSym = sym, intrinsicPos = p }
+  traverse _ Constructor { constructorSym = sym, constructorPos = p } =
+    pure Constructor { constructorSym = sym, constructorPos = p }
   traverse _ Literal { literalVal = lit, literalPos = p } =
     pure Literal { literalVal = lit, literalPos = p }
   traverse _ BadIntro { badIntroPos = p } = pure BadIntro { badIntroPos = p }
@@ -1074,8 +1075,8 @@ instance Monad (Intro b) where
     t { etaTerm = elimSubstIntro f term, etaType = ty >>= f }
   Literal { literalVal = lit, literalPos = p } >>= _ =
     Literal { literalVal = lit, literalPos = p }
-  Intrinsic { intrinsicSym = sym, intrinsicPos = p } >>= _ =
-    Intrinsic { intrinsicSym = sym, intrinsicPos = p }
+  Constructor { constructorSym = sym, constructorPos = p } >>= _ =
+    Constructor { constructorSym = sym, constructorPos = p }
   BadIntro { badIntroPos = p } >>= _ = BadIntro { badIntroPos = p }
 
 caseSubstElim :: (a -> Elim c b) -> Case c a -> Case c b
@@ -1128,8 +1129,8 @@ introSubstElim f t @ Eta { etaTerm = term, etaType = ty } =
   t { etaTerm = term >>= f, etaType = introSubstElim f ty }
 introSubstElim _ Literal { literalVal = lit, literalPos = p } =
   Literal { literalVal = lit, literalPos = p }
-introSubstElim _ Intrinsic { intrinsicSym = sym, intrinsicPos = p } =
-  Intrinsic { intrinsicSym = sym, intrinsicPos = p }
+introSubstElim _ Constructor { constructorSym = sym, constructorPos = p } =
+  Constructor { constructorSym = sym, constructorPos = p }
 introSubstElim _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 
 instance Monad (Elim b) where
@@ -1433,11 +1434,11 @@ instance (Format bound, Format free) => Format (Intro bound free) where
       termdoc = format term
     in
       compoundApplyDoc (string "Elim") [(string "term", termdoc)]
-  format Intrinsic { intrinsicSym = sym } =
+  format Constructor { constructorSym = sym } =
     let
       termdoc = format sym
     in
-      compoundApplyDoc (string "Intrinsic") [(string "sym", termdoc)]
+      compoundApplyDoc (string "Constructor") [(string "sym", termdoc)]
   format Literal { literalVal = lit } =
     let
       termdoc = format lit
@@ -1529,11 +1530,11 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
     do
       termdoc <- formatM term
       return (compoundApplyDoc (string "Elim") [(string "term", termdoc)])
-  formatM Intrinsic { intrinsicSym = sym, intrinsicPos = pos } =
+  formatM Constructor { constructorSym = sym, constructorPos = pos } =
     do
       posdoc <- formatM pos
       litdoc <- formatM sym
-      return (compoundApplyDoc (string "Intrinsic") [(string "sym", litdoc),
+      return (compoundApplyDoc (string "Constructor") [(string "sym", litdoc),
                                                      (string "pos", posdoc)])
   formatM Literal { literalVal = lit, literalPos = pos } =
     do
@@ -2074,21 +2075,23 @@ elimPickler =
            (xpElemNodes (gxFromString "Elim")
                         (xpElemNodes (gxFromString "term") xpickle))
 
-intrinsicPickler :: (GenericXMLString tag, Show tag,
+constructorPickler :: (GenericXMLString tag, Show tag,
                      GenericXMLString text, Show text,
                      XmlPickler [(tag, text)] bound,
                      XmlPickler [NodeG [] tag text] bound,
                      XmlPickler [NodeG [] tag text] free,
                      Hashable bound, Eq bound) =>
                     PU [NodeG [] tag text] (Intro bound free)
-intrinsicPickler =
+constructorPickler =
   let
-    revfunc Intrinsic { intrinsicSym = sym, intrinsicPos = pos } = (sym, pos)
+    revfunc Constructor { constructorSym = sym, constructorPos = pos } =
+      (sym, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(sym, pos) -> Intrinsic { intrinsicSym = sym, intrinsicPos = pos },
+    xpWrap (\(sym, pos) -> Constructor { constructorSym = sym,
+                                         constructorPos = pos },
             revfunc)
-           (xpElem (gxFromString "Intrinsic") xpickle
+           (xpElem (gxFromString "Constructor") xpickle
                    (xpElemNodes (gxFromString "pos") xpickle))
 
 literalPickler :: (GenericXMLString tag, Show tag,
@@ -2143,7 +2146,7 @@ instance (GenericXMLString tag, Show tag,
       picker Fix {} = 7
       picker Comp {} = 8
       picker Elim {} = 9
-      picker Intrinsic {} = 10
+      picker Constructor {} = 10
       picker Literal {} = 11
       picker BadIntro {} = 12
       picker Eta {} = error "Eta not supported"
@@ -2151,7 +2154,7 @@ instance (GenericXMLString tag, Show tag,
       xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
                      compTypePickler, quantifiedPickler, lambdaPickler,
                      recordPickler, fixPickler, compPickler, elimPickler,
-                     intrinsicPickler, literalPickler, badIntroPickler ]
+                     constructorPickler, literalPickler, badIntroPickler ]
 
 
 callPickler :: (GenericXMLString tag, Show tag,
