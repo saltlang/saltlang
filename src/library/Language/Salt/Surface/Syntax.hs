@@ -62,6 +62,7 @@ import Data.HashMap.Strict(HashMap)
 import Data.List(sort)
 import Data.Symbol
 import Data.Word
+import Language.Salt.Format
 import Language.Salt.Surface.Common
 import Prelude hiding (init, exp, Either(..))
 import Text.Format
@@ -1021,14 +1022,14 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m (Ordering, Exp) where
         GT -> string ">"
     in do
       expdoc <- formatM exp
-      return $! constructorDoc (string "Prec") [(string "ord", orddoc),
+      return $! compoundApplyDoc (string "Prec") [(string "ord", orddoc),
                                                 (string "name", expdoc)]
 
 instance (MonadSymbols m, MonadPositions m) => FormatM m Syntax where
   formatM Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
     do
       precdocs <- mapM formatM precs
-      return $! constructorDoc (string "Syntax")
+      return $! compoundApplyDoc (string "Syntax")
                                [(string "fixity", format fixity),
                                 (string "scope", listDoc precdocs)]
 
@@ -1038,7 +1039,7 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Truth where
     do
       posdoc <- formatM pos
       contentdoc <- formatM content
-      return (constructorDoc (string "Truth")
+      return (compoundApplyDoc (string "Truth")
                              [(string "visibility", format vis),
                               (string "kind", format kind),
                               (string "pos", posdoc),
@@ -1049,7 +1050,7 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Truth where
       posdoc <- formatM pos
       contentdoc <- formatM content
       proofdoc <- formatM proof
-      return (constructorDoc (string "Truth")
+      return (compoundApplyDoc (string "Truth")
                              [(string "visibility", format vis),
                               (string "kind", format kind),
                               (string "pos", posdoc),
@@ -1077,7 +1078,7 @@ formatElems arr =
     privatedocs <- mapM formatM (arr ! Private)
     protecteddocs <- mapM formatM (arr ! Protected)
     publicdocs <- mapM formatM (arr ! Public)
-    return $! constructorDoc (string "Elems")
+    return $! compoundApplyDoc (string "Elems")
                              [(string "hidden", listDoc hiddendocs),
                               (string "private", listDoc privatedocs),
                               (string "protected", listDoc protecteddocs),
@@ -1088,13 +1089,13 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Component where
     do
       expecteddoc <- formatM expected
       scopedoc <- formatM scope
-      return $ constructorDoc (string "Component")
+      return $ compoundApplyDoc (string "Component")
                               [(string "expected", expecteddoc),
                                (string "scope", scopedoc)]
   formatM Component { compExpected = Nothing, compScope = scope } =
     do
       scopedoc <- formatM scope
-      return $ constructorDoc (string "Component")
+      return $ compoundApplyDoc (string "Component")
                               [(string "scope", scopedoc)]
 
 instance (MonadSymbols m, MonadPositions m) => FormatM m Scope where
@@ -1107,7 +1108,7 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Scope where
       truthsdoc <- formatMap truths
       elemsdoc <- formatElems defs
       proofsdoc <- mapM formatM proofs
-      return $! constructorDoc (string "Scope")
+      return $! compoundApplyDoc (string "Scope")
                                [(string "builders", buildersdoc),
                                 (string "syntax", syntaxdoc),
                                 (string "truths", truthsdoc),
@@ -1123,7 +1124,7 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Builder where
       superdocs <- mapM formatM supers
       paramdocs <- formatM params
       bodydoc <- formatM body
-      return (constructorDoc (string "Builder")
+      return (compoundApplyDoc (string "Builder")
                              [(string "visibility", format vis),
                               (string "pos", posdoc),
                               (string "kind", format cls),
@@ -1137,7 +1138,7 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Proof where
       namedoc <- formatM exp
       posdoc <- formatM pos
       bodydoc <- formatM body
-      return (constructorDoc (string "Proof")
+      return (compoundApplyDoc (string "Proof")
                              [(string "name", namedoc),
                               (string "pos", posdoc),
                               (string "body", bodydoc)])
@@ -1148,7 +1149,7 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Element where
       posdoc <- formatM pos
       patdoc <- formatM pat
       initdoc <- formatM init
-      return (constructorDoc (string "Group")
+      return (compoundApplyDoc (string "Group")
                              [(string "pos", posdoc),
                               (string "pattern", patdoc),
                               (string "init", initdoc)])
@@ -1156,14 +1157,14 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Element where
     do
       posdoc <- formatM pos
       patdoc <- formatM pat
-      return (constructorDoc (string "Group")
+      return (compoundApplyDoc (string "Group")
                              [(string "pos", posdoc),
                               (string "pattern", patdoc)])
   formatM Import { importExp = exp, importPos = pos } =
     do
       expdoc <- formatM exp
       posdoc <- formatM pos
-      return (constructorDoc (string "Import")
+      return (compoundApplyDoc (string "Import")
                              [(string "exp", expdoc),
                               (string "pos", posdoc)])
 
@@ -1174,14 +1175,14 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
     do
       symdoc <- formatM sym
       truthdoc <- formatM truth
-      return (constructorDoc (string "Dynamic")
+      return (compoundApplyDoc (string "Dynamic")
                              [(string "sym", symdoc),
                               (string "truth", truthdoc)])
   formatM Local { localName = sym, localBuilder = builder } =
     do
       symdoc <- formatM sym
       builderdoc <- formatM builder
-      return (constructorDoc (string "Local")
+      return (compoundApplyDoc (string "Local")
                              [(string "sym", symdoc),
                               (string "builder", builderdoc)])
 
@@ -1190,7 +1191,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
     do
       posdoc <- formatM pos
       patsdoc <- mapM formatM pats
-      return (constructorDoc (string "Options")
+      return (compoundApplyDoc (string "Options")
                              [(string "pos", posdoc),
                               (string "patterns", listDoc patsdoc)])
   formatM Deconstruct { deconstructName = sym, deconstructPat = pat,
@@ -1199,7 +1200,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
       namedoc <- formatM sym
       posdoc <- formatM pos
       patdoc <- formatM pat
-      return (constructorDoc (string "Deconstruct")
+      return (compoundApplyDoc (string "Deconstruct")
                              [(string "name", namedoc),
                               (string "pos", posdoc),
                               (string "pat", patdoc)])
@@ -1207,7 +1208,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
     do
       fieldsdoc <- formatMap fields
       posdoc <- formatM pos
-      return (constructorDoc (string "Split")
+      return (compoundApplyDoc (string "Split")
                              [(string "pos", posdoc),
                               (string "strict", string "true"),
                               (string "fields", fieldsdoc)])
@@ -1215,7 +1216,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
     do
       fieldsdoc <- formatMap fields
       posdoc <- formatM pos
-      return (constructorDoc (string "Split")
+      return (compoundApplyDoc (string "Split")
                              [(string "pos", posdoc),
                               (string "strict", string "false"),
                               (string "fields", fieldsdoc)])
@@ -1224,7 +1225,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
       posdoc <- formatM pos
       patdoc <- formatM pat
       tydoc <- formatM ty
-      return (constructorDoc (string "Typed")
+      return (compoundApplyDoc (string "Typed")
                              [(string "pos", posdoc),
                               (string "pattern", patdoc),
                               (string "type", tydoc)])
@@ -1233,7 +1234,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
       namedoc <- formatM sym
       posdoc <- formatM pos
       patdoc <- formatM pat
-      return (constructorDoc (string "As")
+      return (compoundApplyDoc (string "As")
                              [(string "name", namedoc),
                               (string "pos", posdoc),
                               (string "pat", patdoc)])
@@ -1241,7 +1242,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
     do
       namedoc <- formatM sym
       posdoc <- formatM pos
-      return (constructorDoc (string "Name")
+      return (compoundApplyDoc (string "Name")
                              [(string "name", namedoc),
                               (string "pos", posdoc)])
   formatM (Exact e) = formatM e
@@ -1254,7 +1255,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       proofsdoc <- mapM formatM proofs
       posdoc <- formatM pos
       bodydoc <- mapM formatM body
-      return (constructorDoc (string "Compound")
+      return (compoundApplyDoc (string "Compound")
                              [(string "pos", posdoc),
                               (string "syntax", syntaxdoc),
                               (string "proofs", listDoc proofsdoc),
@@ -1263,7 +1264,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
     do
       posdoc <- formatM pos
       casedocs <- mapM formatM cases
-      return (constructorDoc (string "Abs")
+      return (compoundApplyDoc (string "Abs")
                              [(string "pos", posdoc),
                               (string "kind", format kind),
                               (string "cases", listDoc casedocs)])
@@ -1272,7 +1273,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       posdoc <- formatM pos
       valdoc <- formatM val
       casedocs <- mapM formatM cases
-      return (constructorDoc (string "Match")
+      return (compoundApplyDoc (string "Match")
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "cases", listDoc casedocs)])
@@ -1281,7 +1282,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       posdoc <- formatM pos
       valdoc <- formatM val
       tydoc <- formatM ty
-      return (constructorDoc (string "Ascribe")
+      return (compoundApplyDoc (string "Ascribe")
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "type", tydoc)])
@@ -1289,14 +1290,14 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
     do
       posdoc <- formatM pos
       expdocs <- mapM formatM exps
-      return (constructorDoc (string "Seq")
+      return (compoundApplyDoc (string "Seq")
                              [(string "pos", posdoc),
                               (string "exps", listDoc expdocs)])
   formatM Record { recordFields = fields, recordPos = pos } =
     do
       posdoc <- formatM pos
       fielddocs <- formatMap fields
-      return (constructorDoc (string "Record")
+      return (compoundApplyDoc (string "Record")
                              [(string "pos", posdoc),
                               (string "fields", fielddocs)])
   formatM RecordType { recordTypeFields = fields,
@@ -1304,14 +1305,14 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
     do
       posdoc <- formatM pos
       fielddocs <- formatM fields
-      return (constructorDoc (string "RecordType")
+      return (compoundApplyDoc (string "RecordType")
                              [(string "pos", posdoc),
                               (string "fields", fielddocs)])
   formatM Tuple { tupleFields = fields, tuplePos = pos } =
     do
       posdoc <- formatM pos
       fielddocs <- mapM formatM fields
-      return (constructorDoc (string "Tuple")
+      return (compoundApplyDoc (string "Tuple")
                              [(string "pos", posdoc),
                               (string "fields", listDoc fielddocs)])
   formatM Project { projectVal = val, projectFields = fields,
@@ -1320,7 +1321,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       fielddocs <- mapM formatM fields
       posdoc <- formatM pos
       valdoc <- formatM val
-      return (constructorDoc (string "Project")
+      return (compoundApplyDoc (string "Project")
                              [(string "fields", listDoc fielddocs),
                               (string "pos", posdoc),
                               (string "value", valdoc)])
@@ -1328,7 +1329,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
     do
       namedoc <- formatM sym
       posdoc <- formatM pos
-      return (constructorDoc (string "Sym")
+      return (compoundApplyDoc (string "Sym")
                              [(string "name", namedoc),
                               (string "pos", posdoc)])
   formatM With { withVal = val, withArgs = args, withPos = pos } =
@@ -1336,7 +1337,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       posdoc <- formatM pos
       valdoc <- formatM val
       argdocs <- formatM args
-      return (constructorDoc (string "With")
+      return (compoundApplyDoc (string "With")
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "arg", argdocs)])
@@ -1345,7 +1346,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       posdoc <- formatM pos
       valdoc <- formatM val
       propdoc <- formatM prop
-      return (constructorDoc (string "Where")
+      return (compoundApplyDoc (string "Where")
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "prop", propdoc)])
@@ -1357,7 +1358,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
       superdocs <- mapM formatM supers
       paramdocs <- formatM params
       bodydoc <- formatM body
-      return (constructorDoc (string "Anon")
+      return (compoundApplyDoc (string "Anon")
                              [(string "pos", posdoc),
                               (string "kind", format cls),
                               (string "params", paramdocs),
@@ -1370,7 +1371,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Entry where
     do
       posdoc <- formatM pos
       patdoc <- formatM pat
-      return (constructorDoc (string "Entry")
+      return (compoundApplyDoc (string "Entry")
                              [(string "pos", posdoc),
                               (string "pattern", patdoc)])
 
@@ -1379,7 +1380,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Fields where
     do
       bindingsdoc <- formatMap bindings
       orderdoc <- mapM formatM (elems order)
-      return (constructorDoc (string "Fields")
+      return (compoundApplyDoc (string "Fields")
                              [(string "bindings", bindingsdoc),
                               (string "value", listDoc orderdoc)])
 
@@ -1388,7 +1389,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Field where
     do
       posdoc <- formatM pos
       valdoc <- formatM val
-      return (constructorDoc (string "Field")
+      return (compoundApplyDoc (string "Field")
                              [(string "pos", posdoc),
                               (string "value", valdoc)])
 
@@ -1398,7 +1399,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Case where
       posdoc <- formatM pos
       patdoc <- formatM pat
       bodydoc <- formatM body
-      return (constructorDoc (string "Case")
+      return (compoundApplyDoc (string "Case")
                              [(string "pos", posdoc),
                               (string "pattern", patdoc),
                               (string "body", bodydoc)])

@@ -53,6 +53,7 @@ import Control.Applicative
 import Control.Monad hiding (mapM)
 import Control.Monad.Positions
 import Control.Monad.Symbols
+import Data.Default
 import Data.Foldable
 import Data.Hashable
 import Data.Hashable.Extras
@@ -1179,12 +1180,11 @@ instance Monad (Comp b) where
   BadComp p >>= _ = BadComp p
 
 instance Format Literal where
-  format Num { numVal = num } =
-    compoundApplyDoc (string "Num") [(string "val", string (show num))]
-  format Str { strVal = str } =
-    compoundApplyDoc (string "Str") [(string "val", bytestring str)]
-  format Char { charVal = chr } =
-    compoundApplyDoc (string "Char") [(string "val", char chr)]
+  format Num { numVal = num }
+    | denominator num == 1 = format (numerator num)
+    | otherwise = format (numerator num) <> char '/' <> format (denominator num)
+  format Str { strVal = str } = dquoted (bytestring str)
+  format Char { charVal = chr } = squoted (char chr)
 
 instance Show Literal where
   show = Lazy.toString . renderOptimal 80 False . format
@@ -1192,507 +1192,388 @@ instance Show Literal where
 instance Monad m => FormatM m Literal where
   formatM = return . format
 
+formatBind :: (Default sym, Format sym, Format ent, Eq sym) =>
+              (sym, ent) -> (Doc, Doc)
+formatBind (fname, ent) = (format fname, format ent)
+
+formatMBind :: (MonadPositions m, MonadSymbols m, Default sym,
+                FormatM m sym, FormatM m ent, Eq sym) =>
+              (sym, ent) -> m (Doc, Doc)
+formatMBind (fname, ent) =
+  do
+    fname' <- formatM fname
+    ent' <- formatM ent
+    return (fname', ent')
+
 instance Format Quantifier where
   format Forall = string "forall"
   format Exists = string "exists"
 
-instance Format bound => Format (Pattern bound) where
-  format Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
-                       deconstructStrict = True } =
-    let
-      namedoc = format sym
-      bindsdoc = formatMap binds
-    in
-      compoundApplyDoc (string "Deconstruct")
-                       [(string "name", namedoc),
-                        (string "strict", string "true"),
-                        (string "binds", bindsdoc)]
-  format Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
-                        deconstructStrict = False } =
-    let
-      namedoc = format sym
-      bindsdoc = formatMap binds
-    in
-      compoundApplyDoc (string "Deconstruct")
-                       [(string "name", namedoc),
-                        (string "strict", string "false"),
-                        (string "binds", bindsdoc)]
+instance (Default bound, Format bound, Eq bound) => Format (Pattern bound) where
+  format Deconstruct { deconstructConstructor = sym, deconstructBinds = binds }
+    | sym == def =
+      let
+        binddocs = map formatBind (HashMap.toList binds)
+      in
+        recordDoc binddocs
+    | otherwise =
+      let
+        binddocs = map formatBind (HashMap.toList binds)
+        symdoc = format sym
+      in
+        compoundApplyDoc symdoc binddocs
   format As { asBind = bind, asName = sym } =
     let
       namedoc = format sym
       binddoc = format bind
     in
-      compoundApplyDoc (string "As")
-                       [(string "name", namedoc),
-                        (string "bind", binddoc)]
-  format Name { nameSym = sym } =
-    let
-      namedoc = format sym
-    in
-      compoundApplyDoc (string "Name") [(string "name", namedoc)]
-  format Exact { exactLiteral = e } =
-    let
-      litdoc = format e
-    in
-      compoundApplyDoc (string "Exact") [(string "literal", litdoc)]
+      namedoc </> nest nestLevel (string "as" </> binddoc)
+  format Name { nameSym = sym } = format sym
+  format Exact { exactLiteral = e } = format e
 
-instance Format bound => Show (Pattern bound) where
+instance (Format bound, Default bound, Eq bound) => Show (Pattern bound) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m bound) =>
+instance (MonadPositions m, MonadSymbols m,
+          FormatM m bound, Default bound, Eq bound) =>
          FormatM m (Pattern bound) where
-  formatM Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
-                        deconstructStrict = True, deconstructPos = pos } =
+  formatM Deconstruct { deconstructConstructor = sym, deconstructBinds = binds }
+    | sym == def =
+      do
+        binddocs <- mapM formatMBind (HashMap.toList binds)
+        return $! recordDoc binddocs
+    | otherwise =
+      do
+        symdoc <- formatM sym
+        binddocs <- mapM formatMBind (HashMap.toList binds)
+        return $! compoundApplyDoc symdoc binddocs
+  formatM As { asBind = bind, asName = sym } =
     do
       namedoc <- formatM sym
-      posdoc <- formatM pos
-      bindsdoc <- formatMapM binds
-      return (compoundApplyDoc (string "Deconstruct")
-                               [(string "name", namedoc),
-                                (string "pos", posdoc),
-                                (string "strict", string "true"),
-                                (string "binds", bindsdoc)])
-  formatM Deconstruct { deconstructConstructor = sym, deconstructBinds = binds,
-                        deconstructStrict = False, deconstructPos = pos } =
-    do
-      namedoc <- formatM sym
-      posdoc <- formatM pos
-      bindsdoc <- formatMapM binds
-      return (compoundApplyDoc (string "Deconstruct")
-                               [(string "name", namedoc),
-                                (string "pos", posdoc),
-                                (string "strict", string "false"),
-                                (string "binds", bindsdoc)])
-  formatM As { asBind = bind, asName = sym, asPos = pos } =
-    do
-      namedoc <- formatM sym
-      posdoc <- formatM pos
       binddoc <- formatM bind
-      return (compoundApplyDoc (string "As")
-                               [(string "name", namedoc),
-                                (string "pos", posdoc),
-                                (string "bind", binddoc)])
-  formatM Name { nameSym = sym, namePos = pos } =
-    do
-      namedoc <- formatM sym
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "Name")
-                               [(string "name", namedoc),
-                                (string "pos", posdoc)])
-  formatM Exact { exactLiteral = e, exactPos = p } =
-    do
-      posdoc <- formatM p
-      litdoc <- formatM e
-      return (compoundApplyDoc (string "Exact")
-                               [(string "literal", litdoc),
-                                (string "pos", posdoc)])
+      return (namedoc </> nest nestLevel (string "as" </> binddoc))
+  formatM Name { nameSym = sym } = formatM sym
+  formatM Exact { exactLiteral = e } = formatM e
 
-instance (Format bound, Format free) => Format (Case bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Format (Case bound free) where
   format Case { casePat = pat, caseBody = body } =
     let
       patdoc = format pat
       bodydoc = format body
     in
-      compoundApplyDoc (string "Case")
-                       [(string "pattern", patdoc),
-                        (string "body", bodydoc)]
+      patdoc </> equals </> nest nestLevel bodydoc
 
-instance (Format bound, Format free) => Show (Case bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Show (Case bound free) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+instance (MonadPositions m, MonadSymbols m, FormatM m bound,
+          FormatM m free, Default bound, Eq bound) =>
          FormatM m (Case bound free) where
-  formatM Case { casePat = pat, caseBody = body, casePos = pos } =
+  formatM Case { casePat = pat, caseBody = body } =
     do
-      posdoc <- formatM pos
       patdoc <- formatM pat
       bodydoc <- formatM body
-      return (compoundApplyDoc (string "Case")
-                               [(string "pos", posdoc),
-                                (string "pattern", patdoc),
-                                (string "body", bodydoc)])
+      return (patdoc </> equals </> nest nestLevel bodydoc)
 
-formatMapM :: (MonadPositions m, MonadSymbols m, FormatM m a, FormatM m b) =>
-              HashMap a b -> m Doc
-formatMapM hashmap =
-  let
-    formatEntry (a, b) =
-      do
-        adoc <- formatM a
-        bdoc <- formatM b
-        return (adoc, bdoc)
-  in do
-    entrydocs <- mapM formatEntry (HashMap.toList hashmap)
-    return $! mapDoc entrydocs
-
-formatMap :: (Format a, Format b) => HashMap a b -> Doc
-formatMap hashmap =
-  let
-    formatEntry (a, b) =
-      let
-        adoc = format a
-        bdoc = format b
-      in
-        (adoc, bdoc)
-
-    entrydocs = map formatEntry (HashMap.toList hashmap)
-  in
-    mapDoc entrydocs
-
-instance (Format bound, Format free) => Format (Element bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Format (Element bound free) where
+  format Element { elemPat = Name { nameSym = sym' },
+                   elemType = ty, elemName = sym } | sym' == def =
+    let
+      symdoc = format sym
+      tydoc = format ty
+    in case flatten tydoc of
+      Just flatty ->
+        choose [ symdoc <+> colon <+> flatty,
+                 symdoc <+> colon <!> nest nestLevel tydoc ]
+      Nothing -> symdoc <+> colon <!> nest nestLevel tydoc
   format Element { elemPat = pat, elemType = ty, elemName = sym } =
     let
       symdoc = format sym
       patdoc = format pat
       tydoc = format ty
-    in
-      compoundApplyDoc (string "Element")
-                       [(string "name", symdoc),
-                        (string "pattern", patdoc),
-                        (string "type", tydoc)]
+    in case flatten tydoc of
+      Just flatty ->
+        choose [ symdoc <+> colon <+> flatty <+>
+                 equals <!> nest nestLevel patdoc,
+                 symdoc <+> colon <!>
+                 nest nestLevel (tydoc <+> equals <!> nest nestLevel patdoc) ]
+      Nothing -> symdoc <+> colon <!>
+                 nest nestLevel (tydoc <+> equals <!> nest nestLevel patdoc)
 
-instance (Format bound, Format free) => Show (Element bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Show (Element bound free) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+instance (MonadPositions m, MonadSymbols m, FormatM m bound,
+          FormatM m free, Default bound, Eq bound) =>
          FormatM m (Element bound free) where
-  formatM Element { elemPat = pat, elemType = ty,
-                    elemName = sym, elemPos = pos } =
+  formatM Element { elemPat = Name { nameSym = sym' },
+                    elemType = ty, elemName = sym } | sym' == def =
     do
       symdoc <- formatM sym
-      posdoc <- formatM pos
+      tydoc <- formatM ty
+      case flatten tydoc of
+        Just flatty ->
+          return (choose [ symdoc <+> colon <+> flatty,
+                           symdoc <+> colon <!> nest nestLevel tydoc ])
+        Nothing -> return (symdoc <+> colon <!> nest nestLevel tydoc)
+  formatM Element { elemPat = pat, elemType = ty, elemName = sym } =
+    do
+      symdoc <- formatM sym
       patdoc <- formatM pat
       tydoc <- formatM ty
-      return (compoundApplyDoc (string "Element")
-                               [(string "name", symdoc),
-                                (string "pos", posdoc),
-                                (string "pattern", patdoc),
-                                (string "type", tydoc)])
+      case flatten tydoc of
+        Just flatty ->
+          return (choose [ symdoc <+> colon <+> flatty <+>
+                           equals <!> nest nestLevel patdoc,
+                           symdoc <+> colon <!>
+                           nest nestLevel (tydoc <+> equals <!>
+                                           nest nestLevel patdoc) ])
+        Nothing -> return (symdoc <+> colon <!>
+                           nest nestLevel (tydoc <+> equals <!>
+                                           nest nestLevel patdoc))
 
-instance (Format bound, Format free) => Format (Intro bound free) where
+formatCompList :: (Format bound, Format free, Default bound, Eq bound) =>
+                  Comp bound free -> [Doc]
+formatCompList =
+  let
+    formatCompList':: (Format bound, Format free, Default bound, Eq bound) =>
+                      [Doc] -> Comp bound free -> [Doc]
+    formatCompList' accum Seq { seqCmd = cmd, seqPat = pat,
+                                seqType = ty, seqNext = next } =
+      let
+        cmddoc = format cmd
+        patdoc = format pat
+        typedoc = format ty
+        doc = patdoc <+> colon </>
+              nest nestLevel (typedoc <+> equals </> nest nestLevel cmddoc)
+      in
+        formatCompList' (doc : accum) (fromScope next)
+    formatCompList' accum End { endCmd = cmd } =
+      let
+        cmddoc = format cmd
+      in
+        reverse (cmddoc : accum)
+    formatCompList' accum BadComp {} = reverse (string "<bad>" : accum)
+  in
+    formatCompList' []
+
+formatMCompList :: (MonadPositions m, MonadSymbols m, FormatM m bound,
+                    FormatM m free, Default bound, Eq bound) =>
+                  Comp bound free -> m [Doc]
+formatMCompList =
+  let
+    formatMCompList':: (MonadPositions m, MonadSymbols m, FormatM m bound,
+                        FormatM m free, Default bound, Eq bound) =>
+                       [Doc] -> Comp bound free -> m [Doc]
+    formatMCompList' accum Seq { seqCmd = cmd, seqPat = pat,
+                                 seqType = ty, seqNext = next } =
+      do
+        cmddoc <- formatM cmd
+        patdoc <- formatM pat
+        typedoc <- formatM ty
+        formatMCompList' (patdoc <+> colon </>
+                          nest nestLevel (typedoc <+> equals </>
+                                          nest nestLevel cmddoc) : accum)
+                                         (fromScope next)
+    formatMCompList' accum End { endCmd = cmd } =
+      do
+        cmddoc <- formatM cmd
+        return $! reverse (cmddoc : accum)
+    formatMCompList' accum BadComp {} =
+      return $! reverse (string "<bad>" : accum)
+  in
+    formatMCompList' []
+
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Format (Intro bound free) where
   format Eta {} = error "Eta is going away"
   format FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
     let
       argdocs = map format args
       rettydoc = format retty
     in
-      compoundApplyDoc (string "FuncType")
-                       [(string "args", listDoc argdocs),
-                        (string "retty", rettydoc)]
+      tupleDoc argdocs <+> string "->" </> nest nestLevel rettydoc
   format RecordType { recTypeBody = body } =
     let
       bodydocs = map format body
     in
-      compoundApplyDoc (string "RecordType") [(string "body", listDoc bodydocs)]
+      tupleDoc bodydocs
   format RefineType { refineType = ty, refineCases = cases } =
     let
       tydoc = format ty
       casedocs = map format cases
     in
-      compoundApplyDoc (string "RefineType")
-                       [(string "type", tydoc),
-                        (string "cases", listDoc casedocs)]
+      tydoc </> nest nestLevel (string "where" <+> casesDoc casedocs)
   format CompType { compType = ty, compCases = cases } =
     let
       tydoc = format ty
       casedocs = map format cases
     in
-      compoundApplyDoc (string "CompType")
-                       [(string "type", tydoc),
-                        (string "cases", listDoc casedocs)]
+      tydoc </> nest nestLevel (string "spec" <+> casesDoc casedocs)
   format Quantified { quantType = ty, quantCases = cases, quantKind = kind } =
     let
       tydoc = format ty
       casedocs = map format cases
     in
-      compoundApplyDoc (string "Quantified")
-                       [(string "kind", format kind),
-                        (string "type", tydoc),
-                        (string "cases", listDoc casedocs)]
+      format kind <+> tydoc <> dot <+> casesDoc casedocs
   format Lambda { lambdaCases = cases } =
     let
       casedocs = map format cases
     in
-      compoundApplyDoc (string "Lambda") [(string "cases", listDoc casedocs)]
+      string "lambda" <+> casesDoc casedocs
   format Record { recFields = fields } =
     let
-      fieldsdoc = formatMap fields
+      fielddocs = map formatBind (HashMap.toList fields)
     in
-      compoundApplyDoc (string "Record") [(string "fields", fieldsdoc)]
+      recordDoc fielddocs
   format Fix { fixTerms = terms } =
     let
-      termsdoc = formatMap terms
+      termdocs = map formatBind (HashMap.toList terms)
     in
-      compoundApplyDoc (string "Fix") [(string "terms", termsdoc)]
+      string "fix" <//> nest nestLevel (recordDoc termdocs)
   format Comp { compBody = body } =
     let
-      bodydoc = format body
+      bodydocs = formatCompList body
     in
-      compoundApplyDoc (string "Comp") [(string "body", bodydoc)]
-  format Elim { elimTerm = term } =
-    let
-      termdoc = format term
-    in
-      compoundApplyDoc (string "Elim") [(string "term", termdoc)]
-  format Constructor { constructorSym = sym } =
-    let
-      termdoc = format sym
-    in
-      compoundApplyDoc (string "Constructor") [(string "sym", termdoc)]
-  format Literal { literalVal = lit } =
-    let
-      termdoc = format lit
-    in
-      compoundApplyDoc (string "Literal") [(string "val", termdoc)]
-  format BadIntro {} = string "BadIntro"
+      blockDoc bodydocs
+  format Elim { elimTerm = term } = format term
+  format Constructor { constructorSym = sym } = format sym
+  format Literal { literalVal = lit } = format lit
+  format BadIntro {} = string "<bad>"
 
-instance (Format bound, Format free) => Show (Intro bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Show (Intro bound free) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+instance (MonadPositions m, MonadSymbols m, FormatM m bound,
+          FormatM m free, Default bound, Eq bound) =>
          FormatM m (Intro bound free) where
   formatM Eta {} = error "Eta is going away"
-  formatM FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
-                     funcTypePos = pos } =
+  formatM FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
     do
-      posdoc <- formatM pos
       argdocs <- mapM formatM args
       rettydoc <- formatM retty
-      return (compoundApplyDoc (string "FuncType")
-                               [(string "pos", posdoc),
-                                (string "args", listDoc argdocs),
-                                (string "retty", rettydoc)])
-  formatM RecordType { recTypeBody = body, recTypePos = pos } =
+      return (tupleDoc argdocs <+> string "->" </> nest nestLevel rettydoc)
+  formatM RecordType { recTypeBody = body } =
     do
-      posdoc <- formatM pos
       bodydocs <- mapM formatM body
-      return (compoundApplyDoc (string "RecordType")
-                               [(string "pos", posdoc),
-                                (string "body", listDoc bodydocs)])
-  formatM RefineType { refineType = ty, refineCases = cases, refinePos = pos } =
+      return (tupleDoc bodydocs)
+  formatM RefineType { refineType = ty, refineCases = cases } =
     do
-      posdoc <- formatM pos
       tydoc <- formatM ty
       casedocs <- mapM formatM cases
-      return (compoundApplyDoc (string "RefineType")
-                               [(string "pos", posdoc),
-                                (string "type", tydoc),
-                                (string "cases", listDoc casedocs)])
-  formatM CompType { compType = ty, compCases = cases, compTypePos = pos } =
+      return (tydoc </> nest nestLevel (string "\\where" <+> casesDoc casedocs))
+  formatM CompType { compType = ty, compCases = cases } =
     do
-      posdoc <- formatM pos
       tydoc <- formatM ty
       casedocs <- mapM formatM cases
-      return (compoundApplyDoc (string "CompType")
-                               [(string "pos", posdoc),
-                                (string "type", tydoc),
-                                (string "cases", listDoc casedocs)])
-  formatM Quantified { quantType = ty, quantCases = cases,
-                       quantKind = kind, quantPos = pos } =
+      return (tydoc </> nest nestLevel (string "\\spec" <+> casesDoc casedocs))
+  formatM Quantified { quantType = ty, quantCases = cases, quantKind = kind } =
     do
-      posdoc <- formatM pos
       tydoc <- formatM ty
       casedocs <- mapM formatM cases
-      return (compoundApplyDoc (string "Quantified")
-                               [(string "pos", posdoc),
-                                (string "kind", format kind),
-                                (string "type", tydoc),
-                                (string "cases", listDoc casedocs)])
-  formatM Lambda { lambdaCases = cases, lambdaPos = pos } =
+      return (format kind <+> tydoc <> dot <+> casesDoc casedocs)
+  formatM Lambda { lambdaCases = cases } =
     do
-      posdoc <- formatM pos
       casedocs <- mapM formatM cases
-      return (compoundApplyDoc (string "Lambda")
-                               [(string "pos", posdoc),
-                                (string "cases", listDoc casedocs)])
-  formatM Record { recFields = fields, recPos = pos } =
+      return (string "\\lambda" <+> casesDoc casedocs)
+  formatM Record { recFields = fields } =
     do
-      posdoc <- formatM pos
-      fieldsdoc <- formatMapM fields
-      return (compoundApplyDoc (string "Record")
-                               [(string "pos", posdoc),
-                                (string "fields", fieldsdoc)])
-  formatM Fix { fixTerms = terms, fixPos = pos } =
+      fielddocs <- mapM formatMBind (HashMap.toList fields)
+      return (recordDoc fielddocs)
+  formatM Fix { fixTerms = terms } =
     do
-      posdoc <- formatM pos
-      termsdoc <- formatMapM terms
-      return (compoundApplyDoc (string "Fix")
-                               [(string "pos", posdoc),
-                                (string "terms", termsdoc)])
-  formatM Comp { compBody = body, compPos = pos } =
+      termdocs <- mapM formatMBind (HashMap.toList terms)
+      return (string "\\fix" <//> nest nestLevel (recordDoc termdocs))
+  formatM Comp { compBody = body } =
     do
-      posdoc <- formatM pos
-      bodydoc <- formatM body
-      return (compoundApplyDoc (string "Comp")
-                               [(string "pos", posdoc),
-                                (string "body", bodydoc)])
-  formatM Elim { elimTerm = term } =
-    do
-      termdoc <- formatM term
-      return (compoundApplyDoc (string "Elim") [(string "term", termdoc)])
-  formatM Constructor { constructorSym = sym, constructorPos = pos } =
-    do
-      posdoc <- formatM pos
-      litdoc <- formatM sym
-      return (compoundApplyDoc (string "Constructor") [(string "sym", litdoc),
-                                                     (string "pos", posdoc)])
-  formatM Literal { literalVal = lit, literalPos = pos } =
-    do
-      posdoc <- formatM pos
-      litdoc <- formatM lit
-      return (compoundApplyDoc (string "Literal") [(string "literal", litdoc),
-                                                   (string "pos", posdoc)])
-  formatM BadIntro { badIntroPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "BadIntro") [(string "pos", posdoc)])
+      bodydoc <- formatMCompList body
+      return $! blockDoc bodydoc
+  formatM Elim { elimTerm = term } = formatM term
+  formatM Constructor { constructorSym = sym } = formatM sym
+  formatM Literal { literalVal = lit } = formatM lit
+  formatM BadIntro {} = return $! string "<bad>"
 
-instance (Format bound, Format free) => Format (Elim bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Format (Elim bound free) where
   format Call { callFunc = func, callArgs = args } =
     let
-      argsdoc = formatMap args
+      argdocs = map formatBind (HashMap.toList args)
       funcdoc = format func
     in
-      compoundApplyDoc (string "Call")
-                       [(string "func", funcdoc),
-                        (string "args", argsdoc)]
+      compoundApplyDoc funcdoc argdocs
   format Typed { typedTerm = term, typedType = ty } =
     let
       termdoc = format term
       typedoc = format ty
     in
-      compoundApplyDoc (string "Typed")
-                       [(string "term", termdoc),
-                        (string "type", typedoc)]
-  format Var { varSym = sym } =
-    let
-      symdoc = format sym
-    in
-      compoundApplyDoc (string "Var") [(string "sym", symdoc)]
-  format BadElim {} = string "BadElim"
+      termdoc <+> colon </> nest nestLevel typedoc
+  format Var { varSym = sym } = format sym
+  format BadElim {} = string "<bad>"
 
-instance (Format bound, Format free) => Show (Elim bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Show (Elim bound free) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+instance (MonadPositions m, MonadSymbols m, FormatM m bound,
+          FormatM m free, Default bound, Eq bound) =>
          FormatM m (Elim bound free) where
-  formatM Call { callFunc = func, callArgs = args, callPos = pos } =
+  formatM Call { callFunc = func, callArgs = args } =
     do
-      posdoc <- formatM pos
-      argsdoc <- formatMapM args
+      argdocs <- mapM formatMBind (HashMap.toList args)
       funcdoc <- formatM func
-      return (compoundApplyDoc (string "Call")
-                               [(string "pos", posdoc),
-                                (string "func", funcdoc),
-                                (string "args", argsdoc)])
-  formatM Typed { typedTerm = term, typedType = ty, typedPos = pos } =
+      return $! compoundApplyDoc funcdoc argdocs
+  formatM Typed { typedTerm = term, typedType = ty } =
     do
-      posdoc <- formatM pos
       termdoc <- formatM term
       typedoc <- formatM ty
-      return (compoundApplyDoc (string "Typed")
-                               [(string "pos", posdoc),
-                                (string "term", termdoc),
-                                (string "type", typedoc)])
-  formatM Var { varSym = sym, varPos = pos } =
-    do
-      posdoc <- formatM pos
-      symdoc <- formatM sym
-      return (compoundApplyDoc (string "Var")
-                               [(string "pos", posdoc),
-                                (string "sym", symdoc)])
-  formatM BadElim { badElimPos = pos } =
-    do
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "BadElim") [(string "pos", posdoc)])
+      return (termdoc <+> colon </> nest nestLevel typedoc)
+  formatM Var { varSym = sym } = formatM sym
+  formatM BadElim {} = return $! string "<bad>"
 
-instance (Format bound, Format free) => Format (Cmd bound free) where
-  format Value { valTerm = term } =
-    let
-      termdoc = format term
-    in
-      compoundApplyDoc (string "Value") [(string "term", termdoc)]
-  format Eval { evalTerm = term } =
-    let
-      termdoc = format term
-    in
-      compoundApplyDoc (string "Eval") [(string "term", termdoc)]
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Format (Cmd bound free) where
+  format Value { valTerm = term } = format term
+  format Eval { evalTerm = term } = string "do" </> nest nestLevel (format term)
   format BadCmd {} = string "BadCmd"
 
-instance (Format bound, Format free) => Show (Cmd bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Show (Cmd bound free) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+instance (MonadPositions m, MonadSymbols m, FormatM m bound,
+          FormatM m free, Default bound, Eq bound) =>
          FormatM m (Cmd bound free) where
-  formatM Value { valTerm = term, valPos = pos } =
+  formatM Value { valTerm = term } = formatM term
+  formatM Eval { evalTerm = term } =
     do
-      posdoc <- formatM pos
       termdoc <- formatM term
-      return (compoundApplyDoc (string "Value")
-                               [(string "pos", posdoc),
-                                (string "term", termdoc)])
-  formatM Eval { evalTerm = term, evalPos = pos } =
-    do
-      posdoc <- formatM pos
-      termdoc <- formatM term
-      return (compoundApplyDoc (string "Eval")
-                               [(string "pos", posdoc),
-                                (string "term", termdoc)])
-  formatM (BadCmd pos) =
-    do
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "BadCmd") [(string "pos", posdoc)])
+      return $! string "do" </> nest nestLevel termdoc
+  formatM BadCmd {} = return $! string "<bad>"
 
-instance (Format bound, Format free) => Format (Comp bound free) where
-  format Seq { seqCmd = cmd, seqPat = pat, seqType = ty, seqNext = next } =
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Format (Comp bound free) where
+  format comp =
     let
-      cmddoc = format cmd
-      patdoc = format pat
-      typedoc = format ty
-      nextdoc = format next
+      stmlist = formatCompList comp
     in
-      compoundApplyDoc (string "Seq")
-                       [(string "cmd", cmddoc),
-                        (string "pat", patdoc),
-                        (string "type", typedoc),
-                        (string "next", nextdoc)]
-  format End { endCmd = cmd } =
-    let
-      cmddoc = format cmd
-    in
-      compoundApplyDoc (string "End") [(string "cmd", cmddoc)]
-  format BadComp {} = string "BadComp"
+      stmsDoc stmlist
 
-instance (Format bound, Format free) => Show (Comp bound free) where
+instance (Format bound, Format free, Default bound, Eq bound) =>
+         Show (Comp bound free) where
   show = Lazy.toString . renderOptimal 80 False . format
 
-instance (MonadPositions m, MonadSymbols m, FormatM m bound, FormatM m free) =>
+instance (MonadPositions m, MonadSymbols m, FormatM m bound,
+          FormatM m free, Default bound, Eq bound) =>
          FormatM m (Comp bound free) where
-  formatM Seq { seqCmd = cmd, seqPat = pat, seqType = ty,
-                seqNext = next, seqPos = pos } =
+  formatM comp =
     do
-      posdoc <- formatM pos
-      cmddoc <- formatM cmd
-      patdoc <- formatM pat
-      typedoc <- formatM ty
-      nextdoc <- formatM next
-      return (compoundApplyDoc (string "Seq")
-                               [(string "pos", posdoc),
-                                (string "cmd", cmddoc),
-                                (string "pat", patdoc),
-                                (string "type", typedoc),
-                                (string "next", nextdoc)])
-  formatM End { endCmd = cmd, endPos = pos } =
-    do
-      posdoc <- formatM pos
-      cmddoc <- formatM cmd
-      return (compoundApplyDoc (string "End")
-                               [(string "pos", posdoc),
-                                (string "cmd", cmddoc)])
-  formatM (BadComp pos) =
-    do
-      posdoc <- formatM pos
-      return (compoundApplyDoc (string "BadComp") [(string "pos", posdoc)])
+      stmlist <- formatMCompList comp
+      return $! stmsDoc stmlist
 
 numPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>

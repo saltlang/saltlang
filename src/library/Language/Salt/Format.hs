@@ -38,93 +38,86 @@ module Language.Salt.Format(
        tupleDoc,
        listDoc,
        mapDoc,
-       compoundApplyDoc
+       compoundApplyDoc,
+       blockDoc,
+       stmsDoc,
+       casesDoc,
+       nestLevel
        ) where
 
 import Text.Format
 
+nestLevel :: Int
+nestLevel = 2
+
+semicolon :: Doc
+semicolon = char ';'
+
 -- | Format a list of @(field, value)@ bindings representing a record
--- value.  There are three possible ways to do this:
+-- value.  There are two possible ways to do this:
 --
 -- > (field1 = value1, field2 = value2, ...)
--- >
--- > preceeding (field1 = value1,
--- >             field2 = value2,
--- >             ...)
--- >
--- > preceeding (
--- >     field1 = value1,
--- >     field2 = value2,
--- >     ...
--- >   )
+--
+-- > (field1 = value1,
+-- >  field2 = value2,
+-- >  ...)
 recordDoc :: [(Doc, Doc)]
           -- ^ A list of @(field, value)@ bindings
           -> Doc
 recordDoc binds =
   let
-    softlines = map (\(field, val) -> field <+> equals </> nest 2 val) binds
+    softlines = map (\(field, val) -> field <+> equals </>
+                                      nest nestLevel val) binds
     nosoftlines = map (\(field, val) -> field <+> equals <+> val) binds
     nobreaks = hsep (punctuate comma nosoftlines)
-    breaks = vsep (punctuate comma softlines)
-    breakopts = [ lparen <> align breaks <> rparen,
-                  nest 2 (lparen <!> nest 2 breaks <!> rparen) ]
+    breaks = parens (align (vsep (punctuate comma softlines)))
   in case flatten nobreaks of
-    Just nolines -> choose (lparen <> nolines <> rparen : breakopts)
-    Nothing -> choose breakopts
+    Just nolines -> choose [parens nolines, breaks]
+    Nothing -> breaks
 
 -- | Format a list of 'Doc's representing a tuple value.  There are
 -- three possible ways to do this:
 --
 -- > (value1, value2, ...)
--- >
--- > preceeding (value1,
--- >             value2,
--- >             ...)
--- >
--- > preceeding (
--- >     value1,
--- >     value2,
--- >     ...
--- >   )
+--
+-- > (value1,
+-- >  value2,
+-- >  ...)
 tupleDoc :: [Doc]
          -- ^ The fields of the tuple.
          -> Doc
 tupleDoc fields =
   let
     nobreaks = hsep (punctuate comma fields)
-    breaks = vsep (punctuate comma fields)
-    breakopts = [ lparen <> align breaks <> rparen,
-                  nest 2 (lparen <!> nest 2 breaks <!> rparen) ]
+    breaks = parens (align (vsep (punctuate comma fields)))
   in case flatten nobreaks of
-    Just nolines -> choose (lparen <> nolines <> rparen : breakopts)
-    Nothing -> choose breakopts
+    Just nolines -> choose [parens nolines, breaks]
+    Nothing -> breaks
 
 -- | Format a list of 'Doc's representing a list value.  There are
 -- three possible ways to do this:
 --
 -- > [value1, value2, ...]
--- >
+--
 -- > preceeding [value1,
 -- >             value2,
 -- >             ...]
--- >
+--
 -- > preceeding [
 -- >     value1,
 -- >     value2,
 -- >     ...
 -- >   ]
 listDoc :: [Doc]
-         -- ^ The fields of the tuple.
+         -- ^ The fields of the list.
          -> Doc
 listDoc fields =
   let
     nobreaks = hsep (punctuate comma fields)
-    breaks = vsep (punctuate comma fields)
-    breakopts = [ lparen <> align breaks <> rparen,
-                  nest 2 (lparen <!> nest 2 breaks <!> rparen) ]
+    breaks = brackets (align (vsep (punctuate comma fields)))
   in case flatten nobreaks of
-    Just nolines -> choose (lparen <> nolines <> rparen : breakopts)
-    Nothing -> choose breakopts
+    Just nolines -> choose [brackets nolines, breaks]
+    Nothing -> breaks
 
 -- | Format a map as a list of key/value pairs.
 mapDoc :: [(Doc, Doc)]
@@ -136,11 +129,11 @@ mapDoc = listDoc . map (\(a, b) -> tupleDoc [a, b])
 -- representing arguments.  There are three possible ways to do this:
 --
 -- > name (field1 = value1, field2 = value2, ...)
--- >
+--
 -- > name (field1 = value1,
 -- >       field2 = value2,
 -- >       ...)
--- >
+--
 -- > name (
 -- >     field1 = value1,
 -- >     field2 = value2
@@ -152,3 +145,70 @@ compoundApplyDoc :: Doc
                  -- ^ A list of @(field, value)@ bindings
                  -> Doc
 compoundApplyDoc name = (name <+>) . recordDoc
+
+-- | Format a list of 'Doc's representing statements in a block.
+-- There are two possible ways to do this:
+--
+-- > { value1; value2; ... }
+--
+-- > preceeding {
+-- >     value1;
+-- >     value2;
+-- >     ...
+-- >   }
+blockDoc :: [Doc]
+         -- ^ The content of the block
+         -> Doc
+blockDoc stms =
+  let
+    nobreaks = hsep (punctuate semicolon stms)
+    breaks = vsep (punctuate semicolon stms)
+    breakopts = [ nest nestLevel (lbrace <!> nest nestLevel breaks <!> rbrace) ]
+  in case flatten nobreaks of
+    Just nolines -> choose (lbrace <+> nolines <+> rbrace : breakopts)
+    Nothing -> choose breakopts
+
+-- | Format a list of 'Doc's representing statements.
+-- There are two possible ways to do this:
+--
+-- > value1; value2; ...
+--
+-- > value1;
+-- > value2;
+-- > ...
+stmsDoc :: [Doc]
+         -- ^ The content of the block
+         -> Doc
+stmsDoc stms =
+  let
+    nobreaks = hsep (punctuate semicolon stms)
+    breaks = vsep (punctuate semicolon stms)
+  in case flatten nobreaks of
+    Just nolines -> choose [ nolines, breaks ]
+    Nothing -> breaks
+
+-- | Format a 'Doc' and a list of bindings representing cases in a
+-- pattern group.  There are three possible ways to do this:
+--
+-- > preceeding case1 | case2 | ...
+--
+-- > preceeding case1
+-- >          | case2
+-- >          | ...
+--
+-- > preceeding
+-- >     case1
+-- >   | case2
+-- >   | ...
+casesDoc :: [Doc]
+         -- ^ The cases.
+         -> Doc
+casesDoc cases =
+  let
+    nobreaks = hsep (punctuate (string " | ") cases)
+    breaks = vsep (punctuate (string "| ") cases)
+    breakopts = [ alignOffset (-1) breaks,
+                  nest nestLevel (hardline <> string "  " <> breaks) ]
+  in case flatten nobreaks of
+    Just nolines -> choose (parens nolines : breakopts)
+    Nothing -> choose breakopts

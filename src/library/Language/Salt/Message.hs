@@ -81,6 +81,7 @@ import Data.Hashable
 import Data.Position.BasicPosition
 import Data.Position.DWARFPosition(DWARFPosition, basicPosition)
 import Language.Salt.Surface.Token
+import Data.Default
 import Data.Symbol
 import Text.Format
 import Language.Salt.Core.Syntax
@@ -968,7 +969,7 @@ internalError str pos = message InternalError { internalErrorStr = str,
 
 -- | Report a call to a non-function in evaluation.
 callNonFunc :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
-                FormatM m bound, FormatM m free) =>
+                FormatM m bound, FormatM m free, Default bound, Eq bound) =>
                Elim bound free
             -- ^ The non-function term being called.
             -> DWARFPosition
@@ -983,7 +984,7 @@ callNonFunc term pos =
 
 -- | Report an unmatched value in a pattern match.
 noMatch :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
-            FormatM m bound, FormatM m free) =>
+            FormatM m bound, FormatM m free, Default bound, Eq bound) =>
            Elim bound free
         -- ^ The unmatched term.
         -> DWARFPosition

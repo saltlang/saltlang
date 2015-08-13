@@ -43,10 +43,6 @@ module Language.Salt.Surface.Common(
        ScopeID,
        literalPosition,
        literalDot,
-       recordDoc,
-       tupleDoc,
-       constructorDoc,
-       listDoc,
        getNodeID,
        firstScopeID
        ) where
@@ -61,6 +57,7 @@ import Data.Ratio
 import Data.Position.BasicPosition
 import Data.Symbol
 import Data.Word
+import Language.Salt.Format
 import Prelude hiding (concat)
 import Text.Format
 import Text.XML.Expat.Pickle
@@ -188,24 +185,6 @@ getNodeID =
     put $! nodeid + 1
     return ("node" ++ show nodeid)
 
-recordDoc :: [(Doc, Doc)] -> Doc
-recordDoc =
-  let
-    entryDoc :: (Doc, Doc) -> Doc
-    entryDoc (fieldname, fieldval) = fieldname <+> equals <+> fieldval
-  in
-    nest 2 . parens . concat . punctuate (comma <> linebreak) . map entryDoc
-
-tupleDoc :: [Doc] -> Doc
-tupleDoc = nest 2 . parens . concat . punctuate (comma <> linebreak)
-
-listDoc :: [Doc] -> Doc
-listDoc = nest 2 . brackets . concat . punctuate (comma <> linebreak)
-
-constructorDoc :: Doc -> [(Doc, Doc)] -> Doc
-constructorDoc prefix =
-  (prefix <+>) . recordDoc
-
 literalPosition :: Literal -> Position
 literalPosition Num { numPos = pos } = pos
 literalPosition Str { strPos = pos } = pos
@@ -315,25 +294,25 @@ instance MonadPositions m => FormatM m Literal where
   formatM Num { numVal = num, numPos = pos } =
     do
       posdoc <- formatM pos
-      return (constructorDoc (string "Num")
+      return (compoundApplyDoc (string "Num")
                              [(string "val", string (show num)),
                               (string "pos", posdoc)])
   formatM Str { strVal = str, strPos = pos } =
     do
       posdoc <- formatM pos
-      return (constructorDoc (string "Str")
+      return (compoundApplyDoc (string "Str")
                              [(string "val", bytestring str),
                               (string "pos", posdoc)])
   formatM Char { charVal = chr, charPos = pos } =
     do
       posdoc <- formatM pos
-      return (constructorDoc (string "Char")
+      return (compoundApplyDoc (string "Char")
                              [(string "val", char chr),
                               (string "pos", posdoc)])
   formatM Unit { unitPos = pos } =
     do
       posdoc <- formatM pos
-      return (constructorDoc (string "Unit") [(string "pos", posdoc)])
+      return (compoundApplyDoc (string "Unit") [(string "pos", posdoc)])
 
 numPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
