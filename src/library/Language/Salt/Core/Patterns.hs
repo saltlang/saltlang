@@ -68,6 +68,7 @@ patternMatchTail result Deconstruct { deconstructConstructor = constructor,
         in
           HashMap.foldlWithKey' foldfun (Just result) binds
       _ -> Nothing
+    -- Otherwise, we match calls to a constructor.
   | otherwise =
     case term of
       Elim { elimTerm =
