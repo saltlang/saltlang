@@ -296,7 +296,8 @@ data Intro bound free =
   -- bound to a name.  Each of the members of the group may reference
   -- eachother.
   | Fix {
-      fixTerms :: !(HashMap bound (Scope bound (Intro bound) free)),
+      fixSym :: !bound,
+      fixTerm :: !(Scope bound (Intro bound) free),
       -- | The position in source from which this originates.
       fixPos :: !DWARFPosition
     }
@@ -497,7 +498,8 @@ instance Eq b => Eq1 (Intro b) where
     Eta { etaTerm = term2, etaType = ty2 } =
       term1 ==# term2 && ty1 ==# ty2
   Record { recFields = vals1 } ==# Record { recFields = vals2 } = vals1 == vals2
-  Fix { fixTerms = terms1 } ==# Fix { fixTerms = terms2 } = terms1 == terms2
+  Fix { fixSym = sym1, fixTerm = term1 } ==#
+    Fix { fixSym = sym2, fixTerm = term2 } = sym1 == sym2 && term1 == term2
   Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
   Elim { elimTerm = term1 } ==# Elim { elimTerm = term2 } = term1 ==# term2
   Literal { literalVal = lit1 } ==# Literal { literalVal = lit2 } = lit1 == lit2
@@ -642,9 +644,11 @@ instance Ord b => Ord1 (Intro b) where
             (sortBy keyOrd (HashMap.toList vals2))
   compare1 Record {} _ = GT
   compare1 _ Record {} = LT
-  compare1 Fix { fixTerms = terms1 } Fix { fixTerms = terms2 } =
-    compare (sortBy keyOrd (HashMap.toList terms1))
-            (sortBy keyOrd (HashMap.toList terms2))
+  compare1 Fix { fixSym = sym1, fixTerm = term1 }
+           Fix { fixSym = sym2, fixTerm = term2 } =
+    case compare sym1 sym2 of
+      EQ ->  compare term1 term2
+      out -> out
   compare1 Fix {} _ = GT
   compare1 _ Fix {} = LT
   compare1 Comp { compBody = body1 } Comp { compBody = body2 } =
@@ -763,9 +767,8 @@ instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s Record { recFields = vals } =
     s `hashWithSalt` (9 :: Int) `hashWithSalt1`
     sortBy keyOrd (HashMap.toList vals)
-  hashWithSalt1 s Fix { fixTerms = terms } =
-    s `hashWithSalt` (10 :: Int) `hashWithSalt1`
-    sortBy keyOrd (HashMap.toList terms)
+  hashWithSalt1 s Fix { fixSym = sym, fixTerm = term } =
+    (s `hashWithSalt` (10 :: Int) `hashWithSalt` sym) `hashWithSalt1` term
   hashWithSalt1 s Comp { compBody = body } =
     s `hashWithSalt` (11 :: Int) `hashWithSalt1` body
   hashWithSalt1 s Elim { elimTerm = term } =
@@ -856,7 +859,7 @@ instance Functor (Intro b) where
   fmap f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (fmap f) cases }
   fmap f t @ Record { recFields = vals } = t { recFields = fmap (fmap f) vals }
-  fmap f t @ Fix { fixTerms = terms } = t { fixTerms = fmap (fmap f) terms }
+  fmap f t @ Fix { fixTerm = term } = t { fixTerm = fmap f term }
   fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
   fmap f t @ Elim { elimTerm = term } = t { elimTerm = fmap f term }
   fmap _ Literal { literalVal = lit, literalPos = p } =
@@ -905,7 +908,7 @@ instance Foldable (Intro b) where
     foldMap f term `mappend` foldMap f ty
   foldMap f Lambda { lambdaCases = cases } = foldMap (foldMap f) cases
   foldMap f Record { recFields = vals } = foldMap (foldMap f) vals
-  foldMap f Fix { fixTerms = terms } = foldMap (foldMap f) terms
+  foldMap f Fix { fixTerm = term } = foldMap f term
   foldMap f Comp { compBody = body } = foldMap f body
   foldMap f Elim { elimTerm = term } = foldMap f term
   foldMap _ Literal {} = mempty
@@ -961,8 +964,8 @@ instance Traversable (Intro b) where
     (\cases' -> t { lambdaCases = cases' }) <$> traverse (traverse f) cases
   traverse f t @ Record { recFields = vals } =
     (\vals' -> t { recFields = vals' }) <$> traverse (traverse f) vals
-  traverse f t @ Fix { fixTerms = terms } =
-    (\terms' -> t { fixTerms = terms' }) <$> traverse (traverse f) terms
+  traverse f t @ Fix { fixTerm = term } =
+    (\term' -> t { fixTerm = term' }) <$> traverse f term
   traverse f c @ Comp { compBody = body } =
     (\body' -> c { compBody = body' }) <$> traverse f body
   traverse f t @ Elim { elimTerm = term } =
@@ -1068,7 +1071,7 @@ instance Monad (Intro b) where
   t @ Lambda { lambdaCases = cases } >>= f =
     t { lambdaCases = fmap (caseSubstIntro f) cases }
   t @ Record { recFields = vals } >>= f = t { recFields = fmap (>>= f) vals }
-  t @ Fix { fixTerms = terms } >>= f = t { fixTerms = fmap (>>>= f) terms }
+  t @ Fix { fixTerm = term } >>= f = t { fixTerm = term >>>= f }
   t @ Comp { compBody = body } >>= f = t { compBody = compSubstIntro f body }
   Elim { elimTerm = Var { varSym = sym } } >>= f = f sym
   t @ Elim { elimTerm = term } >>= f = t { elimTerm = elimSubstIntro f term }
@@ -1121,8 +1124,7 @@ introSubstElim f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (caseSubstElim f) cases }
 introSubstElim f t @ Record { recFields = vals } =
   t { recFields = fmap (introSubstElim f) vals }
-introSubstElim f t @ Fix { fixTerms = terms } =
-  t { fixTerms = fmap (>>>= Elim . f) terms }
+introSubstElim f t @ Fix { fixTerm = term } = t { fixTerm = term >>>= Elim . f }
 introSubstElim f t @ Comp { compBody = body } =
   t { compBody = compSubstElim f body }
 introSubstElim f Elim { elimTerm = term } = Elim { elimTerm = term >>= f }
@@ -1430,11 +1432,12 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
       fielddocs = map formatBind (HashMap.toList fields)
     in
       recordDoc fielddocs
-  format Fix { fixTerms = terms } =
+  format Fix { fixSym = sym, fixTerm = term } =
     let
-      termdocs = map formatBind (HashMap.toList terms)
+      symdoc = format sym
+      termdoc = format term
     in
-      string "fix" <//> nest nestLevel (recordDoc termdocs)
+      string "fix " <> symdoc <+> equals <//> nest nestLevel termdoc
   format Comp { compBody = body } =
     let
       bodydocs = formatCompList body
@@ -1485,10 +1488,11 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
     do
       fielddocs <- mapM formatMBind (HashMap.toList fields)
       return (recordDoc fielddocs)
-  formatM Fix { fixTerms = terms } =
+  formatM Fix { fixSym = sym, fixTerm = term } =
     do
-      termdocs <- mapM formatMBind (HashMap.toList terms)
-      return (string "\\fix" <//> nest nestLevel (recordDoc termdocs))
+      symdoc <- formatM sym
+      termdoc <- formatM term
+      return (string "fix " <> symdoc <+> equals <//> nest nestLevel termdoc)
   formatM Comp { compBody = body } =
     do
       bodydoc <- formatMCompList body
@@ -1914,14 +1918,16 @@ fixPickler :: (GenericXMLString tag, Show tag,
               PU [NodeG [] tag text] (Intro bound free)
 fixPickler =
   let
-    revfunc Fix { fixTerms = terms, fixPos = pos } = (terms, pos)
+    revfunc Fix { fixSym = sym, fixTerm = term, fixPos = pos } =
+      (sym, term, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(terms, pos) -> Fix { fixTerms = terms, fixPos = pos }, revfunc)
+    xpWrap (\(sym, term, pos) -> Fix { fixSym = sym, fixTerm = term,
+                                       fixPos = pos }, revfunc)
            (xpElemNodes (gxFromString "Fix")
-                        (xpPair (xpElemNodes (gxFromString "terms")
-                                             (mapPickler "term"))
-                                (xpElemNodes (gxFromString "pos") xpickle)))
+                        (xpTriple (xpElemNodes (gxFromString "sym") xpickle)
+                                  (xpElemNodes (gxFromString "terms") xpickle)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 compPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
