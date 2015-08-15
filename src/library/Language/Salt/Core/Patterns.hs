@@ -78,7 +78,7 @@ patternMatchTail result Deconstruct { deconstructConstructor = constructor,
                                        constructorSym = constructor'
                                      }
                                 },
-                       callArgs = args }
+                       callArg = Record { recFields = args } }
            } ->
         if constructor == constructor'
         then let

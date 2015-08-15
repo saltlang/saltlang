@@ -202,6 +202,8 @@ data Intro bound free =
       -- | The binding order for arguments.  This is used to determine
       -- the order in which to evaluate scopes.
       funcTypeArgs :: [Element bound free],
+      -- | Array used to map tuple arguments to the correct parameter names.
+      funcTypeArgOrder :: !(Array Word bound),
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
       funcTypeRetTy :: Scope bound (Intro bound) free,
@@ -360,8 +362,9 @@ data Elim bound free =
   -- transliterated into named calls with parameter names "1", "2",
   -- and so on.
     Call {
-      -- | The arguments to the call.  These are introduction terms.
-      callArgs :: HashMap bound (Intro bound free),
+      -- | The argument to the call. Multiple arguments are
+      -- implemented using either a record or a tuple.
+      callArg :: Intro bound free,
       -- | The function being called.  This must be an elimination
       -- term.
       callFunc :: Elim bound free,
@@ -492,9 +495,11 @@ instance Eq b => Eq1 (Element b) where
     sym1 == sym2 && ty1 ==# ty2 && pat1 ==# pat2
 
 instance Eq b => Eq1 (Intro b) where
-  FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 } ==#
-    FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
-      argtys1 ==# argtys2 && retty1 ==# retty2
+  FuncType { funcTypeArgs = argtys1, funcTypeArgOrder = ord1,
+             funcTypeRetTy = retty1 } ==#
+    FuncType { funcTypeArgs = argtys2, funcTypeArgOrder = ord2,
+               funcTypeRetTy = retty2 } =
+      argtys1 ==# argtys2 && elems ord1 ==# elems ord2 && retty1 ==# retty2
   RecordType { recTypeBody = body1, recTypeOrder = ord1 } ==#
     RecordType { recTypeBody = body2, recTypeOrder = ord2 } =
     body1 ==# body2 && ord1 == ord2
@@ -526,9 +531,9 @@ instance Eq b => Eq1 (Intro b) where
   _ ==# _ = False
 
 instance Eq b => Eq1 (Elim b) where
-  Call { callArgs = args1, callFunc = func1 } ==#
-    Call { callArgs = args2, callFunc = func2 } =
-      args1 == args2 && func1 ==# func2
+  Call { callArg = arg1, callFunc = func1 } ==#
+    Call { callArg = arg2, callFunc = func2 } =
+      arg1 == arg2 && func1 ==# func2
   Typed { typedTerm = term1, typedType = ty1 } ==#
     Typed { typedTerm = term2, typedType = ty2 } =
       term1 ==# term2 && ty1 ==# ty2
@@ -694,11 +699,10 @@ instance Ord b => Ord1 (Intro b) where
   compare1 BadIntro {} BadIntro {} = EQ
 
 instance Ord b => Ord1 (Elim b) where
-  compare1 Call { callArgs = args1, callFunc = func1 }
-           Call { callArgs = args2, callFunc = func2 } =
+  compare1 Call { callArg = arg1, callFunc = func1 }
+           Call { callArg = arg2, callFunc = func2 } =
     case compare1 func1 func2 of
-      EQ -> compare (sortBy keyOrd (HashMap.toList args1))
-                    (sortBy keyOrd (HashMap.toList args2))
+      EQ -> compare arg1 arg2
       out -> out
   compare1 Call {} _ = GT
   compare1 _ Call {} = LT
@@ -805,9 +809,8 @@ instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s BadIntro {} = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable b, Ord b) => Hashable1 (Elim b) where
-  hashWithSalt1 s Call { callArgs = args, callFunc = func } =
-    (s `hashWithSalt` (1 :: Int) `hashWithSalt`
-     sortBy keyOrd (HashMap.toList args)) `hashWithSalt1` func
+  hashWithSalt1 s Call { callArg = arg, callFunc = func } =
+    (s `hashWithSalt` (1 :: Int) `hashWithSalt` arg) `hashWithSalt1` func
   hashWithSalt1 s Typed { typedTerm = term, typedType = ty } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
   hashWithSalt1 s Var { varSym = sym } =
@@ -896,8 +899,8 @@ instance Functor (Intro b) where
   fmap _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 
 instance Functor (Elim b) where
-  fmap f t @ Call { callArgs = args, callFunc = func } =
-    t { callArgs = fmap (fmap f) args, callFunc = fmap f func }
+  fmap f t @ Call { callArg = arg, callFunc = func } =
+    t { callArg = fmap f arg, callFunc = fmap f func }
   fmap f t @ Typed { typedTerm = term, typedType = ty } =
     t { typedTerm = fmap f term, typedType = fmap f ty }
   fmap f t @ Var { varSym = sym } = t { varSym = f sym }
@@ -944,8 +947,8 @@ instance Foldable (Intro b) where
   foldMap _ BadIntro {} = mempty
 
 instance Foldable (Elim b) where
-  foldMap f Call { callArgs = args, callFunc = func } =
-    foldMap (foldMap f) args `mappend` foldMap f func
+  foldMap f Call { callArg = arg, callFunc = func } =
+    foldMap f arg `mappend` foldMap f func
   foldMap f Typed { typedTerm = term, typedType = ty } =
     foldMap f term `mappend` foldMap f ty
   foldMap f Var { varSym = sym } = f sym
@@ -1007,9 +1010,9 @@ instance Traversable (Intro b) where
   traverse _ BadIntro { badIntroPos = p } = pure BadIntro { badIntroPos = p }
 
 instance Traversable (Elim b) where
-  traverse f t @ Call { callArgs = args, callFunc = func } =
-    (\args' func' -> t { callArgs = args', callFunc = func' }) <$>
-      traverse (traverse f) args <*> traverse f func
+  traverse f t @ Call { callArg = arg, callFunc = func } =
+    (\arg' func' -> t { callArg = arg', callFunc = func' }) <$>
+      traverse f arg <*> traverse f func
   traverse f t @ Typed { typedTerm = term, typedType = ty } =
     (\term' ty' -> t { typedTerm = term', typedType = ty' }) <$>
       traverse f term <*> traverse f ty
@@ -1064,8 +1067,8 @@ elementSubstIntro :: (a -> Intro c b) -> Element c a -> Element c b
 elementSubstIntro f e @ Element { elemType = ty } = e { elemType = ty >>>= f }
 
 elimSubstIntro :: (a -> Intro c b) -> Elim c a -> Elim c b
-elimSubstIntro f t @ Call { callArgs = args, callFunc = func } =
-  t { callArgs = fmap (>>= f) args, callFunc = elimSubstIntro f func }
+elimSubstIntro f t @ Call { callArg = arg, callFunc = func } =
+  t { callArg = arg >>= f, callFunc = elimSubstIntro f func }
 elimSubstIntro f t @ Typed { typedTerm = term, typedType = ty } =
   t { typedTerm = term >>= f, typedType = ty >>= f }
 elimSubstIntro _ Var {} = error "Should not see this case"
@@ -1172,8 +1175,8 @@ introSubstElim _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
 instance Monad (Elim b) where
   return sym = Var { varSym = sym, varPos = injectpos }
 
-  t @ Call { callArgs = args, callFunc = func } >>= f =
-    t { callArgs = fmap (introSubstElim f) args, callFunc = func >>= f }
+  t @ Call { callArg = arg, callFunc = func } >>= f =
+    t { callArg = introSubstElim f arg, callFunc = func >>= f }
   t @ Typed { typedTerm = term, typedType = ty } >>= f =
     t { typedTerm = introSubstElim f term, typedType = introSubstElim f ty }
   Var { varSym = sym } >>= f = f sym
@@ -1546,12 +1549,12 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Format (Elim bound free) where
-  format Call { callFunc = func, callArgs = args } =
+  format Call { callFunc = func, callArg = arg } =
     let
-      argdocs = map formatBind (HashMap.toList args)
+      argdoc = format arg
       funcdoc = format func
     in
-      compoundApplyDoc funcdoc argdocs
+      funcdoc </> argdoc
   format Typed { typedTerm = term, typedType = ty } =
     let
       termdoc = format term
@@ -1568,11 +1571,11 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
          FormatM m (Elim bound free) where
-  formatM Call { callFunc = func, callArgs = args } =
+  formatM Call { callFunc = func, callArg = arg } =
     do
-      argdocs <- mapM formatMBind (HashMap.toList args)
+      argdocs <- formatM arg
       funcdoc <- formatM func
-      return $! compoundApplyDoc funcdoc argdocs
+      return (funcdoc </> argdocs)
   formatM Typed { typedTerm = term, typedType = ty } =
     do
       termdoc <- formatM term
@@ -1817,15 +1820,17 @@ funcTypePickler :: (GenericXMLString tag, Show tag,
 funcTypePickler =
   let
     revfunc FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
-                       funcTypePos = pos } = (args, retty, pos)
+                       funcTypeArgOrder = ord, funcTypePos = pos } =
+      (args, elems ord, retty, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(args, retty, pos) -> FuncType { funcTypeArgs = args,
-                                              funcTypeRetTy = retty,
-                                              funcTypePos = pos }, revfunc)
+    xpWrap (\(args, ord, retty, pos) ->
+             FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
+                        funcTypeArgOrder = listToArr ord, funcTypePos = pos },
+            revfunc)
            (xpElemNodes (gxFromString "FuncType")
-                        (xpTriple (xpList (xpElemNodes (gxFromString "args")
-                                                       xpickle))
+                        (xp4Tuple (xpElemNodes (gxFromString "args") xpickle)
+                                  (xpElemNodes (gxFromString "order") xpickle)
                                   (xpElemNodes (gxFromString "retty") xpickle)
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
@@ -2122,17 +2127,16 @@ callPickler :: (GenericXMLString tag, Show tag,
                PU [NodeG [] tag text] (Elim bound free)
 callPickler =
   let
-    revfunc Call { callFunc = func, callArgs = args,
-                   callPos = pos } = (func, args, pos)
+    revfunc Call { callFunc = func, callArg = arg,
+                   callPos = pos } = (func, arg, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(func, args, pos) -> Call { callFunc = func, callArgs = args,
+    xpWrap (\(func, arg, pos) -> Call { callFunc = func, callArg = arg,
                                          callPos = pos },
             revfunc)
            (xpElemNodes (gxFromString "Call")
                         (xpTriple (xpElemNodes (gxFromString "func") xpickle)
-                                  (xpElemNodes (gxFromString "args")
-                                               (mapPickler "arg"))
+                                  (xpElemNodes (gxFromString "arg") xpickle)
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
 typedPickler :: (GenericXMLString tag, Show tag,
