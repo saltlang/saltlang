@@ -53,6 +53,7 @@ import Control.Applicative
 import Control.Monad hiding (mapM)
 import Control.Monad.Positions
 import Control.Monad.Symbols
+import Data.Array hiding (accum)
 import Data.Default
 import Data.Foldable
 import Data.Hashable
@@ -64,6 +65,7 @@ import Data.Monoid(mappend, mempty)
 import Data.Position.DWARFPosition
 import Data.Ratio
 import Data.Traversable
+import Data.Word
 import Language.Salt.Format
 import Prelude hiding (foldl, mapM)
 import Prelude.Extras(Eq1(..), Ord1(..))
@@ -215,6 +217,8 @@ data Intro bound free =
       --
       -- Note: all fields are given names by transliteration.
       recTypeBody :: [Element bound free],
+      -- | Array used to convert tuples to records of this type.
+      recTypeOrder :: !(Array Word bound),
       -- | The position in source from which this originates.
       recTypePos :: !DWARFPosition
     }
@@ -283,20 +287,30 @@ data Intro bound free =
       -- | The position in source from which this originates.
       etaPos :: !DWARFPosition
     }
-  -- | A structure.  Structures can be named or ordered in the surface
-  -- syntax.  Ordered structures are transliterated into named
-  -- structures, with the fields "1", "2", and so on.
+  -- | A record.  Records can be named or ordered in the surface
+  -- syntax.  Ordered records are transliterated into named
+  -- records, with the fields "1", "2", and so on.
   | Record {
       -- | The bindings for this record.  These are introduction terms.
       recFields :: !(HashMap bound (Intro bound free)),
       -- | The position in source from which this originates.
       recPos :: !DWARFPosition
     }
+    -- | A tuple.  These denote record values, but their
+    -- interpretation depends on the expected type.
+  | Tuple {
+      -- | The fields of the tuple.
+      tupleFields :: !(Array Word (Intro bound free)),
+      -- | The position in source from which this originates.
+      tuplePos :: !DWARFPosition
+    }
   -- | A collection of one or more terms, each of which is
   -- bound to a name.  Each of the members of the group may reference
   -- eachother.
   | Fix {
+      -- | The self-reference symbol.
       fixSym :: !bound,
+      -- | The term, parameterized by the self-reference @fixSym@.
       fixTerm :: !(Scope bound (Intro bound) free),
       -- | The position in source from which this originates.
       fixPos :: !DWARFPosition
@@ -481,8 +495,9 @@ instance Eq b => Eq1 (Intro b) where
   FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 } ==#
     FuncType { funcTypeArgs = argtys2, funcTypeRetTy = retty2 } =
       argtys1 ==# argtys2 && retty1 ==# retty2
-  RecordType { recTypeBody = body1 } ==# RecordType { recTypeBody = body2 } =
-    body1 ==# body2
+  RecordType { recTypeBody = body1, recTypeOrder = ord1 } ==#
+    RecordType { recTypeBody = body2, recTypeOrder = ord2 } =
+    body1 ==# body2 && ord1 == ord2
   RefineType { refineType = ty1, refineCases = cases1 } ==#
     RefineType { refineType = ty2, refineCases = cases2 } =
       ty1 ==# ty2 && cases1 ==# cases2
@@ -498,6 +513,8 @@ instance Eq b => Eq1 (Intro b) where
     Eta { etaTerm = term2, etaType = ty2 } =
       term1 ==# term2 && ty1 ==# ty2
   Record { recFields = vals1 } ==# Record { recFields = vals2 } = vals1 == vals2
+  Tuple { tupleFields = vals1 } ==# Tuple { tupleFields = vals2 } =
+    elems vals1 ==# elems vals2
   Fix { fixSym = sym1, fixTerm = term1 } ==#
     Fix { fixSym = sym2, fixTerm = term2 } = sym1 == sym2 && term1 == term2
   Comp { compBody = body1 } ==# Comp { compBody = body2 } = body1 ==# body2
@@ -598,9 +615,11 @@ instance Ord b => Ord1 (Intro b) where
       out -> out
   compare1 FuncType {} _ = GT
   compare1 _ FuncType {} = LT
-  compare1 RecordType { recTypeBody = body1 }
-    RecordType { recTypeBody = body2 } =
-    compare1 body1 body2
+  compare1 RecordType { recTypeBody = body1, recTypeOrder = ord1 }
+    RecordType { recTypeBody = body2, recTypeOrder = ord2 } =
+    case compare ord1 ord2 of
+      EQ -> compare1 body1 body2
+      out -> out
   compare1 RecordType {} _ = GT
   compare1 _ RecordType {} = LT
   compare1 RefineType { refineType = ty1, refineCases = cases1 }
@@ -644,6 +663,10 @@ instance Ord b => Ord1 (Intro b) where
             (sortBy keyOrd (HashMap.toList vals2))
   compare1 Record {} _ = GT
   compare1 _ Record {} = LT
+  compare1 Tuple { tupleFields = vals1 } Tuple { tupleFields = vals2 } =
+    compare1 (elems vals1) (elems vals2)
+  compare1 Tuple {} _ = GT
+  compare1 _ Tuple {} = LT
   compare1 Fix { fixSym = sym1, fixTerm = term1 }
            Fix { fixSym = sym2, fixTerm = term2 } =
     case compare sym1 sym2 of
@@ -748,8 +771,8 @@ instance (Hashable b, Ord b) => Hashable1 (Element b) where
 instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` argtys `hashWithSalt` retty
-  hashWithSalt1 s RecordType { recTypeBody = body } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt1` body
+  hashWithSalt1 s RecordType { recTypeBody = body, recTypeOrder = ord } =
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` elems ord) `hashWithSalt1` body
   hashWithSalt1 s RefineType { refineType = ty, refineCases = cases } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s CompType { compType = ty, compCases = cases } =
@@ -767,16 +790,18 @@ instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s Record { recFields = vals } =
     s `hashWithSalt` (9 :: Int) `hashWithSalt1`
     sortBy keyOrd (HashMap.toList vals)
+  hashWithSalt1 s Tuple { tupleFields = vals } =
+    s `hashWithSalt` (10 :: Int) `hashWithSalt1` elems vals
   hashWithSalt1 s Fix { fixSym = sym, fixTerm = term } =
-    (s `hashWithSalt` (10 :: Int) `hashWithSalt` sym) `hashWithSalt1` term
+    (s `hashWithSalt` (11 :: Int) `hashWithSalt` sym) `hashWithSalt1` term
   hashWithSalt1 s Comp { compBody = body } =
-    s `hashWithSalt` (11 :: Int) `hashWithSalt1` body
+    s `hashWithSalt` (12 :: Int) `hashWithSalt1` body
   hashWithSalt1 s Elim { elimTerm = term } =
-    s `hashWithSalt` (12 :: Int) `hashWithSalt1` term
+    s `hashWithSalt` (13 :: Int) `hashWithSalt1` term
   hashWithSalt1 s Literal { literalVal = term } =
-    s `hashWithSalt` (13 :: Int) `hashWithSalt` term
+    s `hashWithSalt` (14 :: Int) `hashWithSalt` term
   hashWithSalt1 s Constructor { constructorSym = sym } =
-    s `hashWithSalt` (14 :: Int) `hashWithSalt` sym
+    s `hashWithSalt` (15 :: Int) `hashWithSalt` sym
   hashWithSalt1 s BadIntro {} = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable b, Ord b) => Hashable1 (Elim b) where
@@ -859,6 +884,8 @@ instance Functor (Intro b) where
   fmap f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (fmap f) cases }
   fmap f t @ Record { recFields = vals } = t { recFields = fmap (fmap f) vals }
+  fmap f t @ Tuple { tupleFields = vals } =
+    t { tupleFields = fmap (fmap f) vals }
   fmap f t @ Fix { fixTerm = term } = t { fixTerm = fmap f term }
   fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
   fmap f t @ Elim { elimTerm = term } = t { elimTerm = fmap f term }
@@ -908,6 +935,7 @@ instance Foldable (Intro b) where
     foldMap f term `mappend` foldMap f ty
   foldMap f Lambda { lambdaCases = cases } = foldMap (foldMap f) cases
   foldMap f Record { recFields = vals } = foldMap (foldMap f) vals
+  foldMap f Tuple { tupleFields = vals } = foldMap (foldMap f) vals
   foldMap f Fix { fixTerm = term } = foldMap f term
   foldMap f Comp { compBody = body } = foldMap f body
   foldMap f Elim { elimTerm = term } = foldMap f term
@@ -964,6 +992,8 @@ instance Traversable (Intro b) where
     (\cases' -> t { lambdaCases = cases' }) <$> traverse (traverse f) cases
   traverse f t @ Record { recFields = vals } =
     (\vals' -> t { recFields = vals' }) <$> traverse (traverse f) vals
+  traverse f t @ Tuple { tupleFields = vals } =
+    (\vals' -> t { tupleFields = vals' }) <$> traverse (traverse f) vals
   traverse f t @ Fix { fixTerm = term } =
     (\term' -> t { fixTerm = term' }) <$> traverse f term
   traverse f c @ Comp { compBody = body } =
@@ -1071,6 +1101,7 @@ instance Monad (Intro b) where
   t @ Lambda { lambdaCases = cases } >>= f =
     t { lambdaCases = fmap (caseSubstIntro f) cases }
   t @ Record { recFields = vals } >>= f = t { recFields = fmap (>>= f) vals }
+  t @ Tuple { tupleFields = vals } >>= f = t { tupleFields = fmap (>>= f) vals }
   t @ Fix { fixTerm = term } >>= f = t { fixTerm = term >>>= f }
   t @ Comp { compBody = body } >>= f = t { compBody = compSubstIntro f body }
   Elim { elimTerm = Var { varSym = sym } } >>= f = f sym
@@ -1124,6 +1155,8 @@ introSubstElim f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (caseSubstElim f) cases }
 introSubstElim f t @ Record { recFields = vals } =
   t { recFields = fmap (introSubstElim f) vals }
+introSubstElim f t @ Tuple { tupleFields = vals } =
+  t { tupleFields = fmap (introSubstElim f) vals }
 introSubstElim f t @ Fix { fixTerm = term } = t { fixTerm = term >>>= Elim . f }
 introSubstElim f t @ Comp { compBody = body } =
   t { compBody = compSubstElim f body }
@@ -1432,6 +1465,11 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
       fielddocs = map formatBind (HashMap.toList fields)
     in
       recordDoc fielddocs
+  format Tuple { tupleFields = fields } =
+    let
+      fielddocs = map format (elems fields)
+    in
+      tupleDoc fielddocs
   format Fix { fixSym = sym, fixTerm = term } =
     let
       symdoc = format sym
@@ -1488,6 +1526,10 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
     do
       fielddocs <- mapM formatMBind (HashMap.toList fields)
       return (recordDoc fielddocs)
+  formatM Tuple { tupleFields = fields } =
+    do
+      fielddocs <- mapM formatM (elems fields)
+      return (tupleDoc fielddocs)
   formatM Fix { fixSym = sym, fixTerm = term } =
     do
       symdoc <- formatM sym
@@ -1762,6 +1804,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                              (xpElemNodes (gxFromString "body") xpickle)
                              (xpElemNodes (gxFromString "pos") xpickle)))
 
+listToArr :: [a] -> Array Word a
+listToArr l = listArray (0, fromIntegral (length l)) l
+
 funcTypePickler :: (GenericXMLString tag, Show tag,
                     GenericXMLString text, Show text,
                     XmlPickler [(tag, text)] bound,
@@ -1793,15 +1838,19 @@ recordTypePickler :: (GenericXMLString tag, Show tag,
                      PU [NodeG [] tag text] (Intro bound free)
 recordTypePickler =
   let
-    revfunc RecordType { recTypeBody = body, recTypePos = pos } = (body, pos)
+    revfunc RecordType { recTypeBody = body, recTypeOrder = ord,
+                         recTypePos = pos } = (body, elems ord, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(body, pos) -> RecordType { recTypeBody = body, recTypePos = pos },
-            revfunc)
+    xpWrap (\(body, ord, pos) -> RecordType { recTypeOrder = listToArr ord,
+                                              recTypeBody = body,
+                                              recTypePos = pos }, revfunc)
            (xpElemNodes (gxFromString "RecordType")
-                        (xpPair (xpList (xpElemNodes (gxFromString "body")
-                                                     xpickle))
-                                (xpElemNodes (gxFromString "pos") xpickle)))
+                        (xpTriple (xpList (xpElemNodes (gxFromString "body")
+                                                       xpickle))
+                                  (xpList (xpElemNodes (gxFromString "order")
+                                                       xpickle))
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 refineTypePickler :: (GenericXMLString tag, Show tag,
                       GenericXMLString text, Show text,
@@ -1907,6 +1956,24 @@ recordPickler =
            (xpElemNodes (gxFromString "Record")
                         (xpPair (xpElemNodes (gxFromString "fields")
                                              (mapPickler "field"))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+tuplePickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text,
+                 XmlPickler [(tag, text)] bound,
+                 XmlPickler [NodeG [] tag text] bound,
+                 XmlPickler [NodeG [] tag text] free,
+                 Hashable bound, Eq bound) =>
+                PU [NodeG [] tag text] (Intro bound free)
+tuplePickler =
+  let
+    revfunc Tuple { tupleFields = vals, tuplePos = pos } = (elems vals, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(vals, pos) -> Tuple { tupleFields = listToArr vals,
+                                    tuplePos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Record")
+                        (xpPair (xpElemNodes (gxFromString "fields") xpickle)
                                 (xpElemNodes (gxFromString "pos") xpickle)))
 
 fixPickler :: (GenericXMLString tag, Show tag,
@@ -2030,18 +2097,20 @@ instance (GenericXMLString tag, Show tag,
       picker Quantified {} = 4
       picker Lambda {} = 5
       picker Record {} = 6
-      picker Fix {} = 7
-      picker Comp {} = 8
-      picker Elim {} = 9
-      picker Constructor {} = 10
-      picker Literal {} = 11
-      picker BadIntro {} = 12
+      picker Tuple {} = 7
+      picker Fix {} = 8
+      picker Comp {} = 9
+      picker Elim {} = 10
+      picker Constructor {} = 11
+      picker Literal {} = 12
+      picker BadIntro {} = 13
       picker Eta {} = error "Eta not supported"
     in
       xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
                      compTypePickler, quantifiedPickler, lambdaPickler,
-                     recordPickler, fixPickler, compPickler, elimPickler,
-                     constructorPickler, literalPickler, badIntroPickler ]
+                     recordPickler, tuplePickler, fixPickler, compPickler,
+                     elimPickler, constructorPickler, literalPickler,
+                     badIntroPickler ]
 
 
 callPickler :: (GenericXMLString tag, Show tag,
