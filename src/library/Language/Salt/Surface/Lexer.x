@@ -69,6 +69,7 @@ import Text.AlexWrapper
 
 @opchars = [\!\#\%\^\&\+\?\<\>\:\|\~\-\=\:]
 @escape_chars = [abfnrtv\\'\"\?]
+@comment_ignore = ((\**|\/*)[^\t\n\/\*]+(\**|\/*))
 
 tokens :-
 
@@ -138,19 +139,19 @@ tokens :-
         { report bufferedComments `andThen` produce escapedChar }
 
 -- A hex unicode escaped character
-<0>  '\\[xX][0-9a-fA-F]+'
+<0>       '\\[xX][0-9a-fA-F]+'
         { report bufferedComments `andThen` produce escapedChar }
 
 -- A decimal unicode escaped character
-<0>  '\\[1-9][0-9]*'
+<0>       '\\[1-9][0-9]*'
         { report bufferedComments `andThen` produce escapedChar }
 
 -- An octal unicode escaped character
-<0>  '\\0[0-7]+'
+<0>       '\\0[0-7]+'
         { report bufferedComments `andThen` produce escapedChar }
 
 -- A binary unicode escaped character
-<0>  '\\[bB][01]+'
+<0>       '\\[bB][01]+'
         { report bufferedComments `andThen` produce escapedChar }
 
 -- Invalid escaped character literal
@@ -234,11 +235,11 @@ tokens :-
           report trailingWhitespace `andThen` skip }
 
 -- Nest comments one level deeper
-<comment> \/\*
+<comment> @comment_ignore?\/\*
         { record enterComment `andThen` skip }
 
 -- Decrement level of comment nesting, possibly close the comment
-<comment> \*\/
+<comment> @comment_ignore?\*\/
         { record leaveComment `andThen` skip }
 
 -- Warn about hard tabs, even in comments, but append them anyway
@@ -246,11 +247,7 @@ tokens :-
         { report hardTabs `andThen` record commentText `andThen` skip }
 
 -- Record and skip everything else
-<comment> [^\t\n\/\*]+
-        { record commentText `andThen` skip }
-
--- Allow individual stars and slashes that don't form a /* or a */
-<comment> [\*\/]
+<comment> @comment_ignore
         { record commentText `andThen` skip }
 
 {
