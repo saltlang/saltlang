@@ -38,7 +38,7 @@ module Control.Monad.Collect.Class(
 import Control.Monad.CommentBuffer
 import Control.Monad.Comments
 import Control.Monad.Cont
-import Control.Monad.Error
+import Control.Monad.Except
 import Control.Monad.FileLoader
 import Control.Monad.Genpos
 import Control.Monad.Gensym
@@ -87,7 +87,7 @@ instance MonadCollect m => MonadCollect (ContT c m) where
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
-instance (MonadCollect m, Error e) => MonadCollect (ErrorT e m) where
+instance (MonadCollect m) => MonadCollect (ExceptT e m) where
   scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists

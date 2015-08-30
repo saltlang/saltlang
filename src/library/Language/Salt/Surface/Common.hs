@@ -198,7 +198,7 @@ literalDot Num { numVal = num } =
     return (dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Num | " <>
-                               string (show num)) <$>
+                               string (show num)) <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 literalDot Str { strVal = str } =
   do
@@ -207,7 +207,7 @@ literalDot Str { strVal = str } =
             brackets (string "label = " <>
                       dquoted (string "Str | " <>
                                string "\\\"" <> bytestring str <>
-                               string "\\\"") <$>
+                               string "\\\"") <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 literalDot Char { charVal = chr } =
   do
@@ -215,13 +215,13 @@ literalDot Char { charVal = chr } =
     return (dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Char | " <>
-                               squoted (char chr)) <$>
+                               squoted (char chr)) <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 literalDot Unit {} =
   do
     nodeid <- getNodeID
     return (dquoted (string nodeid) <+>
-            brackets (string "label = " <> dquoted (string "Unit") <$>
+            brackets (string "label = " <> dquoted (string "Unit") <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 
 instance Hashable FieldName where

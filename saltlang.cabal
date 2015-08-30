@@ -98,11 +98,11 @@ Test-Suite library-UnitTest
   type:                 exitcode-stdio-1.0
   Main-Is:              UnitTest.hs
   hs-source-dirs:       src/library test/library
-  build-depends:        base >= 4.4.0 && < 5, Cabal >= 1.16.0, compiler-misc, bound,
-                        containers, prelude-extras, mtl, hashable, hashable-extras,
+  build-depends:        base >= 4.8 && < 5, Cabal >= 1.16.0, compiler-misc, bound,
+                        containers, prelude-extras, mtl >= 2.2, hashable, hashable-extras,
                         bytestring, utf8-string, hexpat, hexpat-pickle, array,
                         filepath, blaze-builder, dynamic-pp, unordered-containers,
-                        semigroups, data-default, HUnit-Plus
+                        semigroups, data-default, bitwise, HUnit-Plus
 
 Executable saltc
   default-language:     Haskell2010
@@ -125,7 +125,7 @@ Executable saltc
 Library
   default-language:     Haskell2010
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
-                        mtl, hashable, hashable-extras, bytestring, utf8-string,
+                        mtl >= 2.2, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
                         hashtables, filepath, semigroups, dynamic-pp, data-default
   build-tools:          alex, happy

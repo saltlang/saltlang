@@ -34,7 +34,7 @@ module Language.Salt.Surface.Parser(
        parserNoTokens
        ) where
 
-import Control.Monad.Error
+import Control.Monad.Except
 import Control.Monad.Genpos
 import Control.Monad.SourceBuffer hiding (linebreak)
 import Control.Monad.Trans
@@ -790,9 +790,7 @@ match_list: match_list COMMA ID EQUAL pattern
 
 {
 
-instance Error () where noMsg = ()
-
-type Parser = ErrorT () Lexer
+type Parser = ExceptT () Lexer
 
 buildExp :: [Exp] -> Exp
 buildExp [] = error "Empty expression sequence, shouldn't happen"
@@ -840,7 +838,7 @@ parser name input =
     run :: Lexer (Maybe AST)
     run =
       do
-        res <- runErrorT parse
+        res <- runExceptT parse
         case res of
           Left () ->
             do
@@ -861,7 +859,7 @@ parserNoTokens name input =
     run :: Lexer (Maybe AST)
     run =
       do
-        res <- runErrorT parse
+        res <- runExceptT parse
         case res of
           Left () ->
             do

@@ -47,7 +47,7 @@ import Control.Monad.Comments
 import Control.Monad.Components
 import Control.Monad.Collect.Class
 import Control.Monad.Cont
-import Control.Monad.Error
+import Control.Monad.Except
 import Control.Monad.Genpos
 import Control.Monad.Gensym
 import Control.Monad.Keywords
@@ -169,7 +169,7 @@ instance MonadComments m => MonadComments (CollectT m) where
 instance MonadCont m => MonadCont (CollectT m) where
   callCC f = CollectT (callCC (\c -> unpackCollectT (f (CollectT . c))))
 
-instance (Error e, MonadError e m) => MonadError e (CollectT m) where
+instance (MonadError e m) => MonadError e (CollectT m) where
   throwError = lift . throwError
   m `catchError` h =
     CollectT (unpackCollectT m `catchError` (unpackCollectT . h))

@@ -38,7 +38,7 @@ module Control.Monad.Components.Class(
 import Control.Monad.CommentBuffer
 import Control.Monad.Comments
 import Control.Monad.Cont
-import Control.Monad.Error
+import Control.Monad.Except
 import Control.Monad.FileLoader
 import Control.Monad.Genpos
 import Control.Monad.Gensym
@@ -77,7 +77,7 @@ instance MonadComponents m => MonadComponents (ContT c m) where
   component = lift . component
   components = lift components
 
-instance (MonadComponents m, Error e) => MonadComponents (ErrorT e m) where
+instance (MonadComponents m) => MonadComponents (ExceptT e m) where
   component = lift . component
   components = lift components
 

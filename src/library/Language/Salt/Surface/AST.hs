@@ -938,12 +938,12 @@ astDot AST { astComponent = Just component, astUses = uses, astScope = scope } =
     (contents, _) <- runStateT (mapM elementDot scope) afteruses
     return (string "digraph g " <>
             braces (line <>
-                    fst componentcontents <$>
-                    vcat (map fst usecontents) <$>
-                    vcat (map fst contents) <$>
-                    astnode <$>
-                    astedge componentcontents <$>
-                    vcat (map astedge usecontents) <$>
+                    fst componentcontents <!>
+                    vcat (map fst usecontents) <!>
+                    vcat (map fst contents) <!>
+                    astnode <!>
+                    astedge componentcontents <!>
+                    vcat (map astedge usecontents) <!>
                     vcat (map astedge contents) <> line))
 astDot AST { astComponent = Nothing, astUses = uses, astScope = scope } =
   let
@@ -956,10 +956,10 @@ astDot AST { astComponent = Nothing, astUses = uses, astScope = scope } =
     (contents, _) <- runStateT (mapM elementDot scope) afteruses
     return (string "digraph g " <>
             braces (line <>
-                    vcat (map fst usecontents) <$>
-                    vcat (map fst contents) <$>
-                    astnode <$>
-                    vcat (map astedge usecontents) <$>
+                    vcat (map fst usecontents) <!>
+                    vcat (map fst contents) <!>
+                    astnode <!>
+                    vcat (map astedge usecontents) <!>
                     vcat (map astedge contents) <> line))
 
 componentDot :: MonadSymbols m => Component -> StateT Word m (Doc, String)
@@ -970,7 +970,7 @@ componentDot Component { componentName = cname } =
     return (dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Component | " <>
-                               concat (punctuate dot unames)) <$>
+                               concat (punctuate dot unames)) <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 
 useDot :: MonadSymbols m => Use -> StateT Word m (Doc, String)
@@ -981,7 +981,7 @@ useDot Use { useName = uname } =
     return (dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Use | " <>
-                               concat (punctuate dot unames)) <$>
+                               concat (punctuate dot unames)) <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 
 groupDot :: MonadSymbols m => Group -> StateT Word m (Doc, String)
@@ -993,14 +993,14 @@ groupDot Group { groupVisibility = vis, groupElements = elems } =
   in do
     nodeid <- getNodeID
     bodyContents <-mapM elementDot elems
-    return (vcat (map fst bodyContents) <$>
+    return (vcat (map fst bodyContents) <!>
             dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Group | " <>
                                string (show vis) <>
-                               string " | <elements> elements") <$>
+                               string " | <elements> elements") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (elemEdge nodeid) bodyContents), nodeid)
+            char ';' <!> vcat (map (elemEdge nodeid) bodyContents), nodeid)
 
 builderBodyDot :: MonadSymbols m => Content -> StateT Word m (Doc, String)
 builderBodyDot (Body elems) =
@@ -1011,22 +1011,22 @@ builderBodyDot (Body elems) =
   in do
     nodeid <- getNodeID
     bodyContents <-mapM groupDot elems
-    return (vcat (map fst bodyContents) <$>
+    return (vcat (map fst bodyContents) <!>
             dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Body | " <>
-                               string "<groups> groups") <$>
+                               string "<groups> groups") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (groupEdge nodeid) bodyContents), nodeid)
+            char ';' <!> vcat (map (groupEdge nodeid) bodyContents), nodeid)
 builderBodyDot (Value elems) =
   do
     nodeid <- getNodeID
     (valuenode, valuename) <-expDot elems
-    return (valuenode <$>
+    return (valuenode <!>
             dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Value | " <>
-                               string "<value> value\"") <$>
+                               string "<value> value\"") <!>
                       string "shape = \"record\"") <>
             dquoted (string nodeid <> string ":value") <>
             string " -> " <> string valuename, nodeid)
@@ -1049,8 +1049,8 @@ elementDot Builder { builderName = sym, builderKind = cls,
     paramContents <- mapM fieldDot params
     supersContents <- mapM expDot supers
     (bodynode, bodyname) <- builderBodyDot body
-    return (vcat (map fst paramContents) <$> vcat (map fst supersContents) <$>
-            bodynode <$> dquoted (string nodeid) <+>
+    return (vcat (map fst paramContents) <!> vcat (map fst supersContents) <!>
+            bodynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Builder | " <>
                                string "\\\"" <> bytestring namestr <>
@@ -1058,10 +1058,10 @@ elementDot Builder { builderName = sym, builderKind = cls,
                                string " | " <> string (show cls) <>
                                string (" | <params> params" ++
                                        " | <supers> supers" ++
-                                       " | <body> body")) <$>
+                                       " | <body> body")) <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (paramEdge nodeid) paramContents) <$>
-            vcat (map (supersEdge nodeid) supersContents) <$>
+            char ';' <!> vcat (map (paramEdge nodeid) paramContents) <!>
+            vcat (map (supersEdge nodeid) supersContents) <!>
             dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname), nodeid)
 elementDot Def { defPattern = pat, defInit = Just init } =
@@ -1069,26 +1069,26 @@ elementDot Def { defPattern = pat, defInit = Just init } =
     nodeid <- getNodeID
     (patnode, patname) <- patternDot pat
     (initnode, initname) <- expDot init
-    return (patnode <$> initnode <$> dquoted (string nodeid) <+>
+    return (patnode <!> initnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Def | " <>
                                string ("<pat> pattern" ++
-                                       " | <init> init")) <$>
+                                       " | <init> init")) <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":pat" <>
-            string " -> " <> dquoted (string patname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
+            string " -> " <> dquoted (string patname) <!>
             dquoted (string nodeid) <> string ":init" <>
             string " -> " <> dquoted (string initname), nodeid)
 elementDot Def { defPattern = pat, defInit = Nothing } =
   do
     nodeid <- getNodeID
     (patnode, patname) <- patternDot pat
-    return (patnode <$> dquoted (string nodeid) <+>
+    return (patnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Def | " <>
-                               string "<pat> pattern | <init> init") <$>
+                               string "<pat> pattern | <init> init") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":pat" <>
+            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
             string " -> " <> dquoted (string patname), nodeid)
 elementDot Fun { funName = sym, funCases = cases } =
   let
@@ -1099,30 +1099,30 @@ elementDot Fun { funName = sym, funCases = cases } =
     nodeid <- getNodeID
     namestr <- name sym
     caseContents <- mapM caseDot cases
-    return (vcat (map fst caseContents) <$>
+    return (vcat (map fst caseContents) <!>
             dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Fun | " <>
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"" <>
-                               string " | <cases> cases") <$>
+                               string " | <cases> cases") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (caseEdge nodeid) caseContents), nodeid)
+            char ';' <!> vcat (map (caseEdge nodeid) caseContents), nodeid)
 elementDot Truth { truthName = sym, truthKind = kind,
                    truthContent = prop, truthProof = Nothing } =
   do
     namestr <- name sym
     nodeid <- getNodeID
     (bodynode, bodyname) <- expDot prop
-    return (bodynode <$> dquoted (string nodeid) <+>
+    return (bodynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Truth | " <>
                                string (show kind) <> string " | " <>
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"" <>
-                               string " | <body> body") <$>
+                               string " | <body> body") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":body" <>
+            char ';' <!> dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname), nodeid)
 elementDot Truth { truthName = sym, truthKind = kind,
                    truthContent = prop, truthProof = Just proof } =
@@ -1131,17 +1131,17 @@ elementDot Truth { truthName = sym, truthKind = kind,
     nodeid <- getNodeID
     (bodynode, bodyname) <- expDot prop
     (proofnode, proofname) <- expDot proof
-    return (bodynode <$> proofnode <$> dquoted (string nodeid) <+>
+    return (bodynode <!> proofnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Truth | " <>
                                string (show kind) <> string " | " <>
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"" <>
-                               string " | <body> body" <$>
-                               string " | <proof> proof") <$>
+                               string " | <body> body" <!>
+                               string " | <proof> proof") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":body" <>
+            string " -> " <> dquoted (string bodyname) <!>
             dquoted (string nodeid) <> string ":proof" <>
             string " -> " <> dquoted (string proofname), nodeid)
 elementDot Proof { proofName = pname, proofBody = body } =
@@ -1149,33 +1149,33 @@ elementDot Proof { proofName = pname, proofBody = body } =
     nodeid <- getNodeID
     (namenode, namename) <- expDot pname
     (bodynode, bodyname) <- expDot body
-    return (namenode <$> bodynode <$> dquoted (string nodeid) <+>
+    return (namenode <!> bodynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
-                      dquoted (string "Proof | <name> name | <body> body") <$>
+                      dquoted (string "Proof | <name> name | <body> body") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":body" <>
+            string " -> " <> dquoted (string bodyname) <!>
             dquoted (string nodeid) <> string ":name" <>
             string " -> " <> dquoted (string namename), nodeid)
 elementDot Import { importExp = exp } =
   do
     nodeid <- getNodeID
     (namenode, namename) <- expDot exp
-    return (namenode <$> dquoted (string nodeid) <+>
+    return (namenode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
-                      dquoted (string "Import | <exp> exp") <$>
+                      dquoted (string "Import | <exp> exp") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":exp" <>
+            char ';' <!> dquoted (string nodeid) <> string ":exp" <>
             string " -> " <> dquoted (string namename), nodeid)
 elementDot Syntax { syntaxExp = exp } =
   do
     nodeid <- getNodeID
     (expnode, expname) <- expDot exp
-    return (expnode <$> dquoted (string nodeid) <+>
+    return (expnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
-                      dquoted (string "Syntax | <exp> exp") <$>
+                      dquoted (string "Syntax | <exp> exp") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":exp" <>
+            char ';' <!> dquoted (string nodeid) <> string ":exp" <>
             string " -> " <> dquoted (string expname), nodeid)
 
 compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
@@ -1191,25 +1191,25 @@ patternDot Option { optionPats = pats } =
   in do
     patContents <- mapM patternDot pats
     nodeid <- getNodeID
-    return (vcat (map fst patContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst patContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Options | " <>
-                              string "<pats> patterns") <$>
+                              string "<pats> patterns") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (patEdge nodeid) patContents), nodeid)
+            char ';' <!> vcat (map (patEdge nodeid) patContents), nodeid)
 patternDot Deconstruct { deconstructName = sym, deconstructPat = pat } =
   do
     namestr <- name sym
     nodeid <- getNodeID
     (patnode, patname) <- patternDot pat
-    return (patnode <$> dquoted (string nodeid) <+>
+    return (patnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Deconstruct | " <>
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"" <>
-                               string "<pat> pattern") <$>
+                               string "<pat> pattern") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":pat" <>
+            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
           string " -> " <> dquoted (string patname), nodeid)
 patternDot Split { splitFields = fields, splitStrict = True } =
   let
@@ -1219,12 +1219,12 @@ patternDot Split { splitFields = fields, splitStrict = True } =
   in do
     fieldContents <- mapM entryDot fields
     nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Split | strict | " <>
-                               string "<fields> fields") <$>
+                               string "<fields> fields") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
+            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
 patternDot Split { splitFields = fields, splitStrict = False } =
   let
     fieldEdge nodeid (_, fieldname) =
@@ -1233,25 +1233,25 @@ patternDot Split { splitFields = fields, splitStrict = False } =
   in do
     fieldContents <- mapM entryDot fields
     nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Split | non-strict | " <>
-                              string "<body> fields") <$>
+                              string "<body> fields") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
+            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
 patternDot Typed { typedPat = pat, typedType = ty } =
   do
     nodeid <- getNodeID
     (patnode, patname) <- patternDot pat
     (tynode, tyname) <- expDot ty
-    return (patnode <$> tynode <$> dquoted (string nodeid) <+>
+    return (patnode <!> tynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Typed | " <>
                                string " <type> type | " <>
-                               string "<pat> pat") <$>
+                               string "<pat> pat") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":pat" <>
-          string " -> " <> dquoted (string patname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
+          string " -> " <> dquoted (string patname) <!>
           dquoted (string nodeid) <> string ":type" <>
           string " -> " <> dquoted (string tyname), nodeid)
 patternDot As { asName = sym, asPat = pat } =
@@ -1259,14 +1259,14 @@ patternDot As { asName = sym, asPat = pat } =
     namestr <- name sym
     nodeid <- getNodeID
     (patnode, patname) <- patternDot pat
-    return (patnode <$> dquoted (string nodeid) <+>
+    return (patnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "As | " <>
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"" <>
-                               string "<pat> pat") <$>
+                               string "<pat> pat") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":pat" <>
+            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
           string " -> " <> dquoted (string patname), nodeid)
 patternDot Name { nameSym = sym } =
   do
@@ -1276,18 +1276,18 @@ patternDot Name { nameSym = sym } =
             brackets (string "label = " <>
                       dquoted (string "Name | " <>
                                string "\\\"" <> bytestring namestr <>
-                               string "\\\"") <$>
+                               string "\\\"") <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 patternDot (Exact e) =
   do
     nodeid <- getNodeID
     (bodynode, bodyname) <- literalDot e
-    return (bodynode <$> dquoted (string nodeid) <+>
+    return (bodynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Exact | " <>
-                               string "<body>") <$>
+                               string "<body>") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":body" <>
+            char ';' <!> dquoted (string nodeid) <> string ":body" <>
           string " -> " <> dquoted (string bodyname), nodeid)
 
 expDot :: MonadSymbols m => Exp -> StateT Word m (Doc, String)
@@ -1299,12 +1299,12 @@ expDot Compound { compoundBody = body } =
   in do
     compoundContents <- mapM compoundDot body
     nodeid <- getNodeID
-    return (vcat (map fst compoundContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst compoundContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Compound | " <>
-                              string "<body> body") <$>
+                              string "<body> body") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (compoundEdge nodeid)
+            char ';' <!> vcat (map (compoundEdge nodeid)
                                    compoundContents), nodeid)
 expDot Abs { absKind = kind, absCases = cases } =
   let
@@ -1314,13 +1314,13 @@ expDot Abs { absKind = kind, absCases = cases } =
   in do
     caseContents <- mapM caseDot cases
     nodeid <- getNodeID
-    return (vcat (map fst caseContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst caseContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Abs | " <>
                                string " | " <> format kind <>
-                               string "<cases> cases") <$>
+                               string "<cases> cases") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (caseEdge nodeid) caseContents), nodeid)
+            char ';' <!> vcat (map (caseEdge nodeid) caseContents), nodeid)
 expDot Match { matchVal = val, matchCases = cases } =
   let
     caseEdge nodeid (_, casename) =
@@ -1330,29 +1330,29 @@ expDot Match { matchVal = val, matchCases = cases } =
     caseContents <- mapM caseDot cases
     nodeid <- getNodeID
     (valnode, valname) <- expDot val
-    return (valnode <$> vcat (map fst caseContents) <$>
+    return (valnode <!> vcat (map fst caseContents) <!>
             dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Match | " <>
                                string " <val> value | " <>
-                               string "<cases> cases") <$>
+                               string "<cases> cases") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":val" <>
-            string " -> " <> dquoted (string valname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":val" <>
+            string " -> " <> dquoted (string valname) <!>
             vcat (map (caseEdge nodeid) caseContents), nodeid)
 expDot Ascribe { ascribeVal = val, ascribeType = ty } =
   do
     nodeid <- getNodeID
     (valnode, valname) <- expDot val
     (tynode, tyname) <- expDot ty
-    return (valnode <$> tynode <$> dquoted (string nodeid) <+>
+    return (valnode <!> tynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Ascribe | " <>
                                string " <type> type | " <>
-                               string "<val> value") <$>
+                               string "<val> value") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":val" <>
-          string " -> " <> dquoted (string valname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":val" <>
+          string " -> " <> dquoted (string valname) <!>
           dquoted (string nodeid) <> string ":type" <>
           string " -> " <> dquoted (string tyname), nodeid)
 expDot Seq { seqExps = exps } =
@@ -1363,12 +1363,12 @@ expDot Seq { seqExps = exps } =
   in do
     nodeid <- getNodeID
     seqContents <- mapM expDot exps
-    return (vcat (map fst seqContents) <$>
+    return (vcat (map fst seqContents) <!>
             brackets (string "label = " <>
                       dquoted (string "Seq | " <>
-                               string "<vals> values") <$>
+                               string "<vals> values") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":val1" <>
+            char ';' <!> dquoted (string nodeid) <> string ":val1" <>
             vcat (map (seqEdge nodeid) seqContents), nodeid)
 expDot Record { recordType = True, recordFields = fields } =
   let
@@ -1378,12 +1378,12 @@ expDot Record { recordType = True, recordFields = fields } =
   in do
     fieldContents <- mapM fieldDot fields
     nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Record | type | " <>
-                               string "<fields> fields") <$>
+                               string "<fields> fields") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
+            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
 expDot Record { recordType = False, recordFields = fields } =
   let
     fieldEdge nodeid (_, patname) =
@@ -1392,12 +1392,12 @@ expDot Record { recordType = False, recordFields = fields } =
   in do
     fieldContents <- mapM fieldDot fields
     nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Record | value | " <>
-                               string "<fields> fields") <$>
+                               string "<fields> fields") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
+            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
 expDot Tuple { tupleFields = fields } =
   let
     fieldEdge nodeid (_, patname) =
@@ -1406,12 +1406,12 @@ expDot Tuple { tupleFields = fields } =
   in do
     fieldContents <- mapM expDot fields
     nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Tuple | " <>
-                               string "<fields> fields") <$>
+                               string "<fields> fields") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
+            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
 expDot Project { projectVal = val, projectFields = fields } =
   let
     commabstr = Strict.fromString ", "
@@ -1419,15 +1419,15 @@ expDot Project { projectVal = val, projectFields = fields } =
     names <- mapM (name . fieldSym) fields
     nodeid <- getNodeID
     (valnode, valname) <- expDot val
-    return (valnode <$> dquoted (string nodeid) <+>
+    return (valnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Project | " <>
                                string "\\\"" <>
                                bytestring (Strict.intercalate commabstr names) <>
                                string "\\\"" <>
-                               string "<val> value") <$>
+                               string "<val> value") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":val" <>
+            char ';' <!> dquoted (string nodeid) <> string ":val" <>
           string " -> " <> dquoted (string valname), nodeid)
 expDot Sym { symName = sym } =
   do
@@ -1437,21 +1437,21 @@ expDot Sym { symName = sym } =
             brackets (string "label = " <>
                       dquoted (string "Sym | " <>
                                string "\\\"" <> bytestring namestr <>
-                               string "\\\"") <$>
+                               string "\\\"") <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 expDot With { withVal = val, withArgs = args } =
   do
     nodeid <- getNodeID
     (valnode, valname) <- expDot val
     (argsnode, argsname) <- expDot args
-    return (valnode <$> argsnode <$> dquoted (string nodeid) <+>
+    return (valnode <!> argsnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "With | " <>
                                string " <val> value | " <>
-                               string "<args> args") <$>
+                               string "<args> args") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":val" <>
-          string " -> " <> dquoted (string valname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":val" <>
+          string " -> " <> dquoted (string valname) <!>
           dquoted (string nodeid) <> string ":args" <>
           string " -> " <> dquoted (string argsname), nodeid)
 expDot Where { whereVal = val, whereProp = prop } =
@@ -1459,14 +1459,14 @@ expDot Where { whereVal = val, whereProp = prop } =
     nodeid <- getNodeID
     (valnode, valname) <- expDot val
     (propnode, propname) <- expDot prop
-    return (valnode <$> propnode <$> dquoted (string nodeid) <+>
+    return (valnode <!> propnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Where | " <>
                                string " <val> value | " <>
-                               string "<prop> prop") <$>
+                               string "<prop> prop") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":val" <>
-          string " -> " <> dquoted (string valname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":val" <>
+          string " -> " <> dquoted (string valname) <!>
           dquoted (string nodeid) <> string ":prop" <>
           string " -> " <> dquoted (string propname), nodeid)
 expDot Anon { anonKind = cls, anonParams = params,
@@ -1488,28 +1488,28 @@ expDot Anon { anonKind = cls, anonParams = params,
     paramContents <- mapM fieldDot params
     supersContents <- mapM expDot supers
     bodyContents <- mapM groupDot body
-    return (vcat (map fst paramContents) <$> vcat (map fst supersContents) <$>
-            vcat (map fst bodyContents) <$> dquoted (string nodeid) <+>
+    return (vcat (map fst paramContents) <!> vcat (map fst supersContents) <!>
+            vcat (map fst bodyContents) <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Anon | " <>
                                string " | " <> string (show cls) <>
                                string (" | <params> params" ++
                                        " | <supers> supers" ++
-                                       " | <body> body")) <$>
+                                       " | <body> body")) <!>
                       string "shape = \"record\"") <>
-            char ';' <$> vcat (map (paramEdge nodeid) paramContents) <$>
-            vcat (map (supersEdge nodeid) supersContents) <$>
+            char ';' <!> vcat (map (paramEdge nodeid) paramContents) <!>
+            vcat (map (supersEdge nodeid) supersContents) <!>
             vcat (map (groupEdge nodeid) bodyContents), nodeid)
 expDot (Literal l) =
   do
     nodeid <- getNodeID
     (bodynode, bodyname) <- literalDot l
-    return (bodynode <$> dquoted (string nodeid) <+>
+    return (bodynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Literal | " <>
-                               string "<body>") <$>
+                               string "<body>") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":body" <>
+            char ';' <!> dquoted (string nodeid) <> string ":body" <>
           string " -> " <> dquoted (string bodyname), nodeid)
 
 entryDot :: MonadSymbols m => Entry -> StateT Word m (Doc, String)
@@ -1518,25 +1518,25 @@ entryDot Named { namedSym = sym, namedVal = val } =
     namestr <- name sym
     nodeid <- getNodeID
     (expnode, expname) <- patternDot val
-    return (expnode <$> dquoted (string nodeid) <+>
+    return (expnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Named | " <>
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"" <>
-                               string "<value> value") <$>
+                               string "<value> value") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":value" <>
+            char ';' <!> dquoted (string nodeid) <> string ":value" <>
             string " -> " <> dquoted (string expname), nodeid)
 entryDot (Unnamed e) =
   do
     nodeid <- getNodeID
     (expnode, expname) <- patternDot e
-    return (expnode <$> dquoted (string nodeid) <+>
+    return (expnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Unnamed | " <>
-                               string "<value> value") <$>
+                               string "<value> value") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":value" <>
+            char ';' <!> dquoted (string nodeid) <> string ":value" <>
           string " -> " <> dquoted (string expname), nodeid)
 
 fieldDot :: MonadSymbols m => Field -> StateT Word m (Doc, String)
@@ -1546,14 +1546,14 @@ fieldDot Field { fieldName = FieldName { fieldSym = sym },
     nodeid <- getNodeID
     namestr <- name sym
     (valnode, valname) <- expDot val
-    return (valnode <$> dquoted (string nodeid) <+>
+    return (valnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Field | " <>
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"" <>
-                               string " | <value> value") <$>
+                               string " | <value> value") <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":value" <>
+            char ';' <!> dquoted (string nodeid) <> string ":value" <>
             string " -> " <> dquoted (string valname), nodeid)
 
 caseDot :: MonadSymbols m => Case -> StateT Word m (Doc, String)
@@ -1562,14 +1562,14 @@ caseDot Case { casePat = pat, caseBody = body } =
     nodeid <- getNodeID
     (patnode, patname) <- patternDot pat
     (bodynode, bodyname) <- expDot body
-    return (patnode <$> bodynode <$> dquoted (string nodeid) <+>
+    return (patnode <!> bodynode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Case | " <>
                                string (" | <pat> pattern" ++
-                                       " | <body> body")) <$>
+                                       " | <body> body")) <!>
                       string "shape = \"record\"") <>
-            char ';' <$> dquoted (string nodeid) <> string ":pat" <>
-            string " -> " <> dquoted (string patname) <$>
+            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
+            string " -> " <> dquoted (string patname) <!>
             dquoted (string nodeid) <> string ":body" <>
             string " -> " <> dquoted (string bodyname), nodeid)
 
