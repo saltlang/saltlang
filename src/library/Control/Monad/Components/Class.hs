@@ -52,6 +52,7 @@ import Control.Monad.SkipComments
 import Control.Monad.SourceFiles
 import Control.Monad.State
 import Control.Monad.Symbols
+import Control.Monad.Trans.Journal
 import Control.Monad.Writer
 import Data.Symbol
 import Language.Salt.Surface.Syntax
@@ -86,6 +87,10 @@ instance MonadComponents m => MonadComponents (GenposT m) where
   components = lift components
 
 instance MonadComponents m => MonadComponents (GensymT m) where
+  component = lift . component
+  components = lift components
+
+instance (MonadComponents m, Monoid w) => MonadComponents (JournalT w m) where
   component = lift . component
   components = lift components
 

@@ -49,6 +49,7 @@ import Control.Monad.Cont
 import Control.Monad.Except
 import Control.Monad.Genpos
 import Control.Monad.Gensym
+import Control.Monad.Journal
 import Control.Monad.Keywords
 import Control.Monad.Loader.Class
 import Control.Monad.Messages
@@ -161,6 +162,11 @@ instance MonadGenpos m => MonadGenpos (ComponentsT m) where
 instance MonadGensym m => MonadGensym (ComponentsT m) where
   symbol = lift . symbol
   unique = lift . unique
+
+instance (Monoid w, MonadJournal w m) => MonadJournal w (ComponentsT m) where
+  journal = lift . journal
+  history = lift history
+  clear = lift clear
 
 instance MonadKeywords p t m => MonadKeywords p t (ComponentsT m) where
   mkKeyword p = lift . mkKeyword p

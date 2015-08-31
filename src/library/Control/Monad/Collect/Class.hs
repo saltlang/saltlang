@@ -52,6 +52,7 @@ import Control.Monad.SkipComments
 import Control.Monad.SourceFiles
 import Control.Monad.State
 import Control.Monad.Symbols
+import Control.Monad.Trans.Journal
 import Control.Monad.Writer
 import Data.Symbol
 import Language.Salt.Surface.Common
@@ -98,6 +99,11 @@ instance MonadCollect m => MonadCollect (GenposT m) where
   componentExists = lift . componentExists
 
 instance MonadCollect m => MonadCollect (GensymT m) where
+  scopeID = lift scopeID
+  addComponent cname = lift . addComponent cname
+  componentExists = lift . componentExists
+
+instance (MonadCollect m, Monoid w) => MonadCollect (JournalT w m) where
   scopeID = lift scopeID
   addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
