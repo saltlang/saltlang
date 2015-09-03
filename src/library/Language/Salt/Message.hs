@@ -71,7 +71,10 @@ module Language.Salt.Message(
        importNestedScope,
        internalError,
        callNonFunc,
-       noMatch
+       noMatch,
+       expectedFuncType,
+       cyclicImport,
+       cyclicInherit
        ) where
 
 import Control.Monad.Messages
@@ -275,6 +278,15 @@ data Message =
       noMatchTerm :: !Doc,
       noMatchPos :: !Position
     }
+  | ExpectedFunc {
+      expectedFuncPos :: !Position
+    }
+  | CyclicImport {
+      cyclicImportPos :: !Position
+    }
+  | CyclicInherit {
+      cyclicInheritPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -420,6 +432,12 @@ instance Hashable Message where
     s `hashWithSalt` (33 :: Int) `hashWithSalt` pos
   hashWithSalt s NoMatch { noMatchPos = pos } =
     s `hashWithSalt` (34 :: Int) `hashWithSalt` pos
+  hashWithSalt s ExpectedFunc { expectedFuncPos = pos } =
+    s `hashWithSalt` (35 :: Int) `hashWithSalt` pos
+  hashWithSalt s CyclicImport { cyclicImportPos = pos } =
+    s `hashWithSalt` (36 :: Int) `hashWithSalt` pos
+  hashWithSalt s CyclicInherit { cyclicInheritPos = pos } =
+    s `hashWithSalt` (37 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -457,6 +475,9 @@ instance Msg.Message Message where
   severity InternalError {} = Msg.Internal
   severity CallNonFunc {} = Msg.Internal
   severity NoMatch {} = Msg.Internal
+  severity ExpectedFunc {} = Msg.Error
+  severity CyclicImport {} = Msg.Error
+  severity CyclicInherit {} = Msg.Error
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -517,6 +538,9 @@ instance Msg.Message Message where
   brief InternalError { internalErrorStr = str } = bytestring str
   brief CallNonFunc {} = string "Call to non-function during evaluation"
   brief NoMatch {} = string "No pattern matching term"
+  brief ExpectedFunc {} = string "Expected a term with a function type"
+  brief CyclicImport {} = string "Cyclic import"
+  brief CyclicImport {} = string "Cyclic inheritance"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -608,6 +632,9 @@ instance Msg.MessagePosition BasicPosition Message where
   position InternalError { internalErrorPos = pos } = Just pos
   position CallNonFunc { callNonFuncPos = pos } = Just pos
   position NoMatch { noMatchPos = pos } = Just pos
+  position ExpectedFunc { expectedFuncPos = pos } = Just pos
+  position CyclicImport { cyclicImportPos = pos } = Just pos
+  position CyclicInherit { cyclicInheritPos = pos } = Just pos
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -996,3 +1023,37 @@ noMatch term pos =
   in do
     termdoc <- formatM term
     message NoMatch { noMatchTerm = termdoc, noMatchPos = basicpos }
+
+-- | Type error when expecting a function type, but getting something else.
+expectedFuncType :: (MonadMessages Message m,
+                     MonadSymbols m, MonadPositions m) =>
+                    DWARFPosition
+                 -- ^ The position at which the match occurs.
+                 -> m ()
+expectedFuncType pos =
+  let
+    basicpos = basicPosition pos
+  in
+    message ExpectedFunc { expectedFuncPos = basicpos }
+
+cyclicImport :: (MonadMessages Message m,
+                 MonadSymbols m, MonadPositions m) =>
+                DWARFPosition
+             -- ^ The position at which the inheritance occurs.
+             -> m ()
+cyclicImport pos =
+  let
+    basicpos = basicPosition pos
+  in
+   message CyclicImport { cyclicImportPos = basicpos }
+
+cyclicInherit :: (MonadMessages Message m,
+                  MonadSymbols m, MonadPositions m) =>
+                 DWARFPosition
+              -- ^ The position at which the inheritance occurs.
+              -> m ()
+cyclicInherit pos =
+  let
+    basicpos = basicPosition pos
+  in
+   message CyclicInherit { cyclicInheritPos = basicpos }
