@@ -76,7 +76,8 @@ module Language.Salt.Message(
        cyclicImport,
        cyclicInherit,
        privateAccess,
-       protectedAccess
+       protectedAccess,
+       nonStaticAccess
        ) where
 
 import Control.Monad.Messages
@@ -296,6 +297,10 @@ data Message =
       illegalAccessSym :: !Strict.ByteString,
       illegalAccessKind :: !AccessKind
     }
+  | NonStaticAccess {
+      nonStaticAccessPos :: !Position,
+      nonStaticAccessSym :: !Strict.ByteString
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -453,6 +458,8 @@ instance Hashable Message where
     s `hashWithSalt` (37 :: Int) `hashWithSalt` pos
   hashWithSalt s IllegalAccess { illegalAccessPos = pos } =
     s `hashWithSalt` (38 :: Int) `hashWithSalt` pos
+  hashWithSalt s NonStaticAccess { nonStaticAccessPos = pos } =
+    s `hashWithSalt` (39 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -494,6 +501,7 @@ instance Msg.Message Message where
   severity CyclicImport {} = Msg.Error
   severity CyclicInherit {} = Msg.Error
   severity IllegalAccess {} = Msg.Error
+  severity NonStaticAccess {} = Msg.Error
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -560,6 +568,9 @@ instance Msg.Message Message where
   brief IllegalAccess { illegalAccessKind = kind, illegalAccessSym = sym } =
     string "Illegal access to " <> format kind <>
     string " private element " <> bytestring sym
+  brief NonStaticAccess { nonStaticAccessSym = sym } =
+    string "Access to non-static element " <> bytestring sym <>
+    string " from static context"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -655,6 +666,7 @@ instance Msg.MessagePosition BasicPosition Message where
   position CyclicImport { cyclicImportPos = pos } = Just pos
   position CyclicInherit { cyclicInheritPos = pos } = Just pos
   position IllegalAccess { illegalAccessPos = pos } = Just pos
+  position NonStaticAccess { nonStaticAccessPos = pos } = Just pos
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1107,3 +1119,18 @@ protectedAccess sym pos =
     str <- name sym
     message IllegalAccess { illegalAccessSym = str, illegalAccessPos = basicpos,
                             illegalAccessKind = Protected }
+
+nonStaticAccess :: (MonadMessages Message m,
+                    MonadSymbols m, MonadPositions m) =>
+                   Symbol
+                -- ^ The symbol that was illegally accessed.
+                -> DWARFPosition
+                -- ^ The position at which the access occurs.
+                -> m ()
+nonStaticAccess sym pos =
+  let
+    basicpos = basicPosition pos
+  in do
+    str <- name sym
+    message NonStaticAccess { nonStaticAccessSym = str,
+                              nonStaticAccessPos = basicpos }
