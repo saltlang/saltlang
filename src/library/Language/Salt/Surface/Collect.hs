@@ -525,8 +525,8 @@ collectCompound (syntax, proofs, compounds)
         do
           collectedBody <- collectScope body
           return (syntax, proofs,
-                  Syntax.Local {
-                    Syntax.localName = sym,
+                  Syntax.LocalBuilder {
+                    Syntax.localBuilderName = sym,
                     Syntax.localBuilder =
                       Syntax.Builder {
                         Syntax.builderKind = kind,
@@ -546,8 +546,8 @@ collectCompound (syntax, proofs, compounds)
         do
           collectedValue <- collectExp value
           return (syntax, proofs,
-                  Syntax.Local {
-                    Syntax.localName = sym,
+                  Syntax.LocalBuilder {
+                    Syntax.localBuilderName = sym,
                     Syntax.localBuilder =
                       Syntax.Builder {
                         Syntax.builderKind = kind,
@@ -567,9 +567,9 @@ collectCompound (syntax, proofs, compounds)
   do
     collectedContent <- collectExp content
     return (syntax, proofs,
-            Syntax.Dynamic {
-              Syntax.dynamicName = sym,
-              Syntax.dynamicTruth =
+            Syntax.LocalTruth {
+              Syntax.localTruthName = sym,
+              Syntax.localTruth =
                 Syntax.Truth { Syntax.truthKind = kind,
                                Syntax.truthVisibility = Public,
                                Syntax.truthContent = collectedContent,
@@ -586,9 +586,9 @@ collectCompound (syntax, proofs, compounds)
     collectedContent <- collectExp content
     collectedProof <- collectExp proof
     return (syntax, proofs,
-            Syntax.Dynamic {
-              Syntax.dynamicName = sym,
-              Syntax.dynamicTruth =
+            Syntax.LocalTruth {
+              Syntax.localTruthName = sym,
+              Syntax.localTruth =
                 Syntax.Truth { Syntax.truthKind = kind,
                                Syntax.truthVisibility = Public,
                                Syntax.truthContent = collectedContent,

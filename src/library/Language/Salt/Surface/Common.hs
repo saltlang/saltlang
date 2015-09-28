@@ -34,6 +34,7 @@
 module Language.Salt.Surface.Common(
        FieldName(..),
        BuilderKind(..),
+       ContextKind(..),
        TruthKind(..),
        AbstractionKind(..),
        Visibility(..),
@@ -105,6 +106,23 @@ data BuilderKind =
   | Typeclass
   | Instance
     deriving (Ord, Eq, Enum)
+
+-- | Context kind for definition.  This indicates the context to
+-- which a given definition is relative.
+data ContextKind =
+    -- | Static definition.  These are relative only to the global
+    -- context (meaning they can access other statically-defined
+    -- definitions by name).
+    Static
+    -- | Local definitions.  These are relative to a given function
+    -- body, and can access other local definitions in that function
+    -- by name.
+  | Local
+    -- | Object definitions.  These are relative to a given object,
+    -- and can access other definitions relative to that object by
+    -- name.
+  | Object
+    deriving (Ord, Eq, Enum, Ix)
 
 -- | Truth classes.  These define the exact semantics of a truth
 -- declaration.
@@ -379,6 +397,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
 instance Hashable BuilderKind where
   hashWithSalt s = hashWithSalt s . fromEnum
 
+instance Hashable ContextKind where
+  hashWithSalt s = hashWithSalt s . fromEnum
+
 instance Hashable AbstractionKind where
   hashWithSalt s = hashWithSalt s . fromEnum
 
@@ -404,6 +425,19 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                           (xpAttrFixed (gxFromString "kind")
                                        (gxFromString "Instance"))]
 
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler (Attributes tag text) ContextKind where
+  xpickle = xpAlt fromEnum
+                  [xpWrap (const Static, const ())
+                          (xpAttrFixed (gxFromString "context")
+                                       (gxFromString "static")),
+                   xpWrap (const Local, const ())
+                          (xpAttrFixed (gxFromString "context")
+                                       (gxFromString "local")),
+                   xpWrap (const Object, const ())
+                          (xpAttrFixed (gxFromString "context")
+                                       (gxFromString "object"))]
+
 instance Show BuilderKind where
   show Signature = "signature"
   show Interface = "interface"
@@ -412,7 +446,14 @@ instance Show BuilderKind where
   show Typeclass = "typeclass"
   show Instance = "instance"
 
+instance Show ContextKind where
+  show Static = "static"
+  show Local = "local"
+  show Object = "object"
+
 instance Format BuilderKind where format = string . show
+
+instance Format ContextKind where format = string . show
 
 instance Hashable TruthKind where
   hashWithSalt s = hashWithSalt s . fromEnum

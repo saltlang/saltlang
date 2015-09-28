@@ -194,16 +194,16 @@ data Compound =
     -- | A regular definition.
   | Element !Element
     -- | A dynamic truth definition.
-  | Dynamic {
+  | LocalTruth {
       -- | Name of the truth definition.
-      dynamicName :: !Symbol,
-      -- | The dynamic truth definition.
-      dynamicTruth :: !Truth
+      localTruthName :: !Symbol,
+      -- | The local truth definition.
+      localTruth :: !Truth
     }
     -- | A local builder definition.
-  | Local {
+  | LocalBuilder {
       -- | The name of the builder.
-      localName :: !Symbol,
+      localBuilderName :: !Symbol,
       -- | The local builder definition.
       localBuilder :: !Builder
     }
@@ -487,11 +487,11 @@ instance Eq Element where
 instance Eq Compound where
   Exp exp1 == Exp exp2 = exp1 == exp2
   Element elem1 == Element elem2 = elem1 == elem2
-  Dynamic { dynamicName = name1, dynamicTruth = truth1 } ==
-    Dynamic { dynamicName = name2, dynamicTruth = truth2 } =
+  LocalTruth { localTruthName = name1, localTruth = truth1 } ==
+    LocalTruth { localTruthName = name2, localTruth = truth2 } =
       name1 == name2 && truth1 == truth2
-  Local { localName = name1, localBuilder = builder1 } ==
-    Local { localName = name2, localBuilder = builder2 } =
+  LocalBuilder { localBuilderName = name1, localBuilder = builder1 } ==
+    LocalBuilder { localBuilderName = name2, localBuilder = builder2 } =
       name1 == name2 && builder1 == builder2
   _ == _ = False
 
@@ -660,15 +660,15 @@ instance Ord Compound where
   compare (Element elem1) (Element elem2) = compare elem1 elem2
   compare (Element _) _ = LT
   compare _ (Element _) = GT
-  compare Dynamic { dynamicName = name1, dynamicTruth = truth1 }
-          Dynamic { dynamicName = name2, dynamicTruth = truth2 } =
+  compare LocalTruth { localTruthName = name1, localTruth = truth1 }
+          LocalTruth { localTruthName = name2, localTruth = truth2 } =
     case compare name1 name2 of
       EQ -> compare truth1 truth2
       out -> out
-  compare Dynamic {} _ = LT
-  compare _ Dynamic {} = GT
-  compare Local { localName = name1, localBuilder = builder1 }
-          Local { localName = name2, localBuilder = builder2 } =
+  compare LocalTruth {} _ = LT
+  compare _ LocalTruth {} = GT
+  compare LocalBuilder { localBuilderName = name1, localBuilder = builder1 }
+          LocalBuilder { localBuilderName = name2, localBuilder = builder2 } =
     case compare name1 name2 of
       EQ -> compare builder1 builder2
       out -> out
@@ -891,9 +891,10 @@ instance Hashable Compound where
   hashWithSalt s (Exp exp) = s `hashWithSalt` (0 :: Int) `hashWithSalt` exp
   hashWithSalt s (Element e) =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` e
-  hashWithSalt s Dynamic { dynamicName = sym, dynamicTruth = truth } =
+  hashWithSalt s LocalTruth { localTruthName = sym, localTruth = truth } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` sym `hashWithSalt` truth
-  hashWithSalt s Local { localName = sym, localBuilder = builder } =
+  hashWithSalt s LocalBuilder { localBuilderName = sym,
+                                localBuilder = builder } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt` sym `hashWithSalt` builder
 
 instance Hashable Pattern where
@@ -1171,18 +1172,18 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Element where
 instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
   formatM (Exp e) = formatM e
   formatM (Element e) = formatM e
-  formatM Dynamic { dynamicName = sym, dynamicTruth = truth } =
+  formatM LocalTruth { localTruthName = sym, localTruth = truth } =
     do
       symdoc <- formatM sym
       truthdoc <- formatM truth
-      return (compoundApplyDoc (string "Dynamic")
+      return (compoundApplyDoc (string "LocalTruth")
                              [(string "sym", symdoc),
                               (string "truth", truthdoc)])
-  formatM Local { localName = sym, localBuilder = builder } =
+  formatM LocalBuilder { localBuilderName = sym, localBuilder = builder } =
     do
       symdoc <- formatM sym
       builderdoc <- formatM builder
-      return (compoundApplyDoc (string "Local")
+      return (compoundApplyDoc (string "LocalBuilder")
                              [(string "sym", symdoc),
                               (string "builder", builderdoc)])
 
@@ -1615,29 +1616,31 @@ elementPickler =
   in
     xpWrap (Element, revfunc) (xpElemNodes (gxFromString "Element") xpickle)
 
-dynamicPickler :: (GenericXMLString tag, Show tag,
+localTruthPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text) =>
                   PU [NodeG [] tag text] Compound
-dynamicPickler =
+localTruthPickler =
   let
-    revfunc (Dynamic { dynamicName = sym, dynamicTruth = truth }) = (sym, truth)
+    revfunc LocalTruth { localTruthName = sym, localTruth = truth } =
+      (sym, truth)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(sym, truth) -> Dynamic { dynamicName = sym,
-                                       dynamicTruth = truth }, revfunc)
-           (xpElem (gxFromString "Dynamic") xpickle xpickle)
+    xpWrap (\(sym, truth) -> LocalTruth { localTruthName = sym,
+                                          localTruth = truth }, revfunc)
+           (xpElem (gxFromString "LocalTruth") xpickle xpickle)
 
-localPickler :: (GenericXMLString tag, Show tag,
+localBuilderPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Compound
-localPickler =
+localBuilderPickler =
   let
-    revfunc (Local { localName = sym, localBuilder = builder }) = (sym, builder)
+    revfunc LocalBuilder { localBuilderName = sym, localBuilder = builder } =
+      (sym, builder)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(sym, builder) -> Local { localName = sym,
+    xpWrap (\(sym, builder) -> LocalBuilder { localBuilderName = sym,
                                        localBuilder = builder }, revfunc)
-           (xpElem (gxFromString "Local") xpickle xpickle)
+           (xpElem (gxFromString "LocalBuilder") xpickle xpickle)
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Compound where
@@ -1645,10 +1648,11 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
     let
       picker (Exp _) = 0
       picker (Element _) = 1
-      picker Dynamic {} = 2
-      picker Local {} = 3
+      picker LocalTruth {} = 2
+      picker LocalBuilder {} = 3
     in
-      xpAlt picker [expPickler, elementPickler, dynamicPickler, localPickler]
+      xpAlt picker [expPickler, elementPickler,
+                    localTruthPickler, localBuilderPickler]
 
 optionPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text) =>
