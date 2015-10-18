@@ -43,7 +43,8 @@ module Language.Salt.Core.Syntax(
        Intro(..),
        Elim(..),
        Cmd(..),
-       Comp(..)
+       Comp(..),
+       elimTermPos
        ) where
 
 import Bound
@@ -61,7 +62,6 @@ import Data.Hashable.Extras
 import Data.Hashable.ExtraInstances()
 import Data.HashMap.Strict(HashMap)
 import Data.List(sortBy)
-import Data.Monoid(mappend, mempty)
 import Data.Position.DWARFPosition
 import Data.Ratio
 import Data.Traversable
@@ -469,6 +469,12 @@ data Comp bound free =
       -- | The position in source from which this originates.
       badCompPos :: !DWARFPosition
     }
+
+elimTermPos :: Elim bound free -> DWARFPosition
+elimTermPos Call { callPos = pos } = pos
+elimTermPos Typed { typedPos = pos } = pos
+elimTermPos Var { varPos = pos } = pos
+elimTermPos BadElim { badElimPos = pos } = pos
 
 instance Eq1 Pattern where
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,

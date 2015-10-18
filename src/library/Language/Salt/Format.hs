@@ -70,10 +70,12 @@ recordDoc binds =
                                       nest nestLevel val) binds
     nosoftlines = map (\(field, val) -> field <+> equals <+> val) binds
     nobreaks = hsep (punctuate comma nosoftlines)
-    breaks = parens (align (vsep (punctuate comma softlines)))
+    alignbreaks = parens (align (vsep (punctuate comma softlines)))
+    nestbreaks = lparen <!> align (nest 2 (vsep (punctuate comma softlines)) <!>
+                                   rparen)
   in case flatten nobreaks of
-    Just nolines -> choose [parens nolines, breaks]
-    Nothing -> breaks
+    Just nolines -> choose [parens nolines, alignbreaks, nestbreaks]
+    Nothing -> choose [ alignbreaks, nestbreaks ]
 
 -- | Format a list of 'Doc's representing a tuple value.  There are
 -- three possible ways to do this:
@@ -89,10 +91,12 @@ tupleDoc :: [Doc]
 tupleDoc fields =
   let
     nobreaks = hsep (punctuate comma fields)
-    breaks = parens (align (vsep (punctuate comma fields)))
+    alignbreaks = parens (align (vsep (punctuate comma fields)))
+    nestbreaks = lparen <!> align (nest 2 (vsep (punctuate comma fields)) <!>
+                                   rparen)
   in case flatten nobreaks of
-    Just nolines -> choose [parens nolines, breaks]
-    Nothing -> breaks
+    Just nolines -> choose [parens nolines, alignbreaks, nestbreaks]
+    Nothing -> choose [ alignbreaks, nestbreaks ]
 
 -- | Format a list of 'Doc's representing a list value.  There are
 -- three possible ways to do this:
@@ -114,10 +118,12 @@ listDoc :: [Doc]
 listDoc fields =
   let
     nobreaks = hsep (punctuate comma fields)
-    breaks = brackets (align (vsep (punctuate comma fields)))
+    alignbreaks = brackets (align (vsep (punctuate comma fields)))
+    nestbreaks = lbrack <!> align (nest 2 (vsep (punctuate comma fields)) <!>
+                                   rbrack)
   in case flatten nobreaks of
-    Just nolines -> choose [brackets nolines, breaks]
-    Nothing -> breaks
+    Just nolines -> choose [brackets nolines, alignbreaks, nestbreaks]
+    Nothing -> choose [ alignbreaks, nestbreaks ]
 
 -- | Format a map as a list of key/value pairs.
 mapDoc :: [(Doc, Doc)]

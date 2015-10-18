@@ -37,7 +37,7 @@ module Language.Salt.Core.TypeCheck(
 
 import Control.Monad.TypeCheck.Class
 import Data.Default
-import Data.Pos
+import Data.Position.DWARFPosition
 import Language.Salt.Core.Syntax
 
 import qualified Data.Map as Map
@@ -192,27 +192,26 @@ checkIntroTerm ctx ty term =
 checkElimTerm :: (MonadTypeCheck sym m, Default sym, Ord sym) =>
                  TypeContext sym
               -- ^ The type context.
-              -> Term sym sym
+              -> Elim sym sym
               -- ^ The term being type checked.
-              -> m (Term sym sym, Term sym sym)
-              -- ^ The rewritten term and the type synthesized by the term
-
+              -> m (Intro bound free)
+              -- ^ The type of the checked term.
 -- For calls, expect to get a function type.  Check all the arguments,
 -- then figure out what the return type should be.
-checkElimTerm ctx Call { callFunc = func, callPos = p } =
+checkElimTerm ctx Call { callFunc = func, callPos = pos } =
   do
-    (func', functy) <- checkElimTerm ctx func
+    functy <- checkElimTerm ctx func
     case functy of
       -- Now, check that the arguments match, and then figure out the
       -- return type.
       FuncType {} -> error "XXX not implemented yet"
       -- Pass bad types on through
-      bad @ (BadTerm _) -> return (BadTerm p, bad)
+      BadElim { badElimPos = bpos } -> return BadIntro { badIntroPos = bpos }
       -- Anything else is an error
       _ ->
         do
-          badty <- expectedFunction func functy
-          return (BadTerm p, badty)
+          expectedFuncType (elimTermPos func)
+          return BadIntro { badIntroPos = pos }
 -- For typed terms, use the stated type to check the introduction term
 checkElimTerm ctx typed @ Typed { typedTerm = term, typedType = ty } =
   do
@@ -220,14 +219,12 @@ checkElimTerm ctx typed @ Typed { typedTerm = term, typedType = ty } =
     -- type symbols.
     ty' <- checkType ctx ty
     term' <- checkIntroTerm ctx ty' term
-    return (typed { typedTerm = term', typedType = ty' }, ty')
+    return ty'
 -- For a symbol, look it up in the type context and return it
 checkElimTerm ctx term @ Var { varSym = sym, varPos = p } =
   do
     ty' <- getSymType ctx sym p
     return (term, ty')
 -- Pass errors on through
-checkElimTerm _ term @ (BadTerm _) = return (term, BadTerm (pos term))
--- Attempting to check anything else is a compiler bug
-checkElimTerm _ _ =
-  error "Compiler error: attempting elimination term type check on a non-elimination term"
+checkElimTerm _ BadElim { badElimPos = pos } =
+  return BadIntro { badIntroPos = pos }

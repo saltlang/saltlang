@@ -122,7 +122,7 @@ data ContextKind =
     -- and can access other definitions relative to that object by
     -- name.
   | Object
-    deriving (Ord, Eq, Enum, Ix)
+    deriving (Ord, Eq, Enum)
 
 -- | Truth classes.  These define the exact semantics of a truth
 -- declaration.
