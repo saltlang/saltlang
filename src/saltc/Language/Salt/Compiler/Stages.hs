@@ -152,7 +152,7 @@ printTextAST fname ast =
     astfile = Strict.append fname astExt
   in do
     astdoc <- formatM ast
-    createArtifact astfile (buildOptimal 120 False astdoc)
+    createArtifact astfile (buildGreedy 120 False astdoc)
 
 printDotAST :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m,
                 MonadPositions m, MonadSymbols m) =>
@@ -195,7 +195,7 @@ printTextSurface fname scope =
     surfacefile = Strict.append fname surfaceExt
   in do
     surfacedoc <- formatM scope
-    createArtifact surfacefile (buildOptimal 120 False surfacedoc)
+    createArtifact surfacefile (buildGreedy 120 False surfacedoc)
 
 printXMLSurface :: (MonadArtifacts Strict.ByteString m,
                     MonadMessages Message m) =>

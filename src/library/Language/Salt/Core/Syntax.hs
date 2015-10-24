@@ -1231,7 +1231,7 @@ instance Format Literal where
   format Char { charVal = chr } = squoted (char chr)
 
 instance Show Literal where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance Monad m => FormatM m Literal where
   formatM = return . format
@@ -1276,7 +1276,7 @@ instance (Default bound, Format bound, Eq bound) => Format (Pattern bound) where
   format Exact { exactLiteral = e } = format e
 
 instance (Format bound, Default bound, Eq bound) => Show (Pattern bound) where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance (MonadPositions m, MonadSymbols m,
           FormatM m bound, Default bound, Eq bound) =>
@@ -1310,7 +1310,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Case bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1349,7 +1349,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Element bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1497,7 +1497,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Intro bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1572,7 +1572,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Elim bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1598,7 +1598,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Cmd bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1620,7 +1620,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Comp bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
+  show = Lazy.toString . renderGreedy 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
