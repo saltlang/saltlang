@@ -33,6 +33,7 @@ module Language.Salt.Compiler.Options(
        Options(..),
        Save(..),
        Stage(..),
+       optionsDesc,
        options
        ) where
 
@@ -124,6 +125,7 @@ data Args =
       errLastStage :: !Bool
     }
   | Version
+  | Usage
     deriving Eq
 
 instance Monoid (Singular a) where
@@ -154,6 +156,10 @@ instance Monoid Args where
                   errLastStage = last2 } =
     Error { errMsgs = msgs1 ++ msgs2, errDistDir = distdir1 || distdir2,
             errLastStage = last1 || last2 }
+  mappend e @ Error {} Usage = e
+  mappend Usage e @ Error {} = e
+  mappend Usage _ = Usage
+  mappend _ Usage = Usage
   mappend e @ Error {} Version = e
   mappend Version e @ Error {} = e
   mappend e @ Error { errDistDir = distdir1, errLastStage = last1 }
@@ -292,6 +298,7 @@ optionsDesc = [
       "display version number",
     Option "C" ["component-names"] (NoArg setComponentNames)
       "supply component names instead of file names",
+    Option [] ["help"] (NoArg Usage) "print usage information",
 
     Option [] ["stop-after"] (ReqArg stopAfter "STAGE")
       "stop after compiler stage",
@@ -313,6 +320,7 @@ options strargs =
       | null unmatched -> Left [version]
       | otherwise -> Left ["extra arguments when reporting version\n"]
     Error { errMsgs = errs' } -> Left (errs ++ errs')
+    Usage -> Left []
     Args { argLastStage = lastStageArg, argTokensSave = tokensSave,
            argASTSave = astSave, argSurfaceSave = surfacesave,
            argComponents = components, argDistDir = destDirArg,

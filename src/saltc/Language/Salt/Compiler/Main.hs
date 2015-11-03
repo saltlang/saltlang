@@ -35,6 +35,7 @@ module Main(
 
 import Language.Salt.Compiler.Options
 import Language.Salt.Compiler.Driver
+import System.Console.GetOpt
 import System.Environment
 import System.IO
 
@@ -43,5 +44,5 @@ main =
   do
     args <- getArgs
     case options args of
-      Left output -> mapM_ (hPutStr stderr) output
+      Left output -> hPutStr stderr (usageInfo (concat output) optionsDesc)
       Right opts -> run opts
