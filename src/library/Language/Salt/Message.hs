@@ -1040,7 +1040,7 @@ callNonFunc :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
                 FormatM m bound, FormatM m free, Default bound, Eq bound) =>
                Elim bound free
             -- ^ The non-function term being called.
-            -> DWARFPosition
+            -> DWARFPosition defty tydefty
             -- ^ The position at which the call occurs.
             -> m ()
 callNonFunc term pos =
@@ -1055,7 +1055,7 @@ noMatch :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
             FormatM m bound, FormatM m free, Default bound, Eq bound) =>
            Elim bound free
         -- ^ The unmatched term.
-        -> DWARFPosition
+        -> DWARFPosition defty tydefty
         -- ^ The position at which the match occurs.
         -> m ()
 noMatch term pos =
@@ -1068,7 +1068,7 @@ noMatch term pos =
 -- | Type error when expecting a function type, but getting something else.
 expectedFuncType :: (MonadMessages Message m,
                      MonadSymbols m, MonadPositions m) =>
-                    DWARFPosition
+                    DWARFPosition defty tydefty
                  -- ^ The position at which the match occurs.
                  -> m ()
 expectedFuncType pos =
@@ -1079,7 +1079,7 @@ expectedFuncType pos =
 
 cyclicImport :: (MonadMessages Message m,
                  MonadSymbols m, MonadPositions m) =>
-                DWARFPosition
+                DWARFPosition defty tydefty
              -- ^ The position at which the inheritance occurs.
              -> m ()
 cyclicImport pos =
@@ -1090,7 +1090,7 @@ cyclicImport pos =
 
 cyclicInherit :: (MonadMessages Message m,
                   MonadSymbols m, MonadPositions m) =>
-                 DWARFPosition
+                 DWARFPosition defty tydefty
               -- ^ The position at which the inheritance occurs.
               -> m ()
 cyclicInherit pos =
@@ -1103,7 +1103,7 @@ privateAccess :: (MonadMessages Message m,
                   MonadSymbols m, MonadPositions m) =>
                  Symbol
               -- ^ The symbol that was illegally accessed.
-              -> DWARFPosition
+              -> DWARFPosition defty tydefty
               -- ^ The position at which the access occurs.
               -> m ()
 privateAccess sym pos =
@@ -1118,7 +1118,7 @@ protectedAccess :: (MonadMessages Message m,
                     MonadSymbols m, MonadPositions m) =>
                    Symbol
                 -- ^ The symbol that was illegally accessed.
-                -> DWARFPosition
+                -> DWARFPosition defty tydefty
                 -- ^ The position at which the access occurs.
                 -> m ()
 protectedAccess sym pos =
@@ -1134,7 +1134,7 @@ localAccess :: (MonadMessages Message m,
                 MonadSymbols m, MonadPositions m) =>
                Symbol
             -- ^ The symbol that was accessed.
-            -> DWARFPosition
+            -> DWARFPosition defty tydefty
             -- ^ The position at which the access occurs.
             -> m ()
 localAccess sym pos =
@@ -1150,7 +1150,7 @@ objectAccess :: (MonadMessages Message m,
                  MonadSymbols m, MonadPositions m) =>
                 Symbol
              -- ^ The symbol that was accessed.
-             -> DWARFPosition
+             -> DWARFPosition defty tydefty
              -- ^ The position at which the access occurs.
              -> m ()
 objectAccess sym pos =

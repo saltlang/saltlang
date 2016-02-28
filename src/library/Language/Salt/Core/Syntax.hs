@@ -121,7 +121,7 @@ data Pattern bound =
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
-      deconstructPos :: !DWARFPosition
+      deconstructPos :: !(DWARFPosition [bound] [bound])
     }
     -- | An "as" binding.  Allows part of a pattern to be bound to a
     -- name, but further deconstructed by another pattern.  For
@@ -132,7 +132,7 @@ data Pattern bound =
       -- | The inner binding, which further deconstructs the binding.
       asBind :: Pattern bound,
       -- | The position in source from which this originates.
-      asPos :: !DWARFPosition
+      asPos :: !(DWARFPosition [bound] [bound])
     }
     -- | A simple name binding.  This does the same thing as an as
     -- pattern, but does not further deconstruct the binding.
@@ -144,14 +144,14 @@ data Pattern bound =
       -- | The bound variable type being bound.
       nameSym :: !bound,
       -- | The position in source from which this originates.
-      namePos :: !DWARFPosition
+      namePos :: !(DWARFPosition [bound] [bound])
     }
     -- | A constant.  Constrains the binding to the given value.
   | Exact {
       -- | The literal.
       exactLiteral :: !Literal,
       -- | The position in source from which this originates.
-      exactPos :: !DWARFPosition
+      exactPos :: !(DWARFPosition [bound] [bound])
     }
 
 -- | A case.  Consists of a pattern and a body wrapped in a scope.
@@ -163,7 +163,7 @@ data Case bound free =
     -- | The body of the case.
     caseBody :: Scope bound (Intro bound) free,
     -- | The position in source from which this originates.
-    casePos :: !DWARFPosition
+    casePos :: !(DWARFPosition [bound] [bound])
   }
 
 -- | An element.  This is either an argument in a function type or a
@@ -178,7 +178,7 @@ data Element bound free =
     -- | The type of the element.
     elemType :: Scope bound (Intro bound) free,
     -- | The position in source from which this originates.
-    elemPos :: !DWARFPosition
+    elemPos :: !(DWARFPosition [bound] [bound])
   }
 
 -- | Terms.  Represents pure terms in the language.  Terms are further
@@ -208,7 +208,7 @@ data Intro bound free =
       -- value of any argument by their binding name.
       funcTypeRetTy :: Scope bound (Intro bound) free,
       -- | The position in source from which this originates.
-      funcTypePos :: !DWARFPosition
+      funcTypePos :: !(DWARFPosition [bound] [bound])
     }
   -- | Dependent sum type.  This is the type given to structures.
   | RecordType {
@@ -222,7 +222,7 @@ data Intro bound free =
       -- | Array used to convert tuples to records of this type.
       recTypeOrder :: !(Array Word bound),
       -- | The position in source from which this originates.
-      recTypePos :: !DWARFPosition
+      recTypePos :: !(DWARFPosition [bound] [bound])
     }
   -- | Refinement type.  This type represents all members of a type
   -- satisfying a given proposition.
@@ -233,7 +233,7 @@ data Intro bound free =
       -- type.  These express the constraints on the base type.
       refineCases :: [Case bound free],
       -- | The position in source from which this originates.
-      refinePos :: !DWARFPosition
+      refinePos :: !(DWARFPosition [bound] [bound])
     }
   -- | Computation type.  This type represents a computation, and
   -- includes both its result type and a specification of its
@@ -246,7 +246,7 @@ data Intro bound free =
       -- type.
       compCases :: [Case bound free],
       -- | The position in source from which this originates.
-      compTypePos :: !DWARFPosition
+      compTypePos :: !(DWARFPosition [bound] [bound])
     }
 
   -- Propositions.  These do not support decidable equality.  As such,
@@ -264,7 +264,7 @@ data Intro bound free =
       -- | A case statement which denotes a proposition.
       quantCases :: [Case bound free],
       -- | The position in source from which this originates.
-      quantPos :: !DWARFPosition
+      quantPos :: !(DWARFPosition [bound] [bound])
     }
 -- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
@@ -276,7 +276,7 @@ data Intro bound free =
       -- | The cases describing this function's behavior.
       lambdaCases :: [Case bound free],
       -- | The position in source from which this originates.
-      lambdaPos :: !DWARFPosition
+      lambdaPos :: !(DWARFPosition [bound] [bound])
     }
 
   -- | An eta expansion.  This is present for type checking only.
@@ -287,7 +287,7 @@ data Intro bound free =
       etaTerm :: Elim bound free,
       etaType :: Intro bound free,
       -- | The position in source from which this originates.
-      etaPos :: !DWARFPosition
+      etaPos :: !(DWARFPosition [bound] [bound])
     }
   -- | A record.  Records can be named or ordered in the surface
   -- syntax.  Ordered records are transliterated into named
@@ -296,7 +296,7 @@ data Intro bound free =
       -- | The bindings for this record.  These are introduction terms.
       recFields :: !(HashMap bound (Intro bound free)),
       -- | The position in source from which this originates.
-      recPos :: !DWARFPosition
+      recPos :: !(DWARFPosition [bound] [bound])
     }
     -- | A tuple.  These denote record values, but their
     -- interpretation depends on the expected type.
@@ -304,7 +304,7 @@ data Intro bound free =
       -- | The fields of the tuple.
       tupleFields :: !(Array Word (Intro bound free)),
       -- | The position in source from which this originates.
-      tuplePos :: !DWARFPosition
+      tuplePos :: !(DWARFPosition [bound] [bound])
     }
   -- | A collection of one or more terms, each of which is
   -- bound to a name.  Each of the members of the group may reference
@@ -315,14 +315,14 @@ data Intro bound free =
       -- | The term, parameterized by the self-reference @fixSym@.
       fixTerm :: !(Scope bound (Intro bound) free),
       -- | The position in source from which this originates.
-      fixPos :: !DWARFPosition
+      fixPos :: !(DWARFPosition [bound] [bound])
     }
   -- | A computation value.  This is essentially a "frozen"
   -- computation.
   | Comp {
       compBody :: Comp bound free,
       -- | The position in source from which this originates.
-      compPos :: !DWARFPosition
+      compPos :: !(DWARFPosition [bound] [bound])
     }
     -- | An elimination term presented as an introduction term.
   | Elim {
@@ -334,7 +334,7 @@ data Intro bound free =
       -- | The literal value.
       literalVal :: !Literal,
       -- | The position in source from which this originates.
-      literalPos :: !DWARFPosition
+      literalPos :: !(DWARFPosition [bound] [bound])
     }
     -- | A symbol whose meaning is understood implicitly by the
     -- compiler.  This includes intrinsic functions, as well as
@@ -343,13 +343,13 @@ data Intro bound free =
       -- | The name of the constructor.
       constructorSym :: !bound,
       -- | The position in source from which this originates.
-      constructorPos :: !DWARFPosition
+      constructorPos :: !(DWARFPosition [bound] [bound])
     }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
   | BadIntro {
       -- | The position in source from which this originates.
-      badIntroPos :: !DWARFPosition
+      badIntroPos :: !(DWARFPosition [bound] [bound])
     }
 
   -- | Elimination Terms.  These terms generate a type in type checking.
@@ -369,7 +369,7 @@ data Elim bound free =
       -- term.
       callFunc :: Elim bound free,
       -- | The position in source from which this originates.
-      callPos :: !DWARFPosition
+      callPos :: !(DWARFPosition [bound] [bound])
     }
   -- | A typed term.  This is an introduction term with an explicit
   -- type tag, which makes it an elimination term.
@@ -379,7 +379,7 @@ data Elim bound free =
       -- | The type of the introduction term.
       typedType :: Intro bound free,
       -- | The position in source from which this originates.
-      typedPos :: !DWARFPosition
+      typedPos :: !(DWARFPosition [bound] [bound])
     }
   -- | A variable symbol.  Since we know the types of all variables,
   -- this is an elimination term.
@@ -387,13 +387,13 @@ data Elim bound free =
       -- | The underlying symbol.
       varSym :: !free,
       -- | The position in source from which this originates.
-      varPos :: !DWARFPosition
+      varPos :: !(DWARFPosition [bound] [bound])
     }
   -- | Placeholder for a malformed term, allowing type checking to
   -- continue in spite of errors.
   | BadElim {
       -- | The position in source from which this originates.
-      badElimPos :: !DWARFPosition
+      badElimPos :: !(DWARFPosition [bound] [bound])
     }
 
 -- | Commands.  These represent individual statements, or combinations
@@ -414,7 +414,7 @@ data Cmd bound free =
       -- | The term representing the value of this command
       valTerm :: Intro bound free,
       -- | The position in source from which this originates.
-      valPos :: !DWARFPosition
+      valPos :: !(DWARFPosition [bound] [bound])
     }
   -- | Evaluate a computation value.  This allows execution of
   -- computations produced by terms.
@@ -422,13 +422,13 @@ data Cmd bound free =
       -- | The computation value to evaluate
       evalTerm :: Intro bound free,
       -- | The position in source from which this originates.
-      evalPos :: !DWARFPosition
+      evalPos :: !(DWARFPosition [bound] [bound])
     }
   -- | Placeholder for a malformed command, allowing type checking to
   -- continue in spite of errors.
   | BadCmd {
       -- | The position in source from which this originates.
-      badCmdPos :: !DWARFPosition
+      badCmdPos :: !(DWARFPosition [bound] [bound])
     }
 
 -- | Computations. Semantically, computations are generators for
@@ -454,23 +454,23 @@ data Comp bound free =
       -- | The next computation to execute.
       seqNext :: Scope bound (Comp bound) free,
       -- | The position in source from which this originates.
-      seqPos :: !DWARFPosition
+      seqPos :: !(DWARFPosition [bound] [bound])
     }
   -- | Result of a computation. This is always the end of a sequence.
   | End {
       -- | The command to run to produce a result.
       endCmd :: Cmd bound free,
       -- | The position in source from which this originates.
-      endPos :: !DWARFPosition
+      endPos :: !(DWARFPosition [bound] [bound])
     }
   -- | Placeholder for a malformed computation, allowing type checking
   -- to continue in spite of errors.
   | BadComp {
       -- | The position in source from which this originates.
-      badCompPos :: !DWARFPosition
+      badCompPos :: !(DWARFPosition [bound] [bound])
     }
 
-elimTermPos :: Elim bound free -> DWARFPosition
+elimTermPos :: Elim bound free -> (DWARFPosition [bound] [bound])
 elimTermPos Call { callPos = pos } = pos
 elimTermPos Typed { typedPos = pos } = pos
 elimTermPos Var { varPos = pos } = pos
@@ -1041,7 +1041,7 @@ instance Traversable (Comp b) where
     (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
   traverse _ (BadComp p) = pure (BadComp p)
 
-injectpos :: DWARFPosition
+injectpos :: DWARFPosition [bound] [bound]
 injectpos = Synthetic { synthDesc = Strict.fromString "Monad return" }
 {-
 instance MonadTrans (Pattern b) where
@@ -1231,7 +1231,7 @@ instance Format Literal where
   format Char { charVal = chr } = squoted (char chr)
 
 instance Show Literal where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance Monad m => FormatM m Literal where
   formatM = return . format
@@ -1276,7 +1276,7 @@ instance (Default bound, Format bound, Eq bound) => Format (Pattern bound) where
   format Exact { exactLiteral = e } = format e
 
 instance (Format bound, Default bound, Eq bound) => Show (Pattern bound) where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m,
           FormatM m bound, Default bound, Eq bound) =>
@@ -1310,7 +1310,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Case bound free) where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1349,7 +1349,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Element bound free) where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1497,7 +1497,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Intro bound free) where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1572,7 +1572,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Elim bound free) where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1598,7 +1598,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Cmd bound free) where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1620,7 +1620,7 @@ instance (Format bound, Format free, Default bound, Eq bound) =>
 
 instance (Format bound, Format free, Default bound, Eq bound) =>
          Show (Comp bound free) where
-  show = Lazy.toString . renderGreedy 80 False . format
+  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
