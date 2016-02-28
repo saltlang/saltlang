@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -266,7 +266,7 @@ data Intro bound free =
       -- | The position in source from which this originates.
       quantPos :: !(DWARFPosition [bound] [bound])
     }
--- | A lambda expression.  Represents a function value.  Lambdas
+  -- | A lambda expression.  Represents a function value.  Lambdas
   -- cannot appear in patterns, though they can be computed on.
   --
   -- Lambdas will ultimately need to be extended to support
@@ -306,9 +306,9 @@ data Intro bound free =
       -- | The position in source from which this originates.
       tuplePos :: !(DWARFPosition [bound] [bound])
     }
-  -- | A collection of one or more terms, each of which is
-  -- bound to a name.  Each of the members of the group may reference
-  -- eachother.
+    -- | A collection of one or more terms, each of which is
+    -- bound to a name.  Each of the members of the group may reference
+    -- eachother.
   | Fix {
       -- | The self-reference symbol.
       fixSym :: !bound,
@@ -317,8 +317,8 @@ data Intro bound free =
       -- | The position in source from which this originates.
       fixPos :: !(DWARFPosition [bound] [bound])
     }
-  -- | A computation value.  This is essentially a "frozen"
-  -- computation.
+    -- | A computation value.  This is essentially a "frozen"
+    -- computation.
   | Comp {
       compBody :: Comp bound free,
       -- | The position in source from which this originates.
@@ -345,14 +345,14 @@ data Intro bound free =
       -- | The position in source from which this originates.
       constructorPos :: !(DWARFPosition [bound] [bound])
     }
-  -- | Placeholder for a malformed term, allowing type checking to
-  -- continue in spite of errors.
+    -- | Placeholder for a malformed term, allowing type checking to
+    -- continue in spite of errors.
   | BadIntro {
       -- | The position in source from which this originates.
       badIntroPos :: !(DWARFPosition [bound] [bound])
     }
 
-  -- | Elimination Terms.  These terms generate a type in type checking.
+-- | Elimination Terms.  These terms generate a type in type checking.
 data Elim bound free =
   -- | Call term.  Represents a call to a function.  The type of the
   -- term comes from the called function's return type.

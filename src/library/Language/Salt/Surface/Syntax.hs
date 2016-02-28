@@ -31,7 +31,10 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FlexibleContexts #-}
 
 -- | Abstract Syntax structure.  This represents the surface language
--- in a more abstract form than is found in the AST structure.
+-- in a more abstract form than is found in the AST structure.  In
+-- this form, definitions have been gathered up into tables, and some
+-- amount of processing has been done.  However, symbols have not been
+-- resolved and inherited scopes have not been constructed.
 module Language.Salt.Surface.Syntax(
        Component(..),
        Assoc(..),
@@ -547,7 +550,6 @@ instance Eq Exp where
   Where { whereVal = val1, whereProp = prop1 } ==
     Where { whereVal = val2, whereProp = prop2 } =
       val1 == val2 && prop1 == prop2
-    -- | Builder literal.
   Anon { anonKind = kind1, anonSuperTypes = supers1,
          anonParams = fields1, anonContent = content1 } ==
     Anon { anonKind = kind2, anonSuperTypes = supers2,
