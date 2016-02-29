@@ -29,8 +29,8 @@
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 
-module Language.Salt.Surface.Complete(
-       complete
+module Language.Salt.Surface.Bind(
+       bind
        ) where
 
 import Control.Monad.Messages
@@ -47,21 +47,21 @@ import qualified Data.Array.IO as Array
 import qualified Language.Salt.Surface.Bindings as Bindings
 import qualified Language.Salt.Surface.Syntax as Syntax
 
--- | State of completion of scopes.
-data CompletionState =
-  CompletionState {
+-- | State of elaboration of scopes.
+data ElaborationState =
+  ElaborationState {
     -- | A bitmap of the pending scope completions.  Used to catch cycles.
-    completePending :: !(IOBitArray ScopeID),
+    elaboratePending :: !(IOBitArray ScopeID),
     -- | A bitmap of all the completed scopes.
-    completeDone :: !(IOBitArray ScopeID),
+    elaborateDone :: !(IOBitArray ScopeID),
     -- | Array mapping @ScopeID@s to completed scopes.
-    completeScopes :: !(IOArray ScopeID Bindings.Scope)
+    elaborateScopes :: !(IOArray ScopeID Scope.Scope)
   }
 
 data TempScope =
   TempScope {
     -- | Inherited scopes.
-    scopeInherits :: !(HashMap ScopeID Bindings.Scope),
+    scopeInherits :: !(HashMap ScopeID Scope.Scope),
     -- | Truths.
     scopeTruths :: !(HashMap Symbol Truth),
   }
@@ -148,6 +148,8 @@ data Resolve a =
     -- | Undefined symbol result.
   | Undef
 
+-- Resolution results are a monoid, so that we can combine results
+-- from resolution in multiple scopes.
 instance Monoid (Resolve a) where
   mempty = Undef
 
@@ -170,11 +172,12 @@ instance Monoid (Resolve a) where
   -- Undefs get ignored unless that's all there is.
   mappend Undef Undef = Undef
 
--- | Lookup a local definition in a scope.
+-- | Lookup a local definition in a scope.  This does not chase down
+-- inherited scopes.
 localValueSym :: Symbol
               -- ^ The symbol to lookup.
               -> Visibility
-              -- ^ The visibility of the lookup.
+              -- ^ The expected visibility level of the lookup.  If there are are
               -> ScopeRef
               -- ^ The 'ScopeRef' in which to do the lookup.
               -> Resolve [Bindings.Bind]
@@ -186,27 +189,27 @@ localValueSym sym vis ScopeRef { refContext = ctx, refID = scopeid,
     -- Check to see if an access is illegal
     checkIllegal =
       case vis of
-          -- Check for protected or private binds.
-          Public -> case (bindarr ! Protected, bindarr ! Private) of
-            -- There aren't any private or protected defs, so the only
-            -- other ones must be hidden.  Report undef.
-            ([], []) -> Undef
-            -- We found private binds, so report an illegal access
-            ([], _) -> Illegal { illegalScope = scopeid, illegalPrivate = True }
-            -- We found protected bindings, so report an illegal access
-            (_, _) -> Illegal { illegalScope = scopeid, illegalPrivate = False }
-          -- For protected, see if there are any private defs
-          Protected -> case bindarr ! Private of
-            -- There aren't so the only other defs must be hidden
-            [] -> Undef
-            -- We found binds, so report an illegal access
-            _ -> Illegal { illegalScope = scopeid, illegalPrivate = True }
-          -- We're looking at private level, the only other
-          -- definitions must be Hidden, so we don't report errors for
-          -- them.
-          Private -> Undef
-          -- This case should never happen
-          Hidden -> error "Impossible case"
+        -- Check for protected or private binds.
+        Public -> case (bindarr ! Protected, bindarr ! Private) of
+          -- There aren't any private or protected defs, so the only
+          -- other ones must be hidden.  Report undef.
+          ([], []) -> Undef
+          -- We found private binds, so report an illegal access
+          ([], _) -> Illegal { illegalScope = scopeid, illegalPrivate = True }
+          -- We found protected bindings, so report an illegal access
+          (_, _) -> Illegal { illegalScope = scopeid, illegalPrivate = False }
+        -- For protected, see if there are any private defs
+        Protected -> case bindarr ! Private of
+          -- There aren't so the only other defs must be hidden
+          [] -> Undef
+          -- We found binds, so report an illegal access
+          _ -> Illegal { illegalScope = scopeid, illegalPrivate = True }
+        -- We're looking at private level: the only other
+        -- definitions must be Hidden, so we don't report errors for
+        -- them.
+        Private -> Undef
+        -- This case should never happen
+        Hidden -> error "Impossible case"
 
   in
     -- Lookup the bindings in the table
@@ -222,11 +225,13 @@ localValueSym sym vis ScopeRef { refContext = ctx, refID = scopeid,
       -- Otherwise, we have an accessible right context, so figure out
       -- what to do.
       Just Binds { bindsViews = bindarr } ->
-        -- Look up the binds for this visibility level
+        -- Look up the binds for this visibility level (remember,
+        -- binds are a telescoping list)
         case bindarr ! vis of
           -- If we get nothing, check for possible illegal access
           [] -> checkIllegal
-          -- If there's a non-empty list at the given visibility, return a Valid
+          -- If there's a non-empty list at the given visibility,
+          -- return a Valid binding.
           out -> Valid { validScope = scopeid, validContent = out }
       -- There are no bindings, so return Undef
       Nothing -> Undef
@@ -259,7 +264,7 @@ resolveValueSym :: (MonadMessages Message m) =>
                 -- ^ The position at which the reference occurred.
                 -> [ScopeRef]
                 -- ^ The stack of scopes.
-                -> m Bindings.Exp
+                -> m Scope.Exp
 resolveValueSym sym pos scopes =
   -- Convert the Resolve into an expression and report any errors.
   -- Note: this depends on laziness to be efficient!
@@ -275,9 +280,11 @@ resolveValueSym sym pos scopes =
           then privateAccess sym pos
           else protectedAccess sym pos
         return Bindings.BadExp { badExpPos = pos }
-    NonStatic ->
+    Context { contextObject = object } ->
       do
-        nonStaticAccess sym pos
+        if object
+          then objectAccess sym pos
+          else localAccess sym pos
         return Bindings.BadExp { badExpPos = pos }
     Undef ->
       do
@@ -288,12 +295,12 @@ badProject :: Strict.ByteString
 badProject = Strict.fromString "Empty field list in projection"
 
 -- | Resolve a set of imports.
-completeImports :: (MonadMessages Message m, MonadIO m) =>
+elaborateImports :: (MonadMessages Message m, MonadIO m) =>
                    Syntax.Exp
                 -- ^ The import expression.
-                -> m [Bindings.Scope]
+                -> m [Scope.Scope]
                 -- ^ The scope referred to by the import
-completeImports =
+elaborateImports =
   let
     -- This is a worklist-fixedpoint algorithm.  We run over
     -- unresolved imports until we hit a fixed point.  Once we do, we
@@ -359,29 +366,44 @@ completeImports =
     -- Now convert all unresolved imports into an error message.
 
 -- | Construct a scope by pulling in all definitions.
-completeScope :: (MonadMessages Message m, MonadIO m) =>
+elaborateScope :: (MonadMessages Message m, MonadIO m) =>
                   Surface.Scope
                -- ^ The scope being elaborated.
                -> m Bindings.Scope
-completeScope Syntax.Scope { Syntax.scopeID = scopeID } = _
+elaborateScope Syntax.Scope { Syntax.scopeID = scopeID } = _
 -- First, pull in all the all the imports
 
 -- | Elaborate one component.  This generates the top-level scope and
 -- then checks that the expected definition is actually present.
-completeComponent :: (MonadMessages Message m, MonadIO m) =>
+elaborateComponent :: (MonadMessages Message m, MonadIO m) =>
                       Syntax.Component
                    -- ^ The component being elaborated.
-                   -> m Bindings.Scope
+                   -> m Scope.Scope
 -- First, enter a new scope for the component.
 -- Once all the defs are in, check that the expected definition exists
 -- At the end, pop the scope and turn it into a top-level.
 
--- | Elaborate a set of components.  The components are expected to
--- represent a closed set, meaning no external dependencies.
--- Elaboration turns them into a set of top-level definitions with
--- inter-linked scopes.
-complete :: (MonadMessages Message m, MonadIO m) =>
-            [Syntax.Component]
-         -> m Bindings.Bindings
--- XXX Need to figure out what the top-level looks like.  Probably a
--- bunch of scopes?
+convert :: STArray s ScopeID Scope
+        -> [Syntax.Component]
+        -> ST s (STArray s ScopeID Scope)
+convert arr compontents =
+  let
+  in do
+    mapM_ convertComponent components
+    return arr
+
+-- | Bind a set of components.  The components are expected to
+-- represent a closed set, meaning no external dependencies.  Binding
+-- turns them into a set of top-level definitions with inter-linked
+-- scopes.
+bind :: (MonadMessages Message m, MonadIO m) =>
+        [Syntax.Component]
+     -> m Scope.Scopes
+bind components =
+  let
+
+  in
+-- First, convert all the trees, with placeholders at all references
+-- Now, run a fixed-point computation to resolve all references
+-- Last, convert the tree to its final form
+-- Check that all the expected definitions are present

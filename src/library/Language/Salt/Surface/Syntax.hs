@@ -316,7 +316,7 @@ data Exp =
       -- | The position in source from which this arises.
       ascribePos :: !Position
     }
-    -- | A sequence expressions.  The entire sequence represents a
+    -- | A sequence of expressions.  The entire sequence represents a
     -- function call, possibly with inorder symbols.  This is
     -- re-parsed once the inorder symbols are known.
   | Seq {

@@ -272,11 +272,11 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [(tag, text)] FieldName where
   xpickle = xpWrap (FieldName, fieldSym) xpickle
 
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+instance (GenericXMLString tag, Show tag, GenericXMLString text) =>
          XmlPickler [NodeG [] tag text] ScopeID where
   xpickle = xpWrap (ScopeID, scopeID) (xpContent xpPrim)
 
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+instance (GenericXMLString tag, Show tag, GenericXMLString text) =>
          XmlPickler [(tag, text)] ScopeID where
   xpickle = xpWrap (ScopeID, scopeID) (xpAttr (gxFromString "scope-id") xpPrim)
 

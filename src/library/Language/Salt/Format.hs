@@ -50,9 +50,6 @@ import Text.Format
 nestLevel :: Int
 nestLevel = 2
 
-semicolon :: Doc
-semicolon = char ';'
-
 -- | Format a list of @(field, value)@ bindings representing a record
 -- value.  There are two possible ways to do this:
 --
@@ -71,8 +68,7 @@ recordDoc binds =
     nosoftlines = map (\(field, val) -> field <+> equals <+> val) binds
     nobreaks = hsep (punctuate comma nosoftlines)
     alignbreaks = parens (align (vsep (punctuate comma softlines)))
-    nestbreaks = lparen <!> align (nest 2 (vsep (punctuate comma softlines)) <!>
-                                   rparen)
+    nestbreaks = lparen <!> nest 2 (vsep (punctuate comma softlines)) <!> rparen
   in case flatten nobreaks of
     Just nolines -> choose [parens nolines, alignbreaks, nestbreaks]
     Nothing -> choose [ alignbreaks, nestbreaks ]
@@ -92,8 +88,7 @@ tupleDoc fields =
   let
     nobreaks = hsep (punctuate comma fields)
     alignbreaks = parens (align (vsep (punctuate comma fields)))
-    nestbreaks = lparen <!> align (nest 2 (vsep (punctuate comma fields)) <!>
-                                   rparen)
+    nestbreaks = lparen <!> nest 2 (vsep (punctuate comma fields)) <!> rparen
   in case flatten nobreaks of
     Just nolines -> choose [parens nolines, alignbreaks, nestbreaks]
     Nothing -> choose [ alignbreaks, nestbreaks ]
@@ -119,8 +114,7 @@ listDoc fields =
   let
     nobreaks = hsep (punctuate comma fields)
     alignbreaks = brackets (align (vsep (punctuate comma fields)))
-    nestbreaks = lbrack <!> align (nest 2 (vsep (punctuate comma fields)) <!>
-                                   rbrack)
+    nestbreaks = lbrack <!> nest 2 (vsep (punctuate comma fields)) <!> rbrack
   in case flatten nobreaks of
     Just nolines -> choose [brackets nolines, alignbreaks, nestbreaks]
     Nothing -> choose [ alignbreaks, nestbreaks ]
@@ -167,8 +161,8 @@ blockDoc :: [Doc]
          -> Doc
 blockDoc stms =
   let
-    nobreaks = hsep (punctuate semicolon stms)
-    breaks = vsep (punctuate semicolon stms)
+    nobreaks = hsep (punctuate semi stms)
+    breaks = vsep (punctuate semi stms)
     breakopts = [ nest nestLevel (lbrace <!> nest nestLevel breaks <!> rbrace) ]
   in case flatten nobreaks of
     Just nolines -> choose (lbrace <+> nolines <+> rbrace : breakopts)
@@ -187,8 +181,8 @@ stmsDoc :: [Doc]
          -> Doc
 stmsDoc stms =
   let
-    nobreaks = hsep (punctuate semicolon stms)
-    breaks = vsep (punctuate semicolon stms)
+    nobreaks = hsep (punctuate semi stms)
+    breaks = vsep (punctuate semi stms)
   in case flatten nobreaks of
     Just nolines -> choose [ nolines, breaks ]
     Nothing -> breaks

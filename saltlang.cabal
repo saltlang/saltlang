@@ -110,7 +110,7 @@ Executable saltc
   build-depends:        base, compiler-misc, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, saltlang, filepath,
-                        blaze-builder, dynamic-pp
+                        blaze-builder, dynamic-pp, bitwise
   hs-source-dirs:       src/saltc
   main-is:              Language/Salt/Compiler/Main.hs
 
@@ -129,7 +129,7 @@ Library
                         mtl >= 2.2, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
                         hashtables, filepath, semigroups, dynamic-pp, data-default,
-                        monad-journal
+                        monad-journal, bitwise
   build-tools:          alex, happy
   hs-source-dirs:       src/library
   exposed-modules:      Control.Monad.Collect
@@ -152,13 +152,13 @@ Library
                         Language.Salt.Frontend
                         Language.Salt.Message
                         Language.Salt.Surface.AST
---                        Language.Salt.Surface.Bindings
                         Language.Salt.Surface.Collect
                         Language.Salt.Surface.Common
                         Language.Salt.Surface.Lexer
                         Language.Salt.Surface.Parser
 --                        Language.Salt.Core.Proofs.ProofScript,
 --                        Language.Salt.Core.Proofs.ProofState,
+--                        Language.Salt.Surface.Scopes
                         Language.Salt.Surface.Syntax
                         Language.Salt.Surface.Token
 
