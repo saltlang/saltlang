@@ -32,7 +32,7 @@
              UndecidableInstances #-}
 
 module Control.Monad.Components(
-       MonadComponents(..),
+       module Control.Monad.Components.Class,
        ComponentsT,
        Components,
        runComponentsT,
@@ -65,32 +65,33 @@ import Language.Salt.Surface.Syntax
 
 import qualified Data.HashTable.IO as HashTable
 
-type Table = BasicHashTable [Symbol] Component
+type Table expty = BasicHashTable [Symbol] (Component expty)
 
-newtype ComponentsT m a = ComponentsT { unpackComponentsT :: ReaderT Table m a }
+newtype ComponentsT expty m a =
+  ComponentsT { unpackComponentsT :: ReaderT (Table expty) m a }
 
-type Components = ComponentsT IO
+type Components expty = ComponentsT expty IO
 
 runComponentsT :: Monad m =>
-                  ComponentsT m a
+                  ComponentsT expty m a
                -- ^ The @ComponentsT@ monad transformer to execute.
-               -> Table
+               -> Table expty
                -- ^ The components table to use.
                -> m a
 runComponentsT c = runReaderT (unpackComponentsT c)
 
-runComponents :: Components a
+runComponents :: Components expty a
               -- ^ The @Components@ monad to execute.
-              -> Table
+              -> Table expty
               -- ^ The components table to use.
               -> IO a
 runComponents = runComponentsT
 
 mapComponentsT :: (Monad m, Monad n) =>
-                  (m a -> n b) -> ComponentsT m a -> ComponentsT n b
+                  (m a -> n b) -> ComponentsT expty m a -> ComponentsT expty n b
 mapComponentsT f = ComponentsT . mapReaderT f . unpackComponentsT
 
-component' :: MonadIO m => [Symbol] -> ReaderT Table m Component
+component' :: MonadIO m => [Symbol] -> ReaderT (Table expty) m (Component expty)
 component' cname =
   do
     tab <- ask
@@ -99,43 +100,44 @@ component' cname =
       Just out -> return out
       Nothing -> error $! "Looking up nonexistent component"
 
-components' :: MonadIO m => ReaderT Table m [([Symbol], Component)]
+components' :: MonadIO m =>
+               ReaderT (Table expty) m [([Symbol], Component expty)]
 components' =
   do
     tab <- ask
     liftIO (HashTable.toList tab)
 
-instance Monad m => Monad (ComponentsT m) where
+instance Monad m => Monad (ComponentsT expty m) where
   return = ComponentsT . return
   s >>= f = ComponentsT $ unpackComponentsT s >>= unpackComponentsT . f
 
-instance Monad m => Applicative (ComponentsT m) where
+instance Monad m => Applicative (ComponentsT expty m) where
   pure = return
   (<*>) = ap
 
-instance (Monad m, Alternative m) => Alternative (ComponentsT m) where
+instance (Monad m, Alternative m) => Alternative (ComponentsT expty m) where
   empty = lift empty
   s1 <|> s2 = ComponentsT (unpackComponentsT s1 <|> unpackComponentsT s2)
 
-instance Functor (ComponentsT m) where
+instance Functor (ComponentsT expty m) where
   fmap = fmap
 
-instance MonadIO m => MonadComponents (ComponentsT m) where
+instance MonadIO m => MonadComponents expty (ComponentsT expty m) where
   component = ComponentsT . component'
   components = ComponentsT components'
 
-instance MonadIO m => MonadIO (ComponentsT m) where
+instance MonadIO m => MonadIO (ComponentsT expty m) where
   liftIO = ComponentsT . liftIO
 
-instance MonadTrans ComponentsT where
+instance MonadTrans (ComponentsT expty) where
   lift = ComponentsT . lift
 
-instance MonadArtifacts path m => MonadArtifacts path (ComponentsT m) where
+instance MonadArtifacts path m => MonadArtifacts path (ComponentsT expty m) where
   artifact path = lift . artifact path
   artifactBytestring path = lift . artifactBytestring path
   artifactLazyBytestring path = lift . artifactLazyBytestring path
 
-instance MonadCommentBuffer m => MonadCommentBuffer (ComponentsT m) where
+instance MonadCommentBuffer m => MonadCommentBuffer (ComponentsT expty m) where
   startComment = lift startComment
   appendComment = lift . appendComment
   finishComment = lift finishComment
@@ -143,75 +145,77 @@ instance MonadCommentBuffer m => MonadCommentBuffer (ComponentsT m) where
   saveCommentsAsPreceeding = lift . saveCommentsAsPreceeding
   clearComments = lift clearComments
 
-instance MonadComments m => MonadComments (ComponentsT m) where
+instance MonadComments m => MonadComments (ComponentsT expty m) where
   preceedingComments = lift . preceedingComments
 
-instance MonadCont m => MonadCont (ComponentsT m) where
+instance MonadCont m => MonadCont (ComponentsT expty m) where
   callCC f =
     ComponentsT (callCC (\c -> unpackComponentsT (f (ComponentsT . c))))
 
-instance (MonadError e m) => MonadError e (ComponentsT m) where
+instance (MonadError e m) => MonadError e (ComponentsT expty m) where
   throwError = lift . throwError
   m `catchError` h =
     ComponentsT (unpackComponentsT m `catchError` (unpackComponentsT . h))
 
-instance MonadGenpos m => MonadGenpos (ComponentsT m) where
+instance MonadGenpos m => MonadGenpos (ComponentsT expty m) where
   point = lift . point
   filename = lift . filename
 
-instance MonadGensym m => MonadGensym (ComponentsT m) where
+instance MonadGensym m => MonadGensym (ComponentsT expty m) where
   symbol = lift . symbol
   unique = lift . unique
 
-instance (Monoid w, MonadJournal w m) => MonadJournal w (ComponentsT m) where
+instance (Monoid w, MonadJournal w m) =>
+         MonadJournal w (ComponentsT expty m) where
   journal = lift . journal
   history = lift history
   clear = lift clear
 
-instance MonadKeywords p t m => MonadKeywords p t (ComponentsT m) where
+instance MonadKeywords p t m => MonadKeywords p t (ComponentsT expty m) where
   mkKeyword p = lift . mkKeyword p
 
-instance MonadMessages msg m => MonadMessages msg (ComponentsT m) where
+instance MonadMessages msg m => MonadMessages msg (ComponentsT expty m) where
   message = lift . message
 
-instance MonadLoader path info m => MonadLoader path info (ComponentsT m) where
+instance MonadLoader path info m =>
+         MonadLoader path info (ComponentsT expty m) where
   load = lift . load
 
-instance MonadPositions m => MonadPositions (ComponentsT m) where
+instance MonadPositions m => MonadPositions (ComponentsT expty m) where
   pointInfo = lift . pointInfo
   fileInfo = lift . fileInfo
 
-instance MonadSourceFiles m => MonadSourceFiles (ComponentsT m) where
+instance MonadSourceFiles m => MonadSourceFiles (ComponentsT expty m) where
   sourceFile = lift . sourceFile
 
-instance MonadSourceBuffer m => MonadSourceBuffer (ComponentsT m) where
+instance MonadSourceBuffer m => MonadSourceBuffer (ComponentsT expty m) where
   linebreak = lift . linebreak
   startFile fname = lift . startFile fname
   finishFile = lift finishFile
 
-instance MonadState s m => MonadState s (ComponentsT m) where
+instance MonadState s m => MonadState s (ComponentsT expty m) where
   get = lift get
   put = lift . put
 
-instance MonadSymbols m => MonadSymbols (ComponentsT m) where
+instance MonadSymbols m => MonadSymbols (ComponentsT expty m) where
   nullSym = lift nullSym
   allNames = lift allNames
   allSyms = lift allSyms
   name = lift . name
 
-instance MonadReader r m => MonadReader r (ComponentsT m) where
+instance MonadReader r m => MonadReader r (ComponentsT expty m) where
   ask = lift ask
   local f = mapComponentsT (local f)
 
-instance MonadWriter w m => MonadWriter w (ComponentsT m) where
+instance MonadWriter w m => MonadWriter w (ComponentsT expty m) where
   tell = lift . tell
   listen = mapComponentsT listen
   pass = mapComponentsT pass
 
-instance MonadPlus m => MonadPlus (ComponentsT m) where
+instance MonadPlus m => MonadPlus (ComponentsT expty m) where
   mzero = lift mzero
   mplus s1 s2 = ComponentsT (mplus (unpackComponentsT s1)
                                    (unpackComponentsT s2))
 
-instance MonadFix m => MonadFix (ComponentsT m) where
+instance MonadFix m => MonadFix (ComponentsT expty m) where
   mfix f = ComponentsT (mfix (unpackComponentsT . f))

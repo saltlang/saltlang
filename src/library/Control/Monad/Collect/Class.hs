@@ -28,10 +28,12 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -Wall -Werror #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 
 -- | Defines a monad class that provides functionality for the Collect
 -- phase.
 module Control.Monad.Collect.Class(
+       MonadCollectBase(..),
        MonadCollect(..)
        ) where
 
@@ -59,112 +61,156 @@ import Language.Salt.Surface.Common
 import Language.Salt.Surface.Syntax(Component)
 
 -- | Monad class providing functionality for the Collect phase.
-class Monad m => MonadCollect m where
+class Monad m => MonadCollectBase m where
   -- | Get a fresh 'ScopeID'
   scopeID :: m ScopeID
-  -- | Finish collecting a component
-  addComponent :: [Symbol]
-               -- ^ The component name.
-               -> Component
-               -- ^ The component body.
-               -> m ()
   -- | Check if a component exists.
   componentExists :: [Symbol]
                   -- ^ The component name
                   -> m Bool
 
-instance MonadCollect m => MonadCollect (CommentBufferT m) where
+-- | Monad class providing ability to add components in the Collect phase.
+class MonadCollectBase m => MonadCollect expty m where
+  -- | Finish collecting a component
+  addComponent :: [Symbol]
+               -- ^ The component name.
+               -> Component expty
+               -- ^ The component body.
+               -> m ()
+
+instance MonadCollectBase m => MonadCollectBase (CommentBufferT m) where
   scopeID = lift scopeID
-  addComponent cname = lift . addComponent cname
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (CommentsT m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (CommentBufferT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (CommentsT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (ContT c m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (CommentsT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (ContT c m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance (MonadCollect m) => MonadCollect (ExceptT e m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (ContT c m) where
   addComponent cname = lift . addComponent cname
+
+instance (MonadCollectBase m) => MonadCollectBase (ExceptT e m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (GenposT m) where
-  scopeID = lift scopeID
+instance (MonadCollect expty m) => MonadCollect expty (ExceptT e m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (GenposT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (GensymT m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (GenposT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (GensymT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance (MonadCollect m, Monoid w) => MonadCollect (JournalT w m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (GensymT m) where
   addComponent cname = lift . addComponent cname
+
+instance (MonadCollectBase m, Monoid w) => MonadCollectBase (JournalT w m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (KeywordsT pos tok m) where
-  scopeID = lift scopeID
+instance (MonadCollect expty m, Monoid w) =>
+         MonadCollect expty (JournalT w m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (KeywordsT pos tok m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (ListT m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (KeywordsT pos tok m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (ListT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (MemoryLoaderT info m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (ListT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (MemoryLoaderT info m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance (MonadCollect m, Monoid msgs) =>
-         MonadCollect (MessagesT msgs msg m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (MemoryLoaderT info m) where
   addComponent cname = lift . addComponent cname
+
+instance (MonadCollectBase m, Monoid msgs) =>
+         MonadCollectBase (MessagesT msgs msg m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (PositionsT m) where
-  scopeID = lift scopeID
+instance (MonadCollect expty m, Monoid msgs) =>
+         MonadCollect expty (MessagesT msgs msg m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (PositionsT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (ReaderT r m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (PositionsT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (ReaderT r m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (SkipCommentsT m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (ReaderT r m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (SkipCommentsT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (SourceFilesT m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (SkipCommentsT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (SourceFilesT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (FileLoaderT m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (SourceFilesT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (FileLoaderT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (StateT s m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (FileLoaderT m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (StateT s m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance MonadCollect m => MonadCollect (SymbolsT m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (StateT s m) where
   addComponent cname = lift . addComponent cname
+
+instance MonadCollectBase m => MonadCollectBase (SymbolsT m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
 
-instance (MonadCollect m, Monoid w) => MonadCollect (WriterT w m) where
-  scopeID = lift scopeID
+instance MonadCollect expty m => MonadCollect expty (SymbolsT m) where
   addComponent cname = lift . addComponent cname
+
+instance (MonadCollectBase m, Monoid w) => MonadCollectBase (WriterT w m) where
+  scopeID = lift scopeID
   componentExists = lift . componentExists
+
+instance (MonadCollect expty m, Monoid w) =>
+         MonadCollect expty (WriterT w m) where
+  addComponent cname = lift . addComponent cname

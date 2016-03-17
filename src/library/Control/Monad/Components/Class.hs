@@ -28,6 +28,7 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -Wall -Werror #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 
 -- | Defines a monad class that provides access to components (the
 -- results of the Collect phase).
@@ -58,87 +59,92 @@ import Data.Symbol
 import Language.Salt.Surface.Syntax
 
 -- | Monad class providing access to components.
-class Monad m => MonadComponents m where
+class Monad m => MonadComponents expty m where
   -- | Get access to the scope defined in a component.
   component :: [Symbol]
             -- ^ The component name.
-            -> m Component
+            -> m (Component expty)
   -- | Get all components that have been defined.
-  components :: m [([Symbol], Component)]
+  components :: m [([Symbol], Component expty)]
 
-instance MonadComponents m => MonadComponents (CommentBufferT m) where
+instance MonadComponents expty m => MonadComponents expty (CommentBufferT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (CommentsT m) where
+instance MonadComponents expty m => MonadComponents expty (CommentsT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (ContT c m) where
+instance MonadComponents expty m => MonadComponents expty (ContT c m) where
   component = lift . component
   components = lift components
 
-instance (MonadComponents m) => MonadComponents (ExceptT e m) where
+instance (MonadComponents expty m) => MonadComponents expty (ExceptT e m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (GenposT m) where
+instance MonadComponents expty m => MonadComponents expty (GenposT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (GensymT m) where
+instance MonadComponents expty m => MonadComponents expty (GensymT m) where
   component = lift . component
   components = lift components
 
-instance (MonadComponents m, Monoid w) => MonadComponents (JournalT w m) where
+instance (MonadComponents expty m, Monoid w) =>
+         MonadComponents expty (JournalT w m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (KeywordsT pos tok m) where
+instance MonadComponents expty m =>
+         MonadComponents expty (KeywordsT pos tok m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (ListT m) where
+instance MonadComponents expty m => MonadComponents expty (ListT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (MemoryLoaderT info m) where
+instance MonadComponents expty m =>
+         MonadComponents expty (MemoryLoaderT info m) where
   component = lift . component
   components = lift components
 
-instance (MonadComponents m, Monoid msgs) =>
-         MonadComponents (MessagesT msgs msg m) where
+instance (MonadComponents expty m, Monoid msgs) =>
+         MonadComponents expty (MessagesT msgs msg m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (PositionsT m) where
+instance MonadComponents expty m => MonadComponents expty (PositionsT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (ReaderT r m) where
+instance MonadComponents expty m => MonadComponents expty (ReaderT r m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (SkipCommentsT m) where
+instance MonadComponents expty m =>
+         MonadComponents expty (SkipCommentsT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (SourceFilesT m) where
+instance MonadComponents expty m => MonadComponents expty (SourceFilesT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (FileLoaderT m) where
+instance MonadComponents expty m => MonadComponents expty (FileLoaderT m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (StateT s m) where
+instance MonadComponents expty m => MonadComponents expty (StateT s m) where
   component = lift . component
   components = lift components
 
-instance MonadComponents m => MonadComponents (SymbolsT m) where
+instance MonadComponents expty m => MonadComponents expty (SymbolsT m) where
   component = lift . component
   components = lift components
 
-instance (MonadComponents m, Monoid w) => MonadComponents (WriterT w m) where
+instance (MonadComponents expty m, Monoid w) =>
+         MonadComponents expty (WriterT w m) where
   component = lift . component
   components = lift components

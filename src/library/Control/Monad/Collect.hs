@@ -32,7 +32,7 @@
              UndecidableInstances #-}
 
 module Control.Monad.Collect(
-       MonadCollect(..),
+       module Control.Monad.Collect.Class,
        CollectT,
        Collect,
        runCollectTComponentsT,
@@ -67,17 +67,17 @@ import Language.Salt.Surface.Syntax
 
 import qualified Data.HashTable.IO as HashTable
 
-type Table = BasicHashTable [Symbol] Component
+type Table expty = BasicHashTable [Symbol] (Component expty)
 
-newtype CollectT m a =
-  CollectT { unpackCollectT :: StateT ScopeID (ReaderT Table m) a }
+newtype CollectT expty m a =
+  CollectT { unpackCollectT :: StateT ScopeID (ReaderT (Table expty) m) a }
 
-type Collect = CollectT IO
+type Collect expty = CollectT expty IO
 
 runCollectTComponentsT :: MonadIO m =>
-                          CollectT m a
+                          CollectT expty m a
                        -- ^ The @CollectT@ monad transformer to execute.
-                       -> (a -> ComponentsT m b)
+                       -> (a -> ComponentsT expty m b)
                        -- ^ The @ComponentsT@ monad transformer to
                        -- execute with the results of the @CollectT@
                        -- monad transformer.
@@ -89,7 +89,7 @@ runCollectTComponentsT collect comps =
     runComponentsT (comps res) tab
 
 runCollectT :: MonadIO m =>
-               CollectT m a
+               CollectT expty m a
             -- ^ The @CollectT@ monad transformer to execute.
             -> m a
 runCollectT c =
@@ -98,65 +98,67 @@ runCollectT c =
     (out, _) <- runReaderT (runStateT (unpackCollectT c) firstScopeID) tab
     return out
 
-runCollect :: Collect a
+runCollect :: Collect expty a
            -- ^ The @Collect@ monad to execute.
            -> IO a
 runCollect = runCollectT
 
-scopeID' :: MonadIO m => StateT ScopeID (ReaderT Table m) ScopeID
+scopeID' :: MonadIO m => StateT ScopeID (ReaderT (Table expty) m) ScopeID
 scopeID' =
   do
     n <- get
     put $! succ n
     return n
 
-addComponent' :: MonadIO m => [Symbol] -> Component ->
-                 StateT ScopeID (ReaderT Table m) ()
+addComponent' :: MonadIO m => [Symbol] -> (Component expty) ->
+                 StateT ScopeID (ReaderT (Table expty) m) ()
 addComponent' cname comp =
   do
     tab <- ask
     liftIO (HashTable.insert tab cname comp)
 
 componentExists' :: MonadIO m =>
-                    [Symbol] -> StateT ScopeID (ReaderT Table m) Bool
+                    [Symbol] -> StateT ScopeID (ReaderT (Table expty) m) Bool
 componentExists' cname =
   do
     tab <- ask
     res <- liftIO (HashTable.lookup tab cname)
     return $! isJust res
 
-instance Monad m => Monad (CollectT m) where
+instance Monad m => Monad (CollectT expty m) where
   return = CollectT . return
   s >>= f = CollectT $ unpackCollectT s >>= unpackCollectT . f
 
-instance Monad m => Applicative (CollectT m) where
+instance Monad m => Applicative (CollectT expty m) where
   pure = return
   (<*>) = ap
 
-instance (MonadPlus m, Alternative m) => Alternative (CollectT m) where
+instance (MonadPlus m, Alternative m) => Alternative (CollectT expty m) where
   empty = lift empty
   s1 <|> s2 = CollectT (unpackCollectT s1 <|> unpackCollectT s2)
 
-instance Functor (CollectT m) where
+instance Functor (CollectT expty m) where
   fmap = fmap
 
-instance MonadIO m => MonadCollect (CollectT m) where
+instance MonadIO m => MonadCollectBase (CollectT expty m) where
   scopeID = CollectT scopeID'
-  addComponent cname = CollectT . addComponent' cname
   componentExists = CollectT . componentExists'
 
-instance MonadIO m => MonadIO (CollectT m) where
+instance MonadIO m => MonadCollect expty (CollectT expty m) where
+  addComponent cname = CollectT . addComponent' cname
+
+instance MonadIO m => MonadIO (CollectT expty m) where
   liftIO = CollectT . liftIO
 
-instance MonadTrans CollectT where
+instance MonadTrans (CollectT expty) where
   lift = CollectT . lift . lift
 
-instance MonadArtifacts path m => MonadArtifacts path (CollectT m) where
+instance MonadArtifacts path m => MonadArtifacts path (CollectT expty m) where
   artifact path = lift . artifact path
   artifactBytestring path = lift . artifactBytestring path
   artifactLazyBytestring path = lift . artifactLazyBytestring path
 
-instance MonadCommentBuffer m => MonadCommentBuffer (CollectT m) where
+instance MonadCommentBuffer m => MonadCommentBuffer (CollectT expty m) where
   startComment = lift startComment
   appendComment = lift . appendComment
   finishComment = lift finishComment
@@ -164,65 +166,66 @@ instance MonadCommentBuffer m => MonadCommentBuffer (CollectT m) where
   saveCommentsAsPreceeding = lift . saveCommentsAsPreceeding
   clearComments = lift clearComments
 
-instance MonadComments m => MonadComments (CollectT m) where
+instance MonadComments m => MonadComments (CollectT expty m) where
   preceedingComments = lift . preceedingComments
 
-instance MonadCont m => MonadCont (CollectT m) where
+instance MonadCont m => MonadCont (CollectT expty m) where
   callCC f = CollectT (callCC (\c -> unpackCollectT (f (CollectT . c))))
 
-instance (MonadError e m) => MonadError e (CollectT m) where
+instance (MonadError e m) => MonadError e (CollectT expty m) where
   throwError = lift . throwError
   m `catchError` h =
     CollectT (unpackCollectT m `catchError` (unpackCollectT . h))
 
-instance MonadGenpos m => MonadGenpos (CollectT m) where
+instance MonadGenpos m => MonadGenpos (CollectT expty m) where
   point = lift . point
   filename = lift . filename
 
-instance MonadGensym m => MonadGensym (CollectT m) where
+instance MonadGensym m => MonadGensym (CollectT expty m) where
   symbol = lift . symbol
   unique = lift . unique
 
-instance (Monoid w, MonadJournal w m) => MonadJournal w (CollectT m) where
+instance (Monoid w, MonadJournal w m) => MonadJournal w (CollectT expty m) where
   journal = lift . journal
   history = lift history
   clear = lift clear
 
-instance MonadKeywords p t m => MonadKeywords p t (CollectT m) where
+instance MonadKeywords p t m => MonadKeywords p t (CollectT expty m) where
   mkKeyword p = lift . mkKeyword p
 
-instance MonadMessages msg m => MonadMessages msg (CollectT m) where
+instance MonadMessages msg m => MonadMessages msg (CollectT expty m) where
   message = lift . message
 
-instance MonadLoader path info m => MonadLoader path info (CollectT m) where
+instance MonadLoader path info m =>
+         MonadLoader path info (CollectT expty m) where
   load = lift . load
 
-instance MonadPositions m => MonadPositions (CollectT m) where
+instance MonadPositions m => MonadPositions (CollectT expty m) where
   pointInfo = lift . pointInfo
   fileInfo = lift . fileInfo
 
-instance MonadSourceFiles m => MonadSourceFiles (CollectT m) where
+instance MonadSourceFiles m => MonadSourceFiles (CollectT expty m) where
   sourceFile = lift . sourceFile
 
-instance MonadSourceBuffer m => MonadSourceBuffer (CollectT m) where
+instance MonadSourceBuffer m => MonadSourceBuffer (CollectT expty m) where
   linebreak = lift . linebreak
   startFile fname = lift . startFile fname
   finishFile = lift finishFile
 
-instance MonadState s m => MonadState s (CollectT m) where
+instance MonadState s m => MonadState s (CollectT expty m) where
   get = lift get
   put = lift . put
 
-instance MonadSymbols m => MonadSymbols (CollectT m) where
+instance MonadSymbols m => MonadSymbols (CollectT expty m) where
   nullSym = lift nullSym
   allNames = lift allNames
   allSyms = lift allSyms
   name = lift . name
 
-instance MonadPlus m => MonadPlus (CollectT m) where
+instance MonadPlus m => MonadPlus (CollectT expty m) where
   mzero = lift mzero
   mplus s1 s2 = CollectT (mplus (unpackCollectT s1)
                           (unpackCollectT s2))
 
-instance MonadFix m => MonadFix (CollectT m) where
+instance MonadFix m => MonadFix (CollectT expty m) where
   mfix f = CollectT (mfix (unpackCollectT . f))

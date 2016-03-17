@@ -59,7 +59,7 @@ import Language.Salt.Surface.AST(AST, astDot)
 import Language.Salt.Surface.Collect
 import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
-import Language.Salt.Surface.Syntax(Component)
+import Language.Salt.Surface.Syntax(Component, Exp)
 import Language.Salt.Surface.Token
 import Prelude hiding (lex)
 import System.IO.Error
@@ -189,7 +189,7 @@ printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
 
 printTextSurface :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
                      MonadArtifacts Strict.ByteString m) =>
-                    Strict.ByteString -> Component -> m ()
+                    Strict.ByteString -> Component (Exp Symbol) -> m ()
 printTextSurface fname scope =
   let
     surfacefile = Strict.append fname surfaceExt
@@ -199,7 +199,7 @@ printTextSurface fname scope =
 
 printXMLSurface :: (MonadArtifacts Strict.ByteString m,
                     MonadMessages Message m) =>
-                   Strict.ByteString -> Component -> m ()
+                   Strict.ByteString -> Component (Exp Symbol) -> m ()
 printXMLSurface fname scope =
   let
     xmlfile = Strict.concat [fname, surfaceExt, xmlExt]
@@ -212,7 +212,7 @@ printXMLSurface fname scope =
 
 printSurface :: (MonadIO m, MonadPositions m, MonadSymbols m,
                  MonadMessages Message m, MonadArtifacts Strict.ByteString m) =>
-                Save -> Strict.ByteString -> Component -> m ()
+                Save -> Strict.ByteString -> Component (Exp Symbol) -> m ()
 printSurface Save { saveXML = savexml, saveText = savetxt }
              fname ast =
   do
@@ -408,12 +408,13 @@ parse Options { optStages = stages, optComponents = False } names
     in
       mapM_ (parseFile CmdLine) names
 
-dumpSurface :: Options -> ComponentsT (FileArtifactsT Frontend) ()
+dumpSurface :: Options -> ComponentsT (Exp Symbol) (FileArtifactsT Frontend) ()
 dumpSurface Options { optStages = stages } =
   let
     savesurface = stages ! Collect
 
-    mapfun :: ([Symbol], Component) -> ComponentsT (FileArtifactsT Frontend) ()
+    mapfun :: ([Symbol], Component (Exp Symbol)) ->
+              ComponentsT (Exp Symbol) (FileArtifactsT Frontend) ()
     mapfun (cname, scope) =
       do
         fname <- componentFileName cname
@@ -429,7 +430,7 @@ collect :: Options
         -- ^ Compiler options
         -> [Strict.ByteString]
         -- ^ Inputs to parse.
-        -> CollectT (FileArtifactsT Frontend) ()
+        -> CollectT (Exp Symbol) (FileArtifactsT Frontend) ()
 collect Options { optStages = stages, optComponents = compnames } names
   | saveText (stages ! Lexer) || saveXML (stages ! Lexer) =
     let
@@ -437,7 +438,7 @@ collect Options { optStages = stages, optComponents = compnames } names
       saveast = stages ! Parser
 
       parseFile :: Filename -> Lazy.ByteString ->
-                   CollectT (FileArtifactsT Frontend) (Maybe AST)
+                   CollectT (Exp Symbol) (FileArtifactsT Frontend) (Maybe AST)
       parseFile fname content =
         do
           (out, tokens) <- lift (lift (parser fname content))
@@ -459,7 +460,7 @@ collect Options { optStages = stages, optComponents = compnames } names
       saveast = stages ! Parser
 
       parseFile :: Filename -> Lazy.ByteString ->
-                   CollectT (FileArtifactsT Frontend) (Maybe AST)
+                   CollectT (Exp Symbol) (FileArtifactsT Frontend) (Maybe AST)
       parseFile fname content =
         do
           out <- lift (lift (parserNoTokens fname content))
