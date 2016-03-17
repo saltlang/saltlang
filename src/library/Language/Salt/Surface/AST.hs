@@ -128,9 +128,9 @@ data Group =
 -- body, or else an expression.
 data Content =
     -- | An actual definition body.
-    Body !Scope
+    Body { bodyScope :: !Scope }
     -- | An expression.
-  | Value !Exp
+  | Value { valueExp :: !Exp }
 
 -- | Type of a scope.
 type Scope = [Group]
@@ -217,9 +217,9 @@ data Element =
 -- expressions, or declarations.
 data Compound =
     -- | An ordinary expression.
-    Exp !Exp
+    Exp { expVal :: !Exp }
     -- | A definition.
-  | Element !Element
+  | Element { elemVal :: !Element }
 
 -- | A pattern, for pattern match expressions.
 data Pattern =
@@ -276,7 +276,8 @@ data Pattern =
       -- | The position in source from which this arises.
       namePos :: !Position
     }
-  | Exact !Literal
+    -- | An exact pattern.  Matches only the given literal.
+  | Exact { exactLit :: !Literal }
 
 -- | Expressions.  These represent computed values of any type.
 data Exp =
@@ -396,7 +397,7 @@ data Exp =
       anonPos :: !Position
     }
     -- | Number literal.
-  | Literal !Literal
+  | Literal { literalVal :: !Literal }
 
 -- | An entry in a record field or call argument list.
 data Entry =
@@ -411,7 +412,7 @@ data Entry =
       namedPos :: !Position
      }
     -- | Unnamed field.  This is just an expression.
-  | Unnamed !Pattern
+  | Unnamed { unnamedPat :: !Pattern }
 
 -- | A field.
 data Field =
@@ -451,11 +452,11 @@ patternPosition Split { splitPos = pos } = pos
 patternPosition Typed { typedPos = pos } = pos
 patternPosition As { asPos = pos } = pos
 patternPosition Name { namePos = pos } = pos
-patternPosition (Exact l) = literalPosition l
+patternPosition Exact { exactLit = l } = literalPosition l
 
 compoundPosition :: Compound -> Position
-compoundPosition (Exp e) = expPosition e
-compoundPosition (Element e) = elementPosition e
+compoundPosition Exp { expVal = e } = expPosition e
+compoundPosition Element { elemVal = e } = elementPosition e
 
 expPosition :: Exp -> Position
 expPosition Compound { compoundPos = pos } = pos
@@ -470,7 +471,7 @@ expPosition Sym { symPos = pos } = pos
 expPosition With { withPos = pos } = pos
 expPosition Where { wherePos = pos } = pos
 expPosition Anon { anonPos = pos } = pos
-expPosition (Literal l) = literalPosition l
+expPosition Literal { literalVal = l } = literalPosition l
 
 casePosition :: Case -> Position
 casePosition Case { casePos = pos } = pos
@@ -488,8 +489,8 @@ instance Eq Group where
       vis1 == vis2 && elems1 == elems2
 
 instance Eq Content where
-  Body b1 == Body b2 = b1 == b2
-  Value v1 == Value v2 = v1 == v2
+  Body { bodyScope = b1 } == Body { bodyScope = b2 } = b1 == b2
+  Value { valueExp = v1 } == Value { valueExp = v2 } = v1 == v2
   _ == _ = False
 
 instance Eq Element where
@@ -518,8 +519,8 @@ instance Eq Element where
   _ == _ = False
 
 instance Eq Compound where
-  Exp e1 == Exp e2 = e1 == e2
-  Element e1 == Element e2 = e1 == e2
+  Exp { expVal = e1 } == Exp { expVal = e2 } = e1 == e2
+  Element { elemVal = e1 } == Element { elemVal = e2 } = e1 == e2
   _ == _ = False
 
 instance Eq Pattern where
@@ -537,7 +538,7 @@ instance Eq Pattern where
   As { asName = name1, asPat = pat1 } == As { asName = name2, asPat = pat2 } =
       name1 == name2 && pat1 == pat2
   Name { nameSym = name1 } == Name { nameSym = name2 } = name1 == name2
-  Exact e1 == Exact e2 = e1 == e2
+  Exact { exactLit = e1 } == Exact { exactLit = e2 } = e1 == e2
   _ == _ = False
 
 instance Eq Exp where
@@ -574,14 +575,14 @@ instance Eq Exp where
            anonSuperTypes = supers2, anonContent = body2 } =
       cls1 == cls2 && params1 == params2 &&
       supers1 == supers2 && body1 == body2
-  Literal lit1 == Literal lit2 = lit1 == lit2
+  Literal { literalVal = lit1 } == Literal { literalVal = lit2 } = lit1 == lit2
   _ == _ = False
 
 instance Eq Entry where
   Named { namedSym = name1, namedVal = val1 } ==
     Named { namedSym = name2, namedVal = val2 } =
     name1 == name2 && val1 == val2
-  Unnamed e1 == Unnamed e2 = e1 == e2
+  Unnamed { unnamedPat = e1 } == Unnamed { unnamedPat = e2 } = e1 == e2
   _ == _ = False
 
 instance Eq Field where
@@ -611,10 +612,10 @@ instance Ord Group where
         out -> out
 
 instance Ord Content where
-  compare (Body b1) (Body b2) = compare b1 b2
-  compare (Body _) _ = GT
-  compare _ (Body _) = LT
-  compare (Value v1) (Value v2) = compare v1 v2
+  compare Body { bodyScope = b1 } Body { bodyScope = b2 } = compare b1 b2
+  compare Body {} _ = GT
+  compare _ Body {} = LT
+  compare Value { valueExp = v1 } Value { valueExp = v2 } = compare v1 v2
 
 instance Ord Element where
   compare Builder { builderName = name1, builderKind = cls1,
@@ -676,10 +677,10 @@ instance Ord Element where
     compare exp1 exp2
 
 instance Ord Compound where
-  compare (Exp e1) (Exp e2) = compare e1 e2
-  compare (Exp _) _ = GT
-  compare _ (Exp _) = LT
-  compare (Element e1) (Element e2) = compare e1 e2
+  compare Exp { expVal = e1} Exp { expVal = e2 } = compare e1 e2
+  compare Exp {} _ = GT
+  compare _ Exp {} = LT
+  compare Element { elemVal = e1 } Element { elemVal = e2 } = compare e1 e2
 
 instance Ord Pattern where
   compare Option { optionPats = pats1 } Option { optionPats = pats2 } =
@@ -718,7 +719,7 @@ instance Ord Pattern where
     compare name1 name2
   compare Name {} _ = GT
   compare _ Name {} = LT
-  compare (Exact e1) (Exact e2) = compare e1 e2
+  compare Exact { exactLit = e1 } Exact { exactLit = e2 } = compare e1 e2
 
 instance Ord Exp where
   compare Compound { compoundBody = body1 } Compound { compoundBody = body2 } =
@@ -797,7 +798,8 @@ instance Ord Exp where
       out -> out
   compare Anon {} _ = GT
   compare _ Anon {} = LT
-  compare (Literal lit1) (Literal lit2) = compare lit1 lit2
+  compare Literal { literalVal = lit1 } Literal { literalVal = lit2 } =
+    compare lit1 lit2
 
 instance Ord Entry where
   compare Named { namedSym = name1, namedVal = val1 }
@@ -807,7 +809,8 @@ instance Ord Entry where
       out -> out
   compare Named {} _ = GT
   compare _ Named {} = LT
-  compare (Unnamed e1) (Unnamed e2) = compare e1 e2
+  compare Unnamed { unnamedPat = e1 } Unnamed { unnamedPat = e2 } =
+    compare e1 e2
 
 instance Ord Field where
   compare Field { fieldName = name1, fieldVal = val1 }
@@ -839,8 +842,10 @@ instance Hashable Group where
     s `hashWithSalt` vis `hashWithSalt` elems
 
 instance Hashable Content where
-  hashWithSalt s (Body b) = s `hashWithSalt` (1 :: Int) `hashWithSalt` b
-  hashWithSalt s (Value v) = s `hashWithSalt` (2 :: Int) `hashWithSalt` v
+  hashWithSalt s Body { bodyScope = b } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` b
+  hashWithSalt s Value { valueExp = v } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` v
 
 instance Hashable Element where
   hashWithSalt s Builder { builderName = sym, builderKind = cls,
@@ -864,8 +869,10 @@ instance Hashable Element where
     s `hashWithSalt` (8 :: Int) `hashWithSalt` exp
 
 instance Hashable Compound where
-  hashWithSalt s (Element e) = s `hashWithSalt` (1 :: Int) `hashWithSalt` e
-  hashWithSalt s (Exp e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
+  hashWithSalt s Element { elemVal = e } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` e
+  hashWithSalt s Exp { expVal = e } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` e
 
 instance Hashable Pattern where
   hashWithSalt s Option { optionPats = pats } =
@@ -909,7 +916,7 @@ instance Hashable  Exp where
                         anonSuperTypes = supers, anonContent = body } =
     s `hashWithSalt` (12 :: Int) `hashWithSalt` cls `hashWithSalt`
     params `hashWithSalt` supers `hashWithSalt` body
-  hashWithSalt s (Literal lit) =
+  hashWithSalt s Literal { literalVal = lit } =
     s `hashWithSalt` (13 :: Int) `hashWithSalt` lit
 
 instance Hashable Field where
@@ -923,7 +930,8 @@ instance Hashable Case where
 instance Hashable Entry where
   hashWithSalt s Named { namedSym = sym, namedVal = val } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` sym `hashWithSalt` val
-  hashWithSalt s (Unnamed e) = s `hashWithSalt` (2 :: Int) `hashWithSalt` e
+  hashWithSalt s Unnamed { unnamedPat = p } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` p
 
 astDot :: MonadSymbols m => AST -> m Doc
 astDot AST { astComponent = Just component, astUses = uses, astScope = scope } =
@@ -1003,7 +1011,7 @@ groupDot Group { groupVisibility = vis, groupElements = elems } =
             char ';' <!> vcat (map (elemEdge nodeid) bodyContents), nodeid)
 
 builderBodyDot :: MonadSymbols m => Content -> StateT Word m (Doc, String)
-builderBodyDot (Body elems) =
+builderBodyDot Body { bodyScope = elems } =
   let
     groupEdge nodeid (_, groupname) =
       dquoted (string nodeid) <> string ":groups" <>
@@ -1018,7 +1026,7 @@ builderBodyDot (Body elems) =
                                string "<groups> groups") <!>
                       string "shape = \"record\"") <>
             char ';' <!> vcat (map (groupEdge nodeid) bodyContents), nodeid)
-builderBodyDot (Value elems) =
+builderBodyDot Value { valueExp = elems } =
   do
     nodeid <- getNodeID
     (valuenode, valuename) <-expDot elems
@@ -1179,8 +1187,8 @@ elementDot Syntax { syntaxExp = exp } =
             string " -> " <> dquoted (string expname), nodeid)
 
 compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
-compoundDot (Exp e) = expDot e
-compoundDot (Element e) = elementDot e
+compoundDot Exp { expVal = e } = expDot e
+compoundDot Element { elemVal = e } = elementDot e
 
 patternDot :: MonadSymbols m => Pattern -> StateT Word m (Doc, String)
 patternDot Option { optionPats = pats } =
@@ -1278,7 +1286,7 @@ patternDot Name { nameSym = sym } =
                                string "\\\"" <> bytestring namestr <>
                                string "\\\"") <!>
                       string "shape = \"record\"") <> char ';', nodeid)
-patternDot (Exact e) =
+patternDot Exact { exactLit = e } =
   do
     nodeid <- getNodeID
     (bodynode, bodyname) <- literalDot e
@@ -1423,7 +1431,8 @@ expDot Project { projectVal = val, projectFields = fields } =
             brackets (string "label = " <>
                       dquoted (string "Project | " <>
                                string "\\\"" <>
-                               bytestring (Strict.intercalate commabstr names) <>
+                               bytestring (Strict.intercalate commabstr
+                                                              names) <>
                                string "\\\"" <>
                                string "<val> value") <!>
                       string "shape = \"record\"") <>
@@ -1500,7 +1509,7 @@ expDot Anon { anonKind = cls, anonParams = params,
             char ';' <!> vcat (map (paramEdge nodeid) paramContents) <!>
             vcat (map (supersEdge nodeid) supersContents) <!>
             vcat (map (groupEdge nodeid) bodyContents), nodeid)
-expDot (Literal l) =
+expDot Literal { literalVal = l } =
   do
     nodeid <- getNodeID
     (bodynode, bodyname) <- literalDot l
@@ -1527,17 +1536,17 @@ entryDot Named { namedSym = sym, namedVal = val } =
                       string "shape = \"record\"") <>
             char ';' <!> dquoted (string nodeid) <> string ":value" <>
             string " -> " <> dquoted (string expname), nodeid)
-entryDot (Unnamed e) =
+entryDot Unnamed { unnamedPat = p } =
   do
     nodeid <- getNodeID
-    (expnode, expname) <- patternDot e
-    return (expnode <!> dquoted (string nodeid) <+>
+    (patnode, patname) <- patternDot p
+    return (patnode <!> dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Unnamed | " <>
                                string "<value> value") <!>
                       string "shape = \"record\"") <>
             char ';' <!> dquoted (string nodeid) <> string ":value" <>
-          string " -> " <> dquoted (string expname), nodeid)
+          string " -> " <> dquoted (string patname), nodeid)
 
 fieldDot :: MonadSymbols m => Field -> StateT Word m (Doc, String)
 fieldDot Field { fieldName = FieldName { fieldSym = sym },
@@ -1626,12 +1635,12 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m [Group] where
   formatM = liftM listDoc . mapM formatM
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Content where
-  formatM (Body b) =
+  formatM Body { bodyScope = b } =
     do
       valdoc <- formatM b
       return (compoundApplyDoc (string "Body")
                              [(string "value", valdoc)])
-  formatM (Value v) =
+  formatM Value { valueExp = v } =
     do
       valdoc <- formatM v
       return (compoundApplyDoc (string "Value")
@@ -1730,8 +1739,8 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
                               (string "pos", posdoc)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
-  formatM (Exp e) = formatM e
-  formatM (Element e) = formatM e
+  formatM Exp { expVal = e } = formatM e
+  formatM Element { elemVal = e } = formatM e
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
   formatM Option { optionPats = pats, optionPos = pos } =
@@ -1792,7 +1801,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
       return (compoundApplyDoc (string "Name")
                              [(string "name", namedoc),
                               (string "pos", posdoc)])
-  formatM (Exact e) = formatM e
+  formatM Exact { exactLit = e } = formatM e
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
   formatM Compound { compoundBody = body, compoundPos = pos } =
@@ -1908,7 +1917,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
                               (string "params", listDoc paramdocs),
                               (string "supers", listDoc superdocs),
                               (string "body", listDoc bodydoc)])
-  formatM (Literal l) = formatM l
+  formatM Literal { literalVal = l } = formatM l
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Entry where
   formatM Named { namedSym = sym, namedVal = val, namedPos = pos } =
@@ -1920,11 +1929,11 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Entry where
                              [(string "name", namedoc),
                               (string "pos", posdoc),
                               (string "value", valdoc)])
-  formatM (Unnamed e) =
+  formatM Unnamed { unnamedPat = p } =
     do
-      valdoc <- formatM e
+      valdoc <- formatM p
       return (compoundApplyDoc (string "Unnamed")
-                             [(string "value", valdoc)])
+                             [(string "pat", valdoc)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Field where
   formatM Field { fieldName = sym, fieldVal = val, fieldPos = pos } =
@@ -2002,7 +2011,7 @@ bodyPickler :: (GenericXMLString tag, Show tag,
                PU [NodeG [] tag text] Content
 bodyPickler =
   let
-    revfunc (Body b) = b
+    revfunc Body { bodyScope = b } = b
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Body, revfunc) (xpElemNodes (gxFromString "Body") xpickle)
@@ -2012,7 +2021,7 @@ valuePickler :: (GenericXMLString tag, Show tag,
                PU [NodeG [] tag text] Content
 valuePickler =
   let
-    revfunc (Value v) = v
+    revfunc Value { valueExp = v } = v
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Value, revfunc) (xpElemNodes (gxFromString "Value") xpickle)
@@ -2021,8 +2030,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Content where
   xpickle =
     let
-      picker (Body _) = 0
-      picker (Value _) = 1
+      picker Body {} = 0
+      picker Value {} = 1
     in
       xpAlt picker [bodyPickler, valuePickler]
 
@@ -2162,7 +2171,7 @@ expPickler :: (GenericXMLString tag, Show tag,
               PU [NodeG [] tag text] Compound
 expPickler =
   let
-    revfunc (Exp e) = e
+    revfunc Exp { expVal = e } = e
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Exp, revfunc) (xpElemNodes (gxFromString "Exp") xpickle)
@@ -2172,7 +2181,7 @@ elementPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] Compound
 elementPickler =
   let
-    revfunc (Element e) = e
+    revfunc Element { elemVal = e } = e
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Element, revfunc) (xpElemNodes (gxFromString "Element") xpickle)
@@ -2181,8 +2190,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Compound where
   xpickle =
     let
-      picker (Exp _) = 0
-      picker (Element _) = 1
+      picker Exp {} = 0
+      picker Element {} = 1
     in
       xpAlt picker [expPickler, elementPickler]
 
@@ -2282,7 +2291,7 @@ exactPickler :: (GenericXMLString tag, Show tag,
                PU [NodeG [] tag text] Pattern
 exactPickler =
   let
-    revfunc (Exact v) = v
+    revfunc Exact { exactLit = v } = v
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Exact, revfunc) (xpElemNodes (gxFromString "Exact") xpickle)
@@ -2297,7 +2306,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker Typed {} = 3
       picker As {} = 4
       picker Name {} = 5
-      picker (Exact _) = 6
+      picker Exact {} = 6
     in
       xpAlt picker [optionPickler, deconstructPickler, splitPickler,
                     typedPickler, asPickler, namePickler, exactPickler]
@@ -2494,7 +2503,7 @@ literalPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] Exp
 literalPickler =
   let
-    revfunc (Literal v) = v
+    revfunc Literal { literalVal = v } = v
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Literal, revfunc) (xpElemNodes (gxFromString "Literal") xpickle)
@@ -2515,7 +2524,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker With {} = 9
       picker Where {} = 10
       picker Anon {} = 11
-      picker (Literal _) = 12
+      picker Literal {} = 12
     in
       xpAlt picker [compoundPickler, absPickler, matchPickler, ascribePickler,
                     seqPickler, recordPickler, tuplePickler, projectPickler,
@@ -2542,7 +2551,7 @@ unnamedPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] Entry
 unnamedPickler =
   let
-    revfunc (Unnamed v) = v
+    revfunc Unnamed { unnamedPat = v } = v
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (Unnamed, revfunc)
@@ -2553,7 +2562,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
   xpickle =
     let
       picker Named {} = 0
-      picker (Unnamed _) = 1
+      picker Unnamed {} = 1
     in
       xpAlt picker [namedPickler, unnamedPickler]
 
