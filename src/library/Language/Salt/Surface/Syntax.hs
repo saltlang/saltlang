@@ -44,7 +44,8 @@ module Language.Salt.Surface.Syntax(
        Proof(..),
        Scope(..),
        Builder(..),
-       Element(..),
+       Def(..),
+       Import(..),
        Compound(..),
        Pattern(..),
        Literal(..),
@@ -68,7 +69,7 @@ import Data.Word
 import Language.Salt.Format
 import Language.Salt.Surface.Common
 import Prelude hiding (init, exp, Either(..))
-import Text.Format
+import Text.Format hiding ((<$>))
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
@@ -104,9 +105,11 @@ data Scope expty =
     -- theorems, axioms, and invariants.
     scopeTruths :: !(HashMap Symbol (Truth expty)),
     -- | All concrete definitions for this scope.
-    scopeElems :: !(Array Visibility [Element expty]),
+    scopeElems :: !(Array Visibility [Def expty]),
     -- | Proofs given in this scope.
-    scopeProofs :: ![Proof expty]
+    scopeProofs :: ![Proof expty],
+    -- | Imports in this scope.
+    scopeImports :: ![Import expty]
   }
   deriving Eq
 
@@ -168,48 +171,37 @@ data Proof expty =
       proofPos :: !Position
     }
 
--- | Scope elements.  These represent declarations and imports
--- statements inside a scope.
-data Element expty =
-    -- | Value definitions.  These are declarations coupled with
-    -- values.  These include function declarations.
-    Def {
-      -- | The binding pattern.
-      defPattern :: !(Pattern expty),
-      -- | The value's initializer.
-      defInit :: !(Maybe expty),
-      -- | The position in source from which this arises.
-      defPos :: !Position
-    }
-    -- | An import directive.
-  | Import {
-      -- | The name(s) to import.
-      importExp :: !expty,
-      -- | The position in source from which this arises.
-      importPos :: !Position
-     }
+-- | Value Definitions.
+data Def expty =
+  -- | Value definitions.  These are declarations coupled with
+  -- values.  These include function declarations.
+  Def {
+    -- | The binding pattern.
+    defPattern :: !(Pattern expty),
+    -- | The value's initializer.
+    defInit :: !(Maybe expty),
+    -- | The position in source from which this arises.
+    defPos :: !Position
+  }
+
+-- | An import.
+data Import expty =
+  Import {
+    -- | The visibility of the truth.
+    importVisibility :: !Visibility,
+    -- | The name(s) to import.
+    importExp :: !expty,
+    -- | The position in source from which this arises.
+    importPos :: !Position
+  }
 
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
 data Compound expty =
     -- | An ordinary expression.
     Exp { expVal :: !expty }
-    -- | A regular definition.
-  | Element { elemVal :: !(Element expty) }
-    -- | A dynamic truth definition.
-  | LocalTruth {
-      -- | Name of the truth definition.
-      localTruthName :: !Symbol,
-      -- | The local truth definition.
-      localTruth :: !(Truth expty)
-    }
-    -- | A local builder definition.
-  | LocalBuilder {
-      -- | The name of the builder.
-      localBuilderName :: !Symbol,
-      -- | The local builder definition.
-      localBuilder :: !(Builder expty)
-    }
+    -- | The position of a declaration.
+  | Decl { declSym :: !Symbol }
 
 -- | A pattern, for pattern match expressions.
 data Pattern expty =
@@ -275,11 +267,6 @@ data Exp refty =
     -- directives and proofs are moved out-of-line, while truths,
     -- builders, and regular definitions remain in-line.
     Compound {
-      -- | Syntax directives that occurred in the compound expression.
-      compoundSyntax :: !(HashMap Symbol (Syntax (Exp refty))),
-      -- | Proofs given in the compound expression.
-      compoundProofs :: ![Proof (Exp refty)],
-      -- | The body of the compound expression.
       compoundBody :: ![Compound (Exp refty)],
       -- | The position in source from which this arises.
       compoundPos :: !Position
@@ -358,7 +345,7 @@ data Exp refty =
     -- Bound framework.
   | Sym {
       -- | The name being referenced.
-      symName :: !refty,
+      symRef :: !refty,
       -- | The position in source from which this arises.
       symPos :: !Position
     }
@@ -480,22 +467,19 @@ instance Eq expty => Eq (Proof expty) where
     Proof { proofName = name2, proofBody = body2 } =
       name1 == name2 && body1 == body2
 
-instance Eq expty => Eq (Element expty) where
+instance Eq expty => Eq (Def expty) where
   Def { defPattern = pat1, defInit = init1 } ==
     Def { defPattern = pat2, defInit = init2 } =
       pat1 == pat2 && init1 == init2
-  Import { importExp = exp1 } == Import { importExp = exp2 } = exp1 == exp2
-  _ == _ = False
+
+instance Eq expty => Eq (Import expty) where
+  Import { importVisibility = vis1, importExp = exp1 } ==
+    Import { importVisibility = vis2, importExp = exp2 } =
+      vis1 == vis2 && exp1 == exp2
 
 instance Eq expty => Eq (Compound expty) where
   Exp { expVal = exp1 } == Exp { expVal = exp2 } = exp1 == exp2
-  Element { elemVal = elem1 } == Element { elemVal = elem2 } = elem1 == elem2
-  LocalTruth { localTruthName = name1, localTruth = truth1 } ==
-    LocalTruth { localTruthName = name2, localTruth = truth2 } =
-      name1 == name2 && truth1 == truth2
-  LocalBuilder { localBuilderName = name1, localBuilder = builder1 } ==
-    LocalBuilder { localBuilderName = name2, localBuilder = builder2 } =
-      name1 == name2 && builder1 == builder2
+  Decl { declSym = sym1 } == Decl { declSym = sym2 } = sym1 == sym2
   _ == _ = False
 
 instance Eq expty => Eq (Pattern expty) where
@@ -518,11 +502,8 @@ instance Eq expty => Eq (Pattern expty) where
   _ == _ = False
 
 instance Eq refty => Eq (Exp refty) where
-  Compound { compoundSyntax = syntax1, compoundProofs = proofs1,
-             compoundBody = body1 } ==
-    Compound { compoundSyntax = syntax2, compoundProofs = proofs2,
-               compoundBody = body2 } =
-      syntax1 == syntax2 && proofs1 == proofs2 && body1 == body2
+  Compound { compoundBody = body1 } == Compound { compoundBody = body2 } =
+    body1 == body2
   Abs { absKind = kind1, absCases = cases1 } ==
     Abs { absKind = kind2, absCases = cases2 } =
       kind1 == kind2 && cases1 == cases2
@@ -543,7 +524,7 @@ instance Eq refty => Eq (Exp refty) where
   Project { projectVal = val1, projectFields = names1 } ==
     Project { projectVal = val2, projectFields = names2 } =
       names1 == names2 && val1 == val2
-  Sym { symName = sym1 } == Sym { symName = sym2 } = sym1 == sym2
+  Sym { symRef = sym1 } == Sym { symRef = sym2 } = sym1 == sym2
   With { withVal = val1, withArgs = args1 } ==
     With { withVal = val2, withArgs = args2 } =
       val1 == val2 && args1 == args2
@@ -598,10 +579,10 @@ instance Ord expty => Ord (Truth expty) where
 instance Ord expty => Ord (Scope expty) where
   compare Scope { scopeBuilders = builders1, scopeSyntax = syntax1,
                   scopeTruths = truths1, scopeElems = defs1,
-                  scopeProofs = proofs1 }
+                  scopeProofs = proofs1, scopeImports = imports1 }
           Scope { scopeBuilders = builders2, scopeSyntax = syntax2,
                   scopeTruths = truths2, scopeElems = defs2,
-                  scopeProofs = proofs2 } =
+                  scopeProofs = proofs2, scopeImports = imports2 } =
     let
       builderlist1 = sort (HashMap.toList builders1)
       builderlist2 = sort (HashMap.toList builders2)
@@ -614,7 +595,9 @@ instance Ord expty => Ord (Scope expty) where
         EQ -> case compare syntaxlist1 syntaxlist2 of
           EQ -> case compare truthlist1 truthlist2 of
             EQ -> case compare defs1 defs2 of
-              EQ -> compare proofs1 proofs2
+              EQ -> case compare proofs1 proofs2 of
+                EQ -> compare imports1 imports2
+                out -> out
               out -> out
             out -> out
           out -> out
@@ -644,37 +627,26 @@ instance Ord expty => Ord (Proof expty) where
       EQ -> compare body1 body2
       out -> out
 
-instance Ord expty => Ord (Element expty) where
+instance Ord expty => Ord (Def expty) where
   compare Def { defPattern = pat1, defInit = init1 }
           Def { defPattern = pat2, defInit = init2 } =
     case compare pat1 pat2 of
       EQ -> compare init1 init2
       out -> out
-  compare Def {} _ = LT
-  compare _ Def {} = GT
-  compare Import { importExp = exp1 } Import { importExp = exp2 } =
-    compare exp1 exp2
+
+instance Ord expty => Ord (Import expty) where
+  compare Import { importVisibility = vis1, importExp = exp1 }
+          Import { importVisibility = vis2, importExp = exp2 } =
+    case compare vis1 vis2 of
+      EQ -> compare exp1 exp2
+      out -> out
 
 instance Ord expty => Ord (Compound expty) where
   compare Exp { expVal = exp1 } Exp { expVal = exp2 } = compare exp1 exp2
   compare Exp {} _ = LT
   compare _ Exp {} = GT
-  compare Element { elemVal = elem1 } Element { elemVal = elem2 } =
-    compare elem1 elem2
-  compare Element {} _ = LT
-  compare _ Element {} = GT
-  compare LocalTruth { localTruthName = name1, localTruth = truth1 }
-          LocalTruth { localTruthName = name2, localTruth = truth2 } =
-    case compare name1 name2 of
-      EQ -> compare truth1 truth2
-      out -> out
-  compare LocalTruth {} _ = LT
-  compare _ LocalTruth {} = GT
-  compare LocalBuilder { localBuilderName = name1, localBuilder = builder1 }
-          LocalBuilder { localBuilderName = name2, localBuilder = builder2 } =
-    case compare name1 name2 of
-      EQ -> compare builder1 builder2
-      out -> out
+  compare Decl { declSym = sym1 } Decl { declSym = sym2 } =
+    compare sym1 sym2
 
 instance Ord expty => Ord (Pattern expty) where
   compare Option { optionPats = pats1 } Option { optionPats = pats2 } =
@@ -721,18 +693,8 @@ instance Ord expty => Ord (Pattern expty) where
     compare lit1 lit2
 
 instance Ord expty => Ord (Exp expty) where
-  compare Compound { compoundSyntax = syntax1, compoundProofs = proofs1,
-                     compoundBody = body1 }
-          Compound { compoundSyntax = syntax2, compoundProofs = proofs2,
-                     compoundBody = body2 } =
-    let
-      syntaxlist1 = sort (HashMap.toList syntax1)
-      syntaxlist2 = sort (HashMap.toList syntax2)
-    in case compare syntaxlist1 syntaxlist2 of
-      EQ -> case compare proofs1 proofs2 of
-        EQ -> compare body1 body2
-        out -> out
-      out -> out
+  compare Compound { compoundBody = body1 } Compound { compoundBody = body2 } =
+    compare body1 body2
   compare Compound {} _ = LT
   compare _ Compound {} = GT
   compare Abs { absKind = kind1, absCases = cases1 }
@@ -783,7 +745,7 @@ instance Ord expty => Ord (Exp expty) where
       out -> out
   compare Project {} _ = LT
   compare _ Project {} = GT
-  compare Sym { symName = sym1 } Sym { symName = sym2 } = compare sym1 sym2
+  compare Sym { symRef = sym1 } Sym { symRef = sym2 } = compare sym1 sym2
   compare Sym {} _ = LT
   compare _ Sym {} = GT
   compare With { withVal = val1, withArgs = args1 }
@@ -866,14 +828,15 @@ instance (Hashable expty, Ord expty) => Hashable (Truth expty) where
 instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
   hashWithSalt s Scope { scopeBuilders = builders, scopeSyntax = syntax,
                          scopeTruths = truths, scopeElems = defs,
-                         scopeProofs = proofs } =
+                         scopeProofs = proofs, scopeImports = imports } =
     let
       builderlist = sort (HashMap.toList builders)
       truthlist = sort (HashMap.toList truths)
       syntaxlist = sort (HashMap.toList syntax)
     in
-      s `hashWithSalt` builderlist `hashWithSalt` syntaxlist `hashWithSalt`
-      truthlist `hashWithSalt` elems defs `hashWithSalt` proofs
+      s `hashWithSalt` builderlist `hashWithSalt`
+      syntaxlist `hashWithSalt` truthlist `hashWithSalt`
+      elems defs `hashWithSalt` proofs `hashWithSalt` imports
 
 instance (Hashable expty, Ord expty) => Hashable (Builder expty) where
   hashWithSalt s Builder { builderKind = kind, builderVisibility = vis,
@@ -886,22 +849,19 @@ instance (Hashable expty, Ord expty) => Hashable (Proof expty) where
   hashWithSalt s Proof { proofName = sym, proofBody = body } =
     s `hashWithSalt` sym `hashWithSalt` body
 
-instance (Hashable expty, Ord expty) => Hashable (Element expty) where
+instance (Hashable expty, Ord expty) => Hashable (Def expty) where
   hashWithSalt s Def { defPattern = pat, defInit = init } =
-    s `hashWithSalt` (0 :: Int) `hashWithSalt` pat `hashWithSalt` init
+    s `hashWithSalt` pat `hashWithSalt` init
+
+instance (Hashable expty, Ord expty) => Hashable (Import expty) where
   hashWithSalt s Import { importExp = exp } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` exp
+    s `hashWithSalt` exp
 
 instance (Hashable expty, Ord expty) => Hashable (Compound expty) where
   hashWithSalt s Exp { expVal = exp } =
     s `hashWithSalt` (0 :: Int) `hashWithSalt` exp
-  hashWithSalt s Element { elemVal = e } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` e
-  hashWithSalt s LocalTruth { localTruthName = sym, localTruth = truth } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` sym `hashWithSalt` truth
-  hashWithSalt s LocalBuilder { localBuilderName = sym,
-                                localBuilder = builder } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` sym `hashWithSalt` builder
+  hashWithSalt s Decl { declSym = sym } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` sym
 
 instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
   hashWithSalt s Option { optionPats = pats } =
@@ -923,13 +883,8 @@ instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
     s `hashWithSalt` (6 :: Int) `hashWithSalt` lit
 
 instance (Hashable refty, Ord refty) => Hashable (Exp refty) where
-  hashWithSalt s Compound { compoundSyntax = syntax, compoundProofs = proofs,
-                            compoundBody = body } =
-    let
-      syntaxlist = sort (HashMap.toList syntax)
-    in
-      s `hashWithSalt` (1 :: Int) `hashWithSalt` syntaxlist `hashWithSalt`
-      proofs `hashWithSalt` body
+  hashWithSalt s Compound { compoundBody = body } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` body
   hashWithSalt s Abs { absKind = kind, absCases = cases } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` kind `hashWithSalt` cases
   hashWithSalt s Match { matchVal = val, matchCases = cases } =
@@ -949,7 +904,7 @@ instance (Hashable refty, Ord refty) => Hashable (Exp refty) where
     s `hashWithSalt` (8 :: Int) `hashWithSalt` fields
   hashWithSalt s Project { projectVal = val, projectFields = sym } =
     s `hashWithSalt` (9 :: Int) `hashWithSalt` sym `hashWithSalt` val
-  hashWithSalt s Sym { symName = sym } =
+  hashWithSalt s Sym { symRef = sym } =
     s `hashWithSalt` (10 :: Int) `hashWithSalt` sym
   hashWithSalt s With { withVal = val, withArgs = args } =
     s `hashWithSalt` (11 :: Int) `hashWithSalt` val `hashWithSalt` args
@@ -978,6 +933,330 @@ instance (Hashable expty, Ord expty) => Hashable (Field expty) where
 instance (Hashable expty, Ord expty) => Hashable (Case expty) where
   hashWithSalt s Case { casePat = pat, caseBody = body } =
     s `hashWithSalt` pat `hashWithSalt` body
+
+instance Functor Component where
+  fmap f c @ Component { compScope = scope } = c { compScope = fmap f scope }
+
+instance Functor Scope where
+  fmap f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
+                     scopeSyntax = syntax, scopeElems = defs,
+                     scopeProofs = proofs, scopeImports = imports } =
+    d { scopeBuilders = fmap (fmap f) builders,
+        scopeTruths = fmap (fmap f) truths,
+        scopeSyntax = fmap (fmap f) syntax,
+        scopeElems = fmap (fmap (fmap f)) defs,
+        scopeProofs = fmap (fmap f) proofs,
+        scopeImports = fmap (fmap f) imports }
+
+instance Functor Syntax where
+  fmap f s @ Syntax { syntaxPrecs = precs } =
+    s { syntaxPrecs = fmap (fmap f) precs }
+
+instance Functor Truth where
+  fmap f t @ Truth { truthContent = content, truthProof = proof } =
+    t { truthContent = f content, truthProof = fmap f proof }
+
+instance Functor Builder where
+  fmap f b @ Builder { builderParams = params, builderSuperTypes = supers,
+                       builderContent = content } =
+    b { builderParams = fmap f params,
+        builderSuperTypes = fmap f supers,
+        builderContent = f content }
+
+instance Functor Proof where
+  fmap f p @ Proof { proofName = pname, proofBody = body } =
+    p { proofName = f pname, proofBody = f body }
+
+instance Functor Def where
+  fmap f d @ Def { defPattern = pat, defInit = init } =
+    d { defPattern = fmap f pat, defInit = fmap f init }
+
+instance Functor Import where
+  fmap f i @ Import { importExp = exp } = i { importExp = f exp }
+
+instance Functor Compound where
+  fmap f c @ Exp { expVal = e } = c { expVal = f e }
+  fmap _ Decl { declSym = sym } = Decl { declSym = sym }
+
+instance Functor Pattern where
+  fmap f p @ Option { optionPats = pats } =
+    p { optionPats = fmap (fmap f) pats }
+  fmap f p @ Deconstruct { deconstructPat = pat } =
+    p { deconstructPat = fmap f pat }
+  fmap f p @ Split { splitFields = fields } =
+    p { splitFields = fmap (fmap f) fields }
+  fmap f p @ Typed { typedPat = pat, typedType = ty } =
+    p { typedPat = fmap f pat, typedType = f ty }
+  fmap f p @ As { asPat = pat } = p { asPat = fmap f pat }
+  fmap _ Name { nameSym = sym, namePos = pos } =
+    Name { nameSym = sym, namePos = pos }
+  fmap _ Exact { exactLit = lit } = Exact { exactLit = lit }
+
+instance Functor Exp where
+  fmap f e @ Compound { compoundBody = body } =
+    e { compoundBody = fmap (fmap (fmap f)) body }
+  fmap f e @ Abs { absCases = cases } =
+    e { absCases = fmap (fmap (fmap f)) cases }
+  fmap f e @ Match { matchVal = val, matchCases = cases } =
+    e { matchVal = fmap f val, matchCases = fmap (fmap (fmap f)) cases }
+  fmap f e @ Ascribe { ascribeVal = val, ascribeType = ty } =
+    e { ascribeVal = fmap f val, ascribeType = fmap f ty }
+  fmap f e @ Seq { seqExps = exps } = e { seqExps = fmap (fmap f) exps }
+--  fmap f e @ Apply { applyFunc = func, applyArgs = args } =
+--    e { applyFunc = fmap f func, applyArgs = fmap f args }
+  fmap f e @ RecordType { recordTypeFields = fields } =
+    e { recordTypeFields = fmap (fmap f) fields }
+  fmap f e @ Record { recordFields = fields } =
+    e { recordFields = fmap (fmap f) fields }
+  fmap f e @ Tuple { tupleFields = fields } =
+    e { tupleFields = fmap (fmap f) fields }
+  fmap f e @ Project { projectVal = val } = e { projectVal = fmap f val }
+  fmap f e @ Sym { symRef = ref } = e { symRef = f ref }
+  fmap f e @ With { withVal = val, withArgs = args } =
+    e { withVal = fmap f val, withArgs = fmap f args }
+  fmap f e @ Where { whereVal = val, whereProp = prop } =
+    e { whereVal = fmap f val, whereProp = fmap f prop }
+  fmap f e @ Anon { anonParams = params, anonSuperTypes = supers,
+                    anonContent = body } =
+    e { anonParams = fmap (fmap f) params,
+        anonSuperTypes = fmap (fmap f) supers,
+        anonContent = fmap (fmap f) body }
+  fmap _ Literal { literalVal = lit } = Literal { literalVal = lit }
+
+instance Functor Entry where
+  fmap f e @ Entry { entryPat = pat } = e { entryPat = fmap f pat }
+
+instance Functor Fields where
+  fmap f s @ Fields { fieldsBindings = binds } =
+    s { fieldsBindings = fmap (fmap f) binds }
+
+instance Functor Field where
+  fmap f d @ Field { fieldVal = val } = d { fieldVal = f val }
+
+instance Functor Case where
+  fmap f c @ Case { casePat = pat, caseBody = body } =
+    c { casePat = fmap f pat, caseBody = f body }
+
+instance Foldable Component where
+  foldMap f Component { compScope = scope } = foldMap f scope
+
+instance Foldable Scope where
+  foldMap f Scope { scopeBuilders = builders, scopeTruths = truths,
+                    scopeSyntax = syntax, scopeElems = defs,
+                    scopeProofs = proofs, scopeImports = imports } =
+    foldMap (foldMap f) builders `mappend`
+    foldMap (foldMap f) truths `mappend`
+    foldMap (foldMap f) syntax `mappend`
+    foldMap (foldMap (foldMap f)) defs `mappend`
+    foldMap (foldMap f) proofs `mappend`
+    foldMap (foldMap f) imports
+
+instance Foldable Syntax where
+  foldMap f Syntax { syntaxPrecs = precs } = foldMap (foldMap f) precs
+
+instance Foldable Truth where
+  foldMap f Truth { truthContent = content, truthProof = proof } =
+    f content `mappend` foldMap f proof
+
+instance Foldable Builder where
+  foldMap f Builder { builderParams = params, builderSuperTypes = supers,
+                      builderContent = content } =
+    foldMap f params `mappend` foldMap f supers `mappend` f content
+
+instance Foldable Proof where
+  foldMap f Proof { proofName = pname, proofBody = body } =
+    f pname `mappend` f body
+
+instance Foldable Def where
+  foldMap f Def { defPattern = pat, defInit = init } =
+    foldMap f pat `mappend` foldMap f init
+
+instance Foldable Import where
+  foldMap f Import { importExp = exp } = f exp
+
+instance Foldable Compound where
+  foldMap f Exp { expVal = e } = f e
+  foldMap _ Decl {} = mempty
+
+instance Foldable Pattern where
+  foldMap f Option { optionPats = pats } = foldMap (foldMap f) pats
+  foldMap f Deconstruct { deconstructPat = pat } = foldMap f pat
+  foldMap f Split { splitFields = fields } = foldMap (foldMap f) fields
+  foldMap f Typed { typedPat = pat, typedType = ty } =
+    foldMap f pat `mempty` f ty
+  foldMap f As { asPat = pat } = foldMap f pat
+  foldMap _ Name {} = mempty
+  foldMap _ Exact {} = mempty
+
+instance Foldable Exp where
+  foldMap f Compound { compoundBody = body } =
+    foldMap (foldMap (foldMap f)) body
+  foldMap f Abs { absCases = cases } =
+    foldMap (foldMap (foldMap f)) cases
+  foldMap f Match { matchVal = val, matchCases = cases } =
+    foldMap f val `mappend` foldMap (foldMap (foldMap f)) cases
+  foldMap f Ascribe { ascribeVal = val, ascribeType = ty } =
+    foldMap f val `mappend` foldMap f ty
+  foldMap f Seq { seqExps = exps } = foldMap (foldMap f) exps
+--  foldMap f Apply { applyFunc = func, applyArgs = args } =
+--    e { applyFunc = foldMap f func, applyArgs = foldMap f args }
+  foldMap f RecordType { recordTypeFields = fields } =
+    foldMap (foldMap f) fields
+  foldMap f Record { recordFields = fields } =
+    foldMap (foldMap f) fields
+  foldMap f Tuple { tupleFields = fields } =
+    foldMap (foldMap f) fields
+  foldMap f Project { projectVal = val } = foldMap f val
+  foldMap f Sym { symRef = ref } = f ref
+  foldMap f With { withVal = val, withArgs = args } =
+    foldMap f val `mappend` foldMap f args
+  foldMap f Where { whereVal = val, whereProp = prop } =
+    foldMap f val `mappend` foldMap f prop
+  foldMap f Anon { anonParams = params, anonSuperTypes = supers,
+                   anonContent = body } =
+    foldMap (foldMap f) params `mappend` foldMap (foldMap f) supers `mappend`
+    foldMap (foldMap f) body
+  foldMap _ Literal {} = mempty
+
+instance Foldable Entry where
+  foldMap f Entry { entryPat = pat } = foldMap f pat
+
+instance Foldable Fields where
+  foldMap f Fields { fieldsBindings = binds } = foldMap (foldMap f) binds
+
+instance Foldable Field where
+  foldMap f Field { fieldVal = val } = f val
+
+instance Foldable Case where
+  foldMap f Case { casePat = pat, caseBody = body } =
+    foldMap f pat `mappend` f body
+
+instance Traversable Component where
+  traverse f c @ Component { compScope = scope } =
+    (\scope' -> c { compScope = scope' }) <$> traverse f scope
+
+instance Traversable Scope where
+  traverse f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
+                     scopeSyntax = syntax, scopeElems = defs,
+                     scopeProofs = proofs, scopeImports = imports } =
+    (\builders' truths' syntax' defs' proofs' imports' ->
+      d { scopeBuilders = builders', scopeTruths = truths',
+          scopeSyntax = syntax', scopeElems = defs',
+          scopeProofs = proofs', scopeImports = imports' }) <$>
+    traverse (traverse f) builders <*> traverse (traverse f) truths <*>
+    traverse (traverse f) syntax <*> traverse (traverse (traverse f)) defs <*>
+    traverse (traverse f) proofs <*> traverse (traverse f) imports
+
+instance Traversable Syntax where
+  traverse f s @ Syntax { syntaxPrecs = precs } =
+    (\precs' -> s { syntaxPrecs = precs' }) <$> traverse (traverse f) precs
+
+instance Traversable Truth where
+  traverse f t @ Truth { truthContent = content, truthProof = proof } =
+    (\content' proof' -> t { truthContent = content', truthProof = proof' }) <$>
+      f content <*> traverse f proof
+
+instance Traversable Builder where
+  traverse f b @ Builder { builderParams = params, builderSuperTypes = supers,
+                           builderContent = content } =
+    (\params' supers' content' -> b { builderParams = params',
+                                      builderSuperTypes = supers',
+                                      builderContent = content' }) <$>
+      traverse f params <*> traverse f supers <*> f content
+
+instance Traversable Proof where
+  traverse f p @ Proof { proofName = pname, proofBody = body } =
+    (\pname' body' -> p { proofName = pname', proofBody = body' }) <$>
+      f pname <*> f body
+
+instance Traversable Def where
+  traverse f d @ Def { defPattern = pat, defInit = init } =
+    (\pat' init' -> d { defPattern = pat', defInit = init' }) <$>
+      traverse f pat <*> traverse f init
+
+instance Traversable Import where
+  traverse f i @ Import { importExp = exp } =
+    (\exp' -> i { importExp = exp' }) <$> f exp
+
+instance Traversable Compound where
+  traverse f c @ Exp { expVal = e } = (\e' -> c { expVal = e' }) <$> f e
+  traverse _ Decl { declSym = sym } = pure Decl { declSym = sym }
+
+instance Traversable Pattern where
+  traverse f p @ Option { optionPats = pats } =
+    (\pats' -> p { optionPats = pats' }) <$> traverse (traverse f) pats
+  traverse f p @ Deconstruct { deconstructPat = pat } =
+    (\pat' -> p { deconstructPat = pat' }) <$> traverse f pat
+  traverse f p @ Split { splitFields = fields } =
+    (\fields' -> p { splitFields = fields' }) <$> traverse (traverse f) fields
+  traverse f p @ Typed { typedPat = pat, typedType = ty } =
+    (\pat' ty' -> p { typedPat = pat', typedType = ty' }) <$>
+    traverse f pat <*> f ty
+  traverse f p @ As { asPat = pat } =
+    (\pat' -> p { asPat = pat' }) <$> traverse f pat
+  traverse _ Name { nameSym = sym, namePos = pos } =
+    pure Name { nameSym = sym, namePos = pos }
+  traverse _ Exact { exactLit = lit } = pure Exact { exactLit = lit }
+
+instance Traversable Exp where
+  traverse f e @ Compound { compoundBody = body } =
+    (\body' -> e { compoundBody = body' }) <$>
+    traverse (traverse (traverse f)) body
+  traverse f e @ Abs { absCases = cases } =
+    (\cases' -> e { absCases = cases' }) <$>
+    traverse (traverse (traverse f)) cases
+  traverse f e @ Match { matchVal = val, matchCases = cases } =
+    (\val' cases' -> e { matchVal = val', matchCases = cases' }) <$>
+    traverse f val <*> traverse (traverse (traverse f)) cases
+  traverse f e @ Ascribe { ascribeVal = val, ascribeType = ty } =
+    (\val' ty' -> e { ascribeVal = val', ascribeType = ty' }) <$>
+    traverse f val <*> traverse f ty
+  traverse f e @ Seq { seqExps = exps } =
+    (\exps' -> e { seqExps = exps' }) <$> traverse (traverse f) exps
+--  traverse f e @ Apply { applyFunc = func, applyArgs = args } =
+--    e { applyFunc = traverse f func, applyArgs = traverse f args }
+  traverse f e @ RecordType { recordTypeFields = fields } =
+    (\fields' -> e { recordTypeFields = fields' }) <$>
+      traverse (traverse f) fields
+  traverse f e @ Record { recordFields = fields } =
+    (\fields' -> e { recordFields = fields' }) <$> traverse (traverse f) fields
+  traverse f e @ Tuple { tupleFields = fields } =
+    (\fields' -> e { tupleFields = fields' }) <$> traverse (traverse f) fields
+  traverse f e @ Project { projectVal = val } =
+    (\val' -> e { projectVal = val' }) <$> traverse f val
+  traverse f e @ Sym { symRef = ref } = (\ref' -> e { symRef = ref' }) <$> f ref
+  traverse f e @ With { withVal = val, withArgs = args } =
+    (\val' args' -> e { withVal = val', withArgs = args' }) <$>
+      traverse f val <*> traverse f args
+  traverse f e @ Where { whereVal = val, whereProp = prop } =
+    (\val' prop' -> e { whereVal = val', whereProp = prop' }) <$>
+    traverse f val <*> traverse f prop
+  traverse f e @ Anon { anonParams = params, anonSuperTypes = supers,
+                        anonContent = body } =
+    (\params' supers' body' -> e { anonParams = params',
+                                   anonSuperTypes = supers',
+                                   anonContent = body' }) <$>
+    traverse (traverse f) params <*> traverse (traverse f) supers <*>
+    traverse (traverse f) body
+  traverse _ Literal { literalVal = lit } = pure Literal { literalVal = lit }
+
+instance Traversable Entry where
+  traverse f e @ Entry { entryPat = pat } =
+    (\pat' -> e { entryPat = pat' }) <$> traverse f pat
+
+instance Traversable Fields where
+  traverse f s @ Fields { fieldsBindings = binds } =
+    (\binds' -> s { fieldsBindings = binds' }) <$> traverse (traverse f) binds
+
+instance Traversable Field where
+  traverse f d @ Field { fieldVal = val } =
+    (\val' -> d { fieldVal = val' }) <$> f val
+
+instance Traversable Case where
+  traverse f c @ Case { casePat = pat, caseBody = body } =
+    (\pat' body' -> c { casePat = pat', caseBody = body' }) <$>
+    traverse f pat <*> f body
+
 {-
 precDot :: MonadSymbols m => (Ordering, Exp) -> StateT Word m (Doc, String)
 precDot (ord, exp) =
@@ -1080,7 +1359,7 @@ formatMap hashmap =
     return $! listDoc entrydocs
 
 formatElems :: (MonadSymbols m, MonadPositions m, FormatM m expty) =>
-               Array Visibility [Element expty] -> m Doc
+               Array Visibility [Def expty] -> m Doc
 formatElems arr =
   do
     hiddendocs <- mapM formatM (arr ! Hidden)
@@ -1157,7 +1436,7 @@ instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
                               (string "body", bodydoc)])
 
 instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
-         FormatM m (Element expty) where
+         FormatM m (Def expty) where
   formatM Def { defPattern = pat, defInit = Just init, defPos = pos } =
     do
       posdoc <- formatM pos
@@ -1174,32 +1453,25 @@ instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
       return (compoundApplyDoc (string "Group")
                              [(string "pos", posdoc),
                               (string "pattern", patdoc)])
-  formatM Import { importExp = exp, importPos = pos } =
+
+instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
+         FormatM m (Import expty) where
+  formatM Import { importVisibility = vis, importExp = exp, importPos = pos } =
     do
       expdoc <- formatM exp
       posdoc <- formatM pos
       return (compoundApplyDoc (string "Import")
-                             [(string "exp", expdoc),
+                             [(string "visibility", format vis),
+                              (string "exp", expdoc),
                               (string "pos", posdoc)])
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Compound expty) where
   formatM Exp { expVal = e } = formatM e
-  formatM Element { elemVal = e } = formatM e
-  formatM LocalTruth { localTruthName = sym, localTruth = truth } =
+  formatM Decl { declSym = sym } =
     do
       symdoc <- formatM sym
-      truthdoc <- formatM truth
-      return (compoundApplyDoc (string "LocalTruth")
-                             [(string "sym", symdoc),
-                              (string "truth", truthdoc)])
-  formatM LocalBuilder { localBuilderName = sym, localBuilder = builder } =
-    do
-      symdoc <- formatM sym
-      builderdoc <- formatM builder
-      return (compoundApplyDoc (string "LocalBuilder")
-                             [(string "sym", symdoc),
-                              (string "builder", builderdoc)])
+      return (string "declaration of" <> symdoc)
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Pattern expty) where
@@ -1265,17 +1537,12 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
 
 instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
          FormatM m (Exp refty) where
-  formatM Compound { compoundSyntax = syntax, compoundProofs = proofs,
-                     compoundBody = body, compoundPos = pos } =
+  formatM Compound { compoundBody = body, compoundPos = pos } =
     do
-      syntaxdoc <- formatMap syntax
-      proofsdoc <- mapM formatM proofs
       posdoc <- formatM pos
       bodydoc <- mapM formatM body
       return (compoundApplyDoc (string "Compound")
                              [(string "pos", posdoc),
-                              (string "syntax", syntaxdoc),
-                              (string "proofs", listDoc proofsdoc),
                               (string "body", listDoc bodydoc)])
   formatM Abs { absKind = kind, absCases = cases, absPos = pos } =
     do
@@ -1342,7 +1609,7 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
                              [(string "fields", listDoc fielddocs),
                               (string "pos", posdoc),
                               (string "value", valdoc)])
-  formatM Sym { symName = sym, symPos = pos } =
+  formatM Sym { symRef = sym, symPos = pos } =
     do
       namedoc <- formatM sym
       posdoc <- formatM pos
@@ -1512,7 +1779,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
 defsPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
                 XmlPickler [NodeG [] tag text] expty) =>
-               PU [NodeG [] tag text] (Array Visibility [Element expty])
+               PU [NodeG [] tag text] (Array Visibility [Def expty])
 defsPickler =
   xpWrap (\(hiddens, privates, protecteds, publics) ->
            listArray (Hidden, Public) [hiddens, privates, protecteds, publics],
@@ -1541,17 +1808,25 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Scope expty) where
   xpickle =
-    xpWrap (\(scopeid, (builders, syntax, truths, defs, proofs)) ->
+    xpWrap (\(scopeid, (builders, syntax, truths, defs, proofs, imports)) ->
              Scope { scopeID = scopeid, scopeBuilders = builders,
                      scopeSyntax = syntax, scopeTruths = truths,
-                     scopeElems = defs, scopeProofs = proofs },
+                     scopeElems = defs, scopeProofs = proofs,
+                     scopeImports = imports },
             \Scope { scopeID = scopeid, scopeBuilders = builders,
                      scopeSyntax = syntax, scopeTruths = truths,
-                     scopeElems = defs, scopeProofs = proofs } ->
-            (scopeid, (builders, syntax, truths, defs, proofs)))
+                     scopeElems = defs, scopeProofs = proofs,
+                     scopeImports = imports } ->
+            (scopeid, (builders, syntax, truths, defs, proofs, imports)))
            (xpElem (gxFromString "Scope") xpickle
-                   (xp5Tuple mapPickler mapPickler mapPickler
-                             defsPickler (xpList xpickle)))
+                   (xp6Tuple (xpElemNodes (gxFromString "builders") mapPickler)
+                             (xpElemNodes (gxFromString "syntax") mapPickler)
+                             (xpElemNodes (gxFromString "truths") mapPickler)
+                             (xpElemNodes (gxFromString "defs") defsPickler)
+                             (xpElemNodes (gxFromString "proofs")
+                                          (xpList xpickle))
+                             (xpElemNodes (gxFromString "imports")
+                                          (xpList xpickle))))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
@@ -1585,47 +1860,32 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                                   (xpElemNodes (gxFromString "type") xpickle)
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
-defPickler :: (GenericXMLString tag, Show tag,
-               GenericXMLString text, Show text,
-               XmlPickler [NodeG [] tag text] expty) =>
-              PU [NodeG [] tag text] (Element expty)
-defPickler =
-  let
-    revfunc Def { defPattern = pat, defInit = init, defPos = pos } =
-      (pat, init, pos)
-    revfunc _ = error $! "Can't convert"
-  in
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] expty) =>
+         XmlPickler [NodeG [] tag text] (Def expty) where
+  xpickle =
     xpWrap (\(pat, init, pos) -> Def { defPattern = pat, defInit = init,
-                                       defPos = pos }, revfunc)
+                                       defPos = pos },
+            \Def { defPattern = pat, defInit = init,
+                   defPos = pos } -> (pat, init, pos))
            (xpElemNodes (gxFromString "Def")
                         (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
                                   (xpOption (xpElemNodes (gxFromString "init")
                                                          xpickle))
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
-importPickler :: (GenericXMLString tag, Show tag,
-                 GenericXMLString text, Show text,
-                 XmlPickler [NodeG [] tag text] expty) =>
-                PU [NodeG [] tag text] (Element expty)
-importPickler =
-  let
-    revfunc Import { importExp = exp, importPos = pos } = (exp, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(exp, pos) -> Import { importExp = exp, importPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Import")
-                        (xpPair (xpElemNodes (gxFromString "name") xpickle)
-                                (xpElemNodes (gxFromString "pos") xpickle)))
-
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
-         XmlPickler [NodeG [] tag text] (Element expty) where
+         XmlPickler [NodeG [] tag text] (Import expty) where
   xpickle =
-    let
-      picker Def {} = 0
-      picker Import {} = 1
-    in
-      xpAlt picker [ defPickler, importPickler ]
+    xpWrap (\(vis, (exp, pos)) -> Import { importVisibility = vis,
+                                           importExp = exp,
+                                           importPos = pos },
+            \Import { importVisibility = vis, importExp = exp,
+                      importPos = pos } -> (vis, (exp, pos)))
+           (xpElem (gxFromString "Import") xpickle
+                   (xpPair (xpElemNodes (gxFromString "name") xpickle)
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 expPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
@@ -1644,38 +1904,11 @@ elementPickler :: (GenericXMLString tag, Show tag,
                   PU [NodeG [] tag text] (Compound expty)
 elementPickler =
   let
-    revfunc Element { elemVal = e } = e
+    revfunc Decl { declSym = sym } = sym
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (Element, revfunc) (xpElemNodes (gxFromString "Element") xpickle)
+    xpWrap (Decl, revfunc) (xpElemNodes (gxFromString "Decl") xpickle)
 
-localTruthPickler :: (GenericXMLString tag, Show tag,
-                      GenericXMLString text, Show text,
-                      XmlPickler [NodeG [] tag text] expty) =>
-                  PU [NodeG [] tag text] (Compound expty)
-localTruthPickler =
-  let
-    revfunc LocalTruth { localTruthName = sym, localTruth = truth } =
-      (sym, truth)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(sym, truth) -> LocalTruth { localTruthName = sym,
-                                          localTruth = truth }, revfunc)
-           (xpElem (gxFromString "LocalTruth") xpickle xpickle)
-
-localBuilderPickler :: (GenericXMLString tag, Show tag,
-                        GenericXMLString text, Show text,
-                        XmlPickler [NodeG [] tag text] expty) =>
-                PU [NodeG [] tag text] (Compound expty)
-localBuilderPickler =
-  let
-    revfunc LocalBuilder { localBuilderName = sym, localBuilder = builder } =
-      (sym, builder)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(sym, builder) -> LocalBuilder { localBuilderName = sym,
-                                       localBuilder = builder }, revfunc)
-           (xpElem (gxFromString "LocalBuilder") xpickle xpickle)
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
@@ -1683,12 +1916,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
   xpickle =
     let
       picker Exp {} = 0
-      picker Element {} = 1
-      picker LocalTruth {} = 2
-      picker LocalBuilder {} = 3
+      picker Decl {} = 1
     in
-      xpAlt picker [expPickler, elementPickler,
-                    localTruthPickler, localBuilderPickler]
+      xpAlt picker [expPickler, elementPickler]
 
 optionPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text,
@@ -1821,22 +2051,15 @@ compoundPickler :: (GenericXMLString tag, Show tag,
                    PU [NodeG [] tag text] (Exp resty)
 compoundPickler =
   let
-    revfunc Compound { compoundSyntax = syntax, compoundProofs = proofs,
-                       compoundBody = body, compoundPos = pos } =
-      (syntax, proofs, body, pos)
+    revfunc Compound { compoundBody = body, compoundPos = pos } = (body, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(syntax, proofs, body, pos) ->
-             Compound { compoundSyntax = syntax, compoundProofs = proofs,
-                        compoundBody = body, compoundPos = pos }, revfunc)
+    xpWrap (\(body, pos) -> Compound { compoundBody = body,
+                                       compoundPos = pos }, revfunc)
            (xpElemNodes (gxFromString "Compound")
-                        (xp4Tuple (xpElemNodes (gxFromString "syntax")
-                                               mapPickler)
-                                  (xpElemNodes (gxFromString "proofs")
-                                               (xpList xpickle))
-                                  (xpElemNodes (gxFromString "body")
-                                               (xpList xpickle))
-                                  (xpElemNodes (gxFromString "pos") xpickle)))
+                        (xpPair (xpElemNodes (gxFromString "body")
+                                             (xpList xpickle))
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 absPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
@@ -1972,12 +2195,12 @@ symPickler :: (GenericXMLString tag, Show tag,
              PU [NodeG [] tag text] (Exp resty)
 symPickler =
   let
-    revfunc Sym { symName = sym, symPos = pos } = (sym, pos)
+    revfunc Sym { symRef = sym, symPos = pos } = (sym, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(sym, pos) -> Sym { symName = sym, symPos = pos }, revfunc)
+    xpWrap (\(sym, pos) -> Sym { symRef = sym, symPos = pos }, revfunc)
            (xpElemNodes (gxFromString "Sym")
-                        (xpPair (xpElemNodes (gxFromString "pos") xpickle)
+                        (xpPair (xpElemNodes (gxFromString "ref") xpickle)
                                 (xpElemNodes (gxFromString "pos") xpickle)))
 
 withPickler :: (GenericXMLString tag, Show tag,
