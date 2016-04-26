@@ -53,11 +53,6 @@ module Language.Salt.Surface.AST(
        Field(..),
        Entry(..),
        Case(..),
-       elementPosition,
-       compoundPosition,
-       patternPosition,
-       expPosition,
-       casePosition,
        -- * Graphviz Renderer
        astDot
        ) where
@@ -68,6 +63,7 @@ import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Hashable
 import Data.List hiding (init, concat)
+import Data.PositionElement
 import Data.Symbol
 import Data.Word
 import Language.Salt.Format
@@ -436,45 +432,61 @@ data Case =
     casePos :: !Position
   }
 
-elementPosition :: Element -> Position
-elementPosition Builder { builderPos = pos } = pos
-elementPosition Def { defPos = pos } = pos
-elementPosition Fun { funPos = pos } = pos
-elementPosition Truth { truthPos = pos } = pos
-elementPosition Proof { proofPos = pos } = pos
-elementPosition Import { importPos = pos } = pos
-elementPosition Syntax { syntaxPos = pos } = pos
+instance PositionElement Component where
+  position Component { componentPos = pos } = pos
 
-patternPosition :: Pattern -> Position
-patternPosition Option { optionPos = pos } = pos
-patternPosition Deconstruct { deconstructPos = pos } = pos
-patternPosition Split { splitPos = pos } = pos
-patternPosition Typed { typedPos = pos } = pos
-patternPosition As { asPos = pos } = pos
-patternPosition Name { namePos = pos } = pos
-patternPosition Exact { exactLit = l } = literalPosition l
+instance PositionElement Use where
+  position Use { usePos = pos } = pos
 
-compoundPosition :: Compound -> Position
-compoundPosition Exp { expVal = e } = expPosition e
-compoundPosition Element { elemVal = e } = elementPosition e
+instance PositionElement Group where
+  position Group { groupPos = pos } = pos
 
-expPosition :: Exp -> Position
-expPosition Compound { compoundPos = pos } = pos
-expPosition Abs { absPos = pos } = pos
-expPosition Match { matchPos = pos } = pos
-expPosition Ascribe { ascribePos = pos } = pos
-expPosition Seq { seqPos = pos } = pos
-expPosition Record { recordPos = pos } = pos
-expPosition Tuple { tuplePos = pos } = pos
-expPosition Project { projectPos = pos } = pos
-expPosition Sym { symPos = pos } = pos
-expPosition With { withPos = pos } = pos
-expPosition Where { wherePos = pos } = pos
-expPosition Anon { anonPos = pos } = pos
-expPosition Literal { literalVal = l } = literalPosition l
+instance PositionElement Element where
+  position Builder { builderPos = pos } = pos
+  position Def { defPos = pos } = pos
+  position Fun { funPos = pos } = pos
+  position Truth { truthPos = pos } = pos
+  position Proof { proofPos = pos } = pos
+  position Import { importPos = pos } = pos
+  position Syntax { syntaxPos = pos } = pos
 
-casePosition :: Case -> Position
-casePosition Case { casePos = pos } = pos
+instance PositionElement Compound where
+  position Exp { expVal = e } = position e
+  position Element { elemVal = e } = position e
+
+instance PositionElement Pattern where
+  position Option { optionPos = pos } = pos
+  position Deconstruct { deconstructPos = pos } = pos
+  position Split { splitPos = pos } = pos
+  position Typed { typedPos = pos } = pos
+  position As { asPos = pos } = pos
+  position Name { namePos = pos } = pos
+  position Exact { exactLit = l } = position l
+
+instance PositionElement Exp where
+  position Compound { compoundPos = pos } = pos
+  position Abs { absPos = pos } = pos
+  position Match { matchPos = pos } = pos
+  position Ascribe { ascribePos = pos } = pos
+  position Seq { seqPos = pos } = pos
+  position Record { recordPos = pos } = pos
+  position Tuple { tuplePos = pos } = pos
+  position Project { projectPos = pos } = pos
+  position Sym { symPos = pos } = pos
+  position With { withPos = pos } = pos
+  position Where { wherePos = pos } = pos
+  position Anon { anonPos = pos } = pos
+  position Literal { literalVal = l } = position l
+
+instance PositionElement Entry where
+  position Named { namedPos = pos } = pos
+  position Unnamed { unnamedPat = pat } = position pat
+
+instance PositionElement Field where
+  position Field { fieldPos = pos } = pos
+
+instance PositionElement Case where
+  position Case { casePos = pos } = pos
 
 instance Eq Component where
   Component { componentName = name1 } == Component { componentName = name2 } =

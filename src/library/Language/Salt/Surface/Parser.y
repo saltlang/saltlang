@@ -41,6 +41,7 @@ import Control.Monad.Trans
 import Data.ByteString(ByteString)
 import Data.Either
 import Data.Position.BasicPosition
+import Data.PositionElement
 import Data.Semigroup((<>))
 import Data.Symbol(Symbol)
 import Data.Typeable
@@ -128,7 +129,7 @@ top_level: component use_list def_list
 
 component: COMPONENT qual_id SEMICOLON
              { let
-                  pos = Token.position $1 <> Token.position $3
+                  pos = position $1 <> position $3
                   (qualname, _) = $2
                in
                   Just Component { componentName = reverse qualname,
@@ -136,7 +137,7 @@ component: COMPONENT qual_id SEMICOLON
              }
          | COMPONENT qual_id
              { let
-                 pos = Token.position $1 <> qualpos
+                 pos = position $1 <> qualpos
                  (qualname, qualpos) = $2
                in
                   Just Component { componentName = reverse qualname,
@@ -147,14 +148,14 @@ component: COMPONENT qual_id SEMICOLON
 
 use_list: use_list USE qual_id SEMICOLON
             { let
-                pos = Token.position $2 <> Token.position $4
+                pos = position $2 <> position $4
                 (qualname, _) = $3
               in
                 Use { useName = reverse qualname, usePos = pos } : $1
             }
         | use_list USE qual_id
             { let
-                pos = Token.position $2 <> qualpos
+                pos = position $2 <> qualpos
                 (qualname, qualpos) = $3
               in
                 Use { useName = reverse qualname, usePos = pos } : $1
@@ -164,13 +165,13 @@ use_list: use_list USE qual_id SEMICOLON
 
 qual_id: qual_id DOT ID
            { let
-               pos = headpos <> Token.position $3
+               pos = headpos <> position $3
                (list, headpos) = $1
              in
                (name $3 : list, pos)
            }
        | ID
-           { ([ name $1 ], Token.position $1) }
+           { ([ name $1 ], position $1) }
 
 def_list: closed_def_list
             { $1 }
@@ -208,14 +209,14 @@ closed_def: type_builder_kind ID args_opt extends
                     [] -> reverse $7
                     _ ->
                       let
-                        grouppos = elementPosition (last $6) <>
-                                   elementPosition (head $6)
+                        grouppos = position (last $6) <>
+                                   position (head $6)
                       in
                         Group { groupVisibility = Public,
                                 groupElements = reverse $6,
                                 groupPos = grouppos } : reverse $7
 
-                  builderpos = snd $1 <> Token.position $8
+                  builderpos = snd $1 <> position $8
                 in
                   Builder { builderKind = fst $1,
                             builderName = name $2,
@@ -227,8 +228,8 @@ closed_def: type_builder_kind ID args_opt extends
           | truth_kind ID args_opt EQUAL exp PROOF LBRACE stm_list RBRACE
               { let
                   content = buildExp $5
-                  compoundpos = Token.position $7 <> Token.position $9
-                  pos = snd $1 <> Token.position $9
+                  compoundpos = position $7 <> position $9
+                  pos = snd $1 <> position $9
                 in
                   Truth { truthName = name $2, truthKind = fst $1,
                           truthProof =
@@ -238,8 +239,8 @@ closed_def: type_builder_kind ID args_opt extends
             }
           | PROOF static_exp LBRACE stm_list RBRACE
               { let
-                  compoundpos = Token.position $3 <> Token.position $5
-                  pos = Token.position $1 <> Token.position $5
+                  compoundpos = position $3 <> position $5
+                  pos = position $1 <> position $5
                 in
                   Proof { proofName = $2,
                           proofBody = Compound { compoundBody = reverse $4,
@@ -249,7 +250,7 @@ closed_def: type_builder_kind ID args_opt extends
 
 open_def: type_builder_kind ID args_opt extends EQUAL exp
             { let
-                builderpos = snd $1 <> expPosition content
+                builderpos = snd $1 <> position content
                 content = buildExp $6
               in
                 Builder { builderKind = fst $1,
@@ -262,7 +263,7 @@ open_def: type_builder_kind ID args_opt extends EQUAL exp
         | truth_kind ID args_opt EQUAL exp
             { let
                 content = buildExp $5
-                pos = snd $1 <> expPosition content
+                pos = snd $1 <> position content
               in
                 Truth { truthName = name $2, truthKind = fst $1,
                         truthProof = Nothing, truthContent = content,
@@ -272,7 +273,7 @@ open_def: type_builder_kind ID args_opt extends EQUAL exp
             { let
                 content = buildExp $5
                 proof = buildExp $8
-                pos = snd $1 <> expPosition proof
+                pos = snd $1 <> position proof
               in
                 Truth { truthName = name $2, truthKind = fst $1,
                         truthProof = Just proof, truthContent = content,
@@ -281,29 +282,29 @@ open_def: type_builder_kind ID args_opt extends EQUAL exp
         | PROOF static_exp EQUAL exp
             { let
                 body = buildExp $4
-                pos = Token.position $1 <> expPosition body
+                pos = position $1 <> position body
               in
                 Proof { proofName = $2, proofBody = body, proofPos = pos }
             }
         | IMPORT static_exp
             { let
-                pos = Token.position $1 <> expPosition $2
+                pos = position $1 <> position $2
               in
                 Import { importExp = $2, importPos = pos }
             }
         | SYNTAX exp
             { let
                 exp = buildExp $2
-                pos = Token.position $1 <> expPosition exp
+                pos = position $1 <> position exp
               in
                 Syntax { syntaxExp = exp, syntaxPos = pos }
             }
 
 closed_value_def: FUN ID case_list pattern LBRACE stm_list RBRACE
                     { let
-                        compoundpos = Token.position $5 <> Token.position $7
-                        casepos = patternPosition $4 <> Token.position $7
-                        funpos = Token.position $1 <> Token.position $7
+                        compoundpos = position $5 <> position $7
+                        casepos = position $4 <> position $7
+                        funpos = position $1 <> position $7
                         body = Compound { compoundBody = reverse $6,
                                           compoundPos = compoundpos }
                         cases = Case { casePat = $4, caseBody = body,
@@ -316,20 +317,20 @@ closed_value_def: FUN ID case_list pattern LBRACE stm_list RBRACE
 
 open_value_def: pattern
                   { Def { defPattern = $1, defInit = Nothing,
-                          defPos = patternPosition $1 }
+                          defPos = position $1 }
                   }
               | pattern EQUAL exp
                   { let
                       init = buildExp $3
-                      pos = patternPosition $1 <> expPosition init
+                      pos = position $1 <> position init
                     in
                       Def { defPattern = $1, defInit = Just init, defPos = pos }
                   }
               | FUN ID case_list pattern EQUAL exp
                   { let
                       body = buildExp $6
-                      casepos = casePosition (head $3) <> expPosition body
-                      funpos = Token.position $1 <> expPosition body
+                      casepos = position (head $3) <> position body
+                      funpos = position $1 <> position body
                     in
                       Fun { funName = name $2,
                             funCases = reverse (Case { casePat = $4,
@@ -341,21 +342,21 @@ open_value_def: pattern
 
 group_list: group_list PRIVATE COLON def_list
               { let
-                  pos = Token.position $2 <> elementPosition (head $4)
+                  pos = position $2 <> position (head $4)
                 in
                   Group { groupVisibility = Private, groupElements = $4,
                           groupPos = pos } : $1
               }
           | group_list PROTECTED COLON def_list
               { let
-                  pos = Token.position $2 <> elementPosition (head $4)
+                  pos = position $2 <> position (head $4)
                 in
                   Group { groupVisibility = Protected, groupElements = $4,
                           groupPos = pos } : $1
               }
           | group_list PUBLIC COLON def_list
               { let
-                  pos = Token.position $2 <> elementPosition (head $4)
+                  pos = position $2 <> position (head $4)
                 in
                   Group { groupVisibility = Public, groupElements = $4,
                          groupPos = pos } : $1
@@ -364,22 +365,22 @@ group_list: group_list PRIVATE COLON def_list
               { [] }
 
 truth_kind: THEOREM
-              { (Theorem, Token.position $1) }
+              { (Theorem, position $1) }
           | INVARIANT
-              { (Invariant, Token.position $1) }
+              { (Invariant, position $1) }
           | AXIOM
-              { (Axiom, Token.position $1) }
+              { (Axiom, position $1) }
 
 type_builder_kind: MODULE
-                     { (Module, Token.position $1) }
+                     { (Module, position $1) }
                  | SIGNATURE
-                     { (Signature, Token.position $1) }
+                     { (Signature, position $1) }
                  | CLASS
-                     { (Class, Token.position $1) }
+                     { (Class, position $1) }
                  | TYPECLASS
-                     { (Typeclass, Token.position $1) }
+                     { (Typeclass, position $1) }
                  | INSTANCE
-                     { (Instance, Token.position $1) }
+                     { (Instance, position $1) }
 
 args_opt: LPAREN field_list RPAREN
             { $2 }
@@ -389,7 +390,7 @@ args_opt: LPAREN field_list RPAREN
 field_list: field_list COMMA ID COLON exp
               { let
                   val = buildExp $5
-                  pos = Token.position $3 <> expPosition val
+                  pos = position $3 <> position val
                 in
                   Field { fieldName = FieldName { fieldSym = name $3 },
                           fieldVal = val, fieldPos = pos } : $1
@@ -397,7 +398,7 @@ field_list: field_list COMMA ID COLON exp
           | ID COLON exp
               { let
                   val = buildExp $3
-                  pos = Token.position $1 <> expPosition val
+                  pos = position $1 <> position val
                 in
                   [ Field { fieldName = FieldName { fieldSym = name $1 },
                             fieldVal = val, fieldPos = pos } ]
@@ -406,7 +407,7 @@ field_list: field_list COMMA ID COLON exp
 bind_list: bind_list COMMA ID EQUAL exp
              { let
                  val = buildExp $5
-                 pos = Token.position $3 <> expPosition val
+                 pos = position $3 <> position val
                in
                  Field { fieldName = FieldName { fieldSym = name $3 },
                          fieldVal = val, fieldPos = pos } : $1
@@ -414,7 +415,7 @@ bind_list: bind_list COMMA ID EQUAL exp
          | ID EQUAL exp
              { let
                  val = buildExp $3
-                 pos = Token.position $1 <> expPosition val
+                 pos = position $1 <> position val
                in
                  [ Field { fieldName = FieldName { fieldSym = name $1 },
                            fieldVal = val, fieldPos = pos } ]
@@ -432,8 +433,8 @@ static_exp_list: static_exp_list COMMA static_exp
 
 static_exp: static_exp WITH LPAREN exp_list RPAREN
               { let
-                  withpos = expPosition $1 <> Token.position $5
-                  recpos = Token.position $3 <> Token.position $5
+                  withpos = position $1 <> position $5
+                  recpos = position $3 <> position $5
                 in
                   With { withVal = $1,
                          withArgs = Tuple { tupleFields = reverse $4,
@@ -442,8 +443,8 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               }
           | static_exp WITH LPAREN bind_list RPAREN
               { let
-                  withpos = expPosition $1 <> Token.position $5
-                  recpos = Token.position $3 <> Token.position $5
+                  withpos = position $1 <> position $5
+                  recpos = position $3 <> position $5
                 in
                   With { withVal = $1,
                          withArgs = Record { recordFields = reverse $4,
@@ -453,8 +454,8 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               }
           | static_exp WHERE LPAREN bind_list RPAREN
               { let
-                  wherepos = expPosition $1 <> Token.position $5
-                  recpos = Token.position $3 <> Token.position $5
+                  wherepos = position $1 <> position $5
+                  recpos = position $3 <> position $5
                 in
                   Where { whereVal = $1,
                           whereProp = Record { recordFields = reverse $4,
@@ -464,8 +465,8 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               }
           | static_exp LPAREN exp_list RPAREN
               { let
-                  seqpos = expPosition $1 <> Token.position $4
-                  recpos = Token.position $2 <> Token.position $4
+                  seqpos = position $1 <> position $4
+                  recpos = position $2 <> position $4
                 in
                   Seq { seqExps = [$1, Tuple { tupleFields = reverse $3,
                                                tuplePos = recpos } ],
@@ -473,8 +474,8 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               }
           | static_exp LPAREN bind_list RPAREN
               { let
-                  seqpos = expPosition $1 <> Token.position $4
-                  recpos = Token.position $2 <> Token.position $4
+                  seqpos = position $1 <> position $4
+                  recpos = position $2 <> position $4
                 in
                   Seq { seqExps = [$1, Record { recordFields = reverse $3,
                                                 recordType = False,
@@ -483,7 +484,7 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               }
           | static_exp DOT ID
               { let
-                  pos = expPosition $1 <>  Token.position $3
+                  pos = position $1 <>  position $3
                 in
                   Project { projectVal = $1,
                             projectFields = [FieldName { fieldSym = name $3 }],
@@ -491,9 +492,9 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
               }
           | type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
               { let
-                  grouppos = elementPosition (last $5) <>
-                              elementPosition (head $5)
-                  builderpos = snd $1 <> Token.position $7
+                  grouppos = position (last $5) <>
+                              position (head $5)
+                  builderpos = snd $1 <> position $7
                 in
                   Anon { anonKind = fst $1,
                          anonSuperTypes = reverse $3,
@@ -505,7 +506,7 @@ static_exp: static_exp WITH LPAREN exp_list RPAREN
                          anonPos = builderpos }
               }
           | ID
-              { Sym { symName = name $1, symPos = Token.position $1 } }
+              { Sym { symName = name $1, symPos = position $1 } }
 
 exp_list: exp_list COMMA exp
             { buildExp $3 : $1 }
@@ -516,7 +517,7 @@ exp: exp WITH exp
        { let
            val = buildExp $1
            args = buildExp $3
-           pos = expPosition val <> expPosition args
+           pos = position val <> position args
          in
             [ With { withVal = val, withArgs = args, withPos = pos } ]
        }
@@ -524,7 +525,7 @@ exp: exp WITH exp
        { let
            val = buildExp $1
            prop = buildExp $3
-           pos = expPosition val <> expPosition prop
+           pos = position val <> position prop
          in
            [ Where { whereVal = val, whereProp = prop, wherePos = pos } ]
        }
@@ -532,7 +533,7 @@ exp: exp WITH exp
        { let
            val = buildExp $1
            ty = buildExp $3
-           pos = expPosition val <> expPosition ty
+           pos = position val <> position ty
          in
            [ Ascribe { ascribeVal = val, ascribeType = ty, ascribePos = pos } ]
        }
@@ -544,14 +545,14 @@ exp: exp WITH exp
 compound_exp: MATCH LPAREN exp RPAREN cases
                 { let
                     val = buildExp $3
-                    pos = Token.position $1 <> casePosition (head $5)
+                    pos = position $1 <> position (head $5)
                   in
                     Match { matchVal = val, matchCases = reverse $5,
                             matchPos = pos }
                 }
             | abstraction_kind cases
                 { let
-                     pos = snd $1 <> casePosition (head $2)
+                     pos = snd $1 <> position (head $2)
                   in
                      Abs { absKind = fst $1, absCases = reverse $2,
                            absPos = pos }
@@ -561,9 +562,8 @@ compound_exp: MATCH LPAREN exp RPAREN cases
 
 inner_exp: type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
             { let
-                grouppos = elementPosition (last $5) <>
-                           elementPosition (head $5)
-                builderpos = snd $1 <> Token.position $7
+                grouppos = position (last $5) <> position (head $5)
+                builderpos = snd $1 <> position $7
               in
                 Anon { anonKind = fst $1,
                        anonSuperTypes = reverse $3,
@@ -575,34 +575,34 @@ inner_exp: type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
             }
          | LPAREN field_list RPAREN
             { let
-                pos = Token.position $1 <> Token.position $3
+                pos = position $1 <> position $3
               in
                 Record { recordFields = reverse $2, recordType = True,
                          recordPos = pos }
             }
          | LPAREN bind_list RPAREN
             { let
-                pos = Token.position $1 <> Token.position $3
+                pos = position $1 <> position $3
               in
                 Record { recordFields = reverse $2, recordType = False,
                          recordPos = pos }
             }
          | LPAREN exp_list RPAREN
             { let
-                pos = Token.position $1 <> Token.position $3
+                pos = position $1 <> position $3
               in
                 Tuple { tupleFields = reverse $2, tuplePos = pos }
             }
          | LBRACE stm_list RBRACE
             { let
-                compoundpos = Token.position $1 <> Token.position $3
+                compoundpos = position $1 <> position $3
               in
                 Compound { compoundBody = reverse $2,
                            compoundPos = compoundpos }
             }
          | inner_exp DOT ID
             { let
-                pos = expPosition $1 <> Token.position $3
+                pos = position $1 <> position $3
               in
                 Project { projectVal = $1,
                           projectFields = [ FieldName { fieldSym = name $3 } ],
@@ -610,7 +610,7 @@ inner_exp: type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
             }
          | inner_exp DOT LPAREN project_list RPAREN
             { let
-                pos = expPosition $1 <> Token.position $5
+                pos = position $1 <> position $5
               in
                 Project { projectVal = $1, projectFields = reverse $4,
                           projectPos = pos }
@@ -618,7 +618,7 @@ inner_exp: type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
 --         | inner_exp LBRACK exp_list RBRACK
 --            {}
          | ID
-            { Sym { symName = name $1, symPos = Token.position $1 } }
+            { Sym { symName = name $1, symPos = position $1 } }
          | literal
             { Literal $1 }
 
@@ -628,23 +628,23 @@ project_list: project_list COMMA ID
               { [ FieldName { fieldSym = name $1 } ] }
 
 abstraction_kind: FUN
-                    { (Lambda, Token.position $1) }
+                    { (Lambda, position $1) }
                 | LAMBDA
-                    { (Lambda, Token.position $1) }
+                    { (Lambda, position $1) }
                 | FORALL
-                    { (Forall, Token.position $1) }
+                    { (Forall, position $1) }
                 | EXISTS
-                    { (Exists, Token.position $1) }
+                    { (Exists, position $1) }
 
 literal: NUM
-          { Num { numVal = num $1, numPos = Token.position $1 } }
+          { Num { numVal = num $1, numPos = position $1 } }
        | STRING
-          { Str { strVal = str $1, strPos = Token.position $1 } }
+          { Str { strVal = str $1, strPos = position $1 } }
        | CHAR
-          { Char { charVal = char $1, charPos = Token.position $1 } }
+          { Char { charVal = char $1, charPos = position $1 } }
        | LPAREN RPAREN
           { let
-              pos = Token.position $1 <> Token.position $2
+              pos = position $1 <> position $2
             in
               Unit { unitPos = pos }
           }
@@ -683,15 +683,15 @@ open_stm_list: closed_stm_list open_stm
 cases: case_list pattern EQUAL exp %prec COLON
          { let
              body = buildExp $4
-             pos = patternPosition $2 <> expPosition body
+             pos = position $2 <> position body
            in
              reverse (Case { casePat = $2, caseBody = body,
                              casePos = pos } : $1)
          }
      | case_list pattern LBRACE stm_list RBRACE %prec COLON
          { let
-             casepos = patternPosition $2 <> Token.position $5
-             compoundpos = Token.position $3 <> Token.position $5
+             casepos = position $2 <> position $5
+             compoundpos = position $3 <> position $5
            in
               reverse (Case { casePat = $2,
                               caseBody = Compound { compoundBody = reverse $4,
@@ -702,14 +702,14 @@ cases: case_list pattern EQUAL exp %prec COLON
 case_list: case_list pattern EQUAL exp BAR
              { let
                  body = buildExp $4
-                 pos = patternPosition $2 <> expPosition body
+                 pos = position $2 <> position body
                in
                  Case { casePat = $2, caseBody = body, casePos = pos } : $1
              }
          | case_list pattern LBRACE stm_list RBRACE BAR
              { let
-                 casepos = patternPosition $2 <> Token.position $5
-                 compoundpos = Token.position $3 <> Token.position $5
+                 casepos = position $2 <> position $5
+                 compoundpos = position $3 <> position $5
                in
                  Case { casePat = $2,
                         caseBody = Compound { compoundBody = reverse $4,
@@ -721,46 +721,46 @@ case_list: case_list pattern EQUAL exp BAR
 
 pattern: LPAREN option_list RPAREN
            { let
-               pos = Token.position $1 <> Token.position $3
+               pos = position $1 <> position $3
              in
                Option { optionPats = reverse $2, optionPos = pos }
            }
        | LPAREN match_list COMMA ELLIPSIS RPAREN
            { let
-               pos = Token.position $1 <> Token.position $5
+               pos = position $1 <> position $5
              in
                Split { splitFields = reverse $2, splitStrict = False,
                        splitPos = pos }
            }
        | LPAREN match_list RPAREN
            { let
-               pos = Token.position $1 <> Token.position $3
+               pos = position $1 <> position $3
              in
                Split { splitFields = reverse $2, splitStrict = True,
                        splitPos = pos }
            }
        | ID AS pattern
            { let
-               pos = Token.position $1 <> patternPosition $3
+               pos = position $1 <> position $3
              in
                As { asName = name $1, asPat = $3, asPos = pos }
            }
        | pattern COLON exp
            { let
                ty = buildExp $3
-               pos = patternPosition $1 <> expPosition ty
+               pos = position $1 <> position ty
              in
                Typed { typedPat = $1, typedType = ty, typedPos = pos }
            }
        | ID pattern
            { let
-               pos = Token.position $1 <> patternPosition $2
+               pos = position $1 <> position $2
              in
                Deconstruct { deconstructName = name $1, deconstructPat = $2,
                              deconstructPos = pos }
            }
        | ID
-           { Name { nameSym = name $1, namePos = Token.position $1 } }
+           { Name { nameSym = name $1, namePos = position $1 } }
        | literal
            { Exact $1 }
 
@@ -771,7 +771,7 @@ option_list: option_list BAR pattern
 
 match_list: match_list COMMA ID EQUAL pattern
               { let
-                  pos = Token.position $3 <> patternPosition $5
+                  pos = position $3 <> position $5
                 in
                    Named { namedSym = name $3, namedVal = $5,
                            namedPos = pos } : $1
@@ -780,7 +780,7 @@ match_list: match_list COMMA ID EQUAL pattern
               { Unnamed $3 : $1 }
           | ID EQUAL pattern
               { let
-                  pos = Token.position $1 <> patternPosition $3
+                  pos = position $1 <> position $3
                 in
                   [ Named { namedSym = name $1, namedVal = $3,
                             namedPos = pos } ]
@@ -798,7 +798,7 @@ buildExp [e] = e
 buildExp revexps =
   let
     exps = reverse revexps
-    pos = expPosition (head exps) <> expPosition (last exps)
+    pos = position (head exps) <> position (last exps)
   in
     Seq { seqExps = exps, seqPos = pos }
 

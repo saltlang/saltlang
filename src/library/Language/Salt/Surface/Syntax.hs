@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -36,6 +36,8 @@
 -- amount of processing has been done.  However, symbols have not been
 -- resolved and inherited scopes have not been constructed.
 module Language.Salt.Surface.Syntax(
+       Ref(..),
+       Surface(..),
        Component(..),
        Assoc(..),
        Fixity(..),
@@ -53,8 +55,7 @@ module Language.Salt.Surface.Syntax(
        Entry(..),
        Fields(..),
        Field(..),
-       Case(..),
-       expPosition
+       Case(..)
        ) where
 
 import Control.Monad.Positions
@@ -64,6 +65,7 @@ import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
 import Data.List(sort)
+import Data.PositionElement
 import Data.Symbol
 import Data.Word
 import Language.Salt.Format
@@ -81,22 +83,38 @@ data Assoc = Left | Right | NonAssoc
 data Fixity = Prefix | Infix !Assoc | Postfix
   deriving (Ord, Eq, Show)
 
+-- | A reference to a definition in a scope.
+data Ref =
+  Ref {
+    -- | The symbol in the scope.
+    refSymbol :: !Symbol,
+    -- | The scope ID.
+    refScopeID :: !ScopeID
+  }
+  deriving (Ord, Eq)
+
+data Surface expty =
+  Surface {
+    -- | Table of all scopes in the program.
+    surfScopes :: !(Array ScopeID (Scope expty)),
+    -- | List of all components in the program.
+    surfComponents :: ![Component]
+  }
+
 -- | A component.  Essentially, a scope that may or may not have an
 -- expected definition.
-data Component expty =
+data Component =
   Component {
     -- | The expected definition.
     compExpected :: !(Maybe Symbol),
     -- | The top-level scope for this component.
-    compScope :: !(Scope expty)
+    compScope :: !ScopeID
   }
 
 -- | A static scope.  Elements are split up by kind, into builder definitions,
 -- syntax directives, truths, proofs, and regular definitions.
 data Scope expty =
   Scope {
-    -- The ID of the scope.
-    scopeID :: ScopeID,
     -- | All the builders defined in this scope.
     scopeBuilders :: !(HashMap Symbol (Builder expty)),
     -- | The syntax directives for this scope.
@@ -267,6 +285,9 @@ data Exp refty =
     -- directives and proofs are moved out-of-line, while truths,
     -- builders, and regular definitions remain in-line.
     Compound {
+      -- | Scope containing definitions in this compound block.
+      compoundScope :: !ScopeID,
+      -- | The body of the compound block.
       compoundBody :: ![Compound (Exp refty)],
       -- | The position in source from which this arises.
       compoundPos :: !Position
@@ -311,6 +332,11 @@ data Exp refty =
       seqExps :: ![Exp refty],
       -- | The position in source from which this arises.
       seqPos :: !Position
+    }
+  | Call {
+      callFunc :: !(Exp refty),
+      callArgs :: !(HashMap Symbol (Exp refty)),
+      callPos :: !Position
     }
   | RecordType {
       recordTypeFields :: !(Fields (Exp refty)),
@@ -376,7 +402,7 @@ data Exp refty =
       -- | The parameters of the builder entity.
       anonParams :: !(Fields (Exp refty)),
       -- | The entities declared by the builder.
-      anonContent :: !(Scope (Exp refty)),
+      anonContent :: !ScopeID,
       -- | The position in source from which this arises.
       anonPos :: !Position
     }
@@ -424,23 +450,57 @@ data Case expty =
     casePos :: !Position
   }
 
-expPosition :: Exp refty -> Position
-expPosition Compound { compoundPos = pos } = pos
-expPosition Abs { absPos = pos } = pos
-expPosition Match { matchPos = pos } = pos
-expPosition Ascribe { ascribePos = pos } = pos
-expPosition Seq { seqPos = pos } = pos
-expPosition RecordType { recordTypePos = pos } = pos
-expPosition Record { recordPos = pos } = pos
-expPosition Tuple { tuplePos = pos } = pos
-expPosition Project { projectPos = pos } = pos
-expPosition Sym { symPos = pos } = pos
-expPosition With { withPos = pos } = pos
-expPosition Where { wherePos = pos } = pos
-expPosition Anon { anonPos = pos } = pos
-expPosition Literal { literalVal = l } = literalPosition l
+instance PositionElement (Builder expty) where
+  position Builder { builderPos = pos } = pos
 
-instance Eq expty => Eq (Component expty) where
+instance PositionElement (Def expty) where
+  position Def { defPos = pos } = pos
+
+instance PositionElement (Truth expty) where
+  position Truth { truthPos = pos } = pos
+
+instance PositionElement (Proof expty) where
+  position Proof { proofPos = pos } = pos
+
+instance PositionElement (Import expty) where
+  position Import { importPos = pos } = pos
+
+instance PositionElement (Pattern expty) where
+  position Option { optionPos = pos } = pos
+  position Deconstruct { deconstructPos = pos } = pos
+  position Split { splitPos = pos } = pos
+  position Typed { typedPos = pos } = pos
+  position As { asPos = pos } = pos
+  position Name { namePos = pos } = pos
+  position Exact { exactLit = l } = position l
+
+instance PositionElement (Exp refty) where
+  position Compound { compoundPos = pos } = pos
+  position Abs { absPos = pos } = pos
+  position Match { matchPos = pos } = pos
+  position Ascribe { ascribePos = pos } = pos
+  position Seq { seqPos = pos } = pos
+  position Call { callPos = pos } = pos
+  position RecordType { recordTypePos = pos } = pos
+  position Record { recordPos = pos } = pos
+  position Tuple { tuplePos = pos } = pos
+  position Project { projectPos = pos } = pos
+  position Sym { symPos = pos } = pos
+  position With { withPos = pos } = pos
+  position Where { wherePos = pos } = pos
+  position Anon { anonPos = pos } = pos
+  position Literal { literalVal = l } = position l
+
+instance PositionElement (Entry expty) where
+  position Entry { entryPos = pos } = pos
+
+instance PositionElement (Field expty) where
+  position Field { fieldPos = pos } = pos
+
+instance PositionElement (Case expty) where
+  position Case { casePos = pos } = pos
+
+instance Eq Component where
   Component { compExpected = expected1, compScope = scope1 } ==
     Component { compExpected = expected2, compScope = scope2 } =
       expected1 == expected2 && scope1 == scope2
@@ -502,8 +562,9 @@ instance Eq expty => Eq (Pattern expty) where
   _ == _ = False
 
 instance Eq refty => Eq (Exp refty) where
-  Compound { compoundBody = body1 } == Compound { compoundBody = body2 } =
-    body1 == body2
+  Compound { compoundBody = body1, compoundScope = scope1 } ==
+    Compound { compoundBody = body2, compoundScope = scope2 } =
+      scope1 == scope2 && body1 == body2
   Abs { absKind = kind1, absCases = cases1 } ==
     Abs { absKind = kind2, absCases = cases2 } =
       kind1 == kind2 && cases1 == cases2
@@ -513,6 +574,9 @@ instance Eq refty => Eq (Exp refty) where
   Ascribe { ascribeVal = val1, ascribeType = ty1 } ==
     Ascribe { ascribeVal = val2, ascribeType = ty2 } =
       val1 == val2 && ty1 == ty2
+  Call { callFunc = func1, callArgs = args1 } ==
+    Call { callFunc = func2, callArgs = args2 } =
+      func1 == func2 && args1 == args2
   Seq { seqExps = exps1 } == Seq { seqExps = exps2 } = exps1 == exps2
   RecordType { recordTypeFields = fields1 } ==
     RecordType { recordTypeFields = fields2 } =
@@ -556,7 +620,7 @@ instance Eq expty => Eq (Case expty) where
     Case { casePat = pat2, caseBody = body2 } =
       pat1 == pat2 && body1 == body2
 
-instance Ord expty => Ord (Component expty) where
+instance Ord Component where
   compare Component { compExpected = expected1, compScope = scope1 }
           Component { compExpected = expected2, compScope = scope2 } =
     case compare expected1 expected2 of
@@ -693,8 +757,11 @@ instance Ord expty => Ord (Pattern expty) where
     compare lit1 lit2
 
 instance Ord expty => Ord (Exp expty) where
-  compare Compound { compoundBody = body1 } Compound { compoundBody = body2 } =
-    compare body1 body2
+  compare Compound { compoundBody = body1, compoundScope = scope1 }
+          Compound { compoundBody = body2, compoundScope = scope2 } =
+    case compare scope1 scope2 of
+      EQ -> compare body1 body2
+      out -> out
   compare Compound {} _ = LT
   compare _ Compound {} = GT
   compare Abs { absKind = kind1, absCases = cases1 }
@@ -721,6 +788,16 @@ instance Ord expty => Ord (Exp expty) where
   compare Seq { seqExps = exps1 } Seq { seqExps = exps2 } = compare exps1 exps2
   compare Seq {} _ = LT
   compare _ Seq {} = GT
+  compare Call { callFunc = func1, callArgs = args1 }
+          Call { callFunc = func2, callArgs = args2 } =
+    let
+      arglist1 = sort (HashMap.toList args1)
+      arglist2 = sort (HashMap.toList args2)
+    in case compare func1 func2 of
+        EQ -> compare arglist1 arglist2
+        out -> out
+  compare Call {} _ = LT
+  compare _ Call {} = GT
   compare RecordType { recordTypeFields = fields1 }
           RecordType { recordTypeFields = fields2 } =
     compare fields1 fields2
@@ -802,7 +879,11 @@ instance Ord expty => Ord (Case expty) where
       EQ -> compare body1 body2
       out -> out
 
-instance (Hashable expty, Ord expty) => Hashable (Component expty) where
+instance Hashable Ref where
+  hashWithSalt s Ref { refScopeID = scope, refSymbol = sym } =
+    s `hashWithSalt` scope `hashWithSalt` sym
+
+instance Hashable Component where
   hashWithSalt s Component { compExpected = expected, compScope = scope } =
     s `hashWithSalt` expected `hashWithSalt` scope
 
@@ -883,8 +964,8 @@ instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
     s `hashWithSalt` (6 :: Int) `hashWithSalt` lit
 
 instance (Hashable refty, Ord refty) => Hashable (Exp refty) where
-  hashWithSalt s Compound { compoundBody = body } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` body
+  hashWithSalt s Compound { compoundBody = body, compoundScope = scope } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` scope `hashWithSalt` body
   hashWithSalt s Abs { absKind = kind, absCases = cases } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` kind `hashWithSalt` cases
   hashWithSalt s Match { matchVal = val, matchCases = cases } =
@@ -893,29 +974,34 @@ instance (Hashable refty, Ord refty) => Hashable (Exp refty) where
     s `hashWithSalt` (4 :: Int) `hashWithSalt` val `hashWithSalt` ty
   hashWithSalt s Seq { seqExps = exps } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt` exps
+  hashWithSalt s Call { callFunc = func, callArgs = args } =
+    let
+      arglist = sort (HashMap.toList args)
+    in
+      s `hashWithSalt` (6 :: Int) `hashWithSalt` func `hashWithSalt` arglist
   hashWithSalt s Record { recordFields = fields } =
     let
       fieldlist = sort (HashMap.toList fields)
     in
-      s `hashWithSalt` (6 :: Int) `hashWithSalt` fieldlist
+      s `hashWithSalt` (7 :: Int) `hashWithSalt` fieldlist
   hashWithSalt s RecordType { recordTypeFields = fields } =
-    s `hashWithSalt` (7 :: Int) `hashWithSalt` fields
-  hashWithSalt s Tuple { tupleFields = fields } =
     s `hashWithSalt` (8 :: Int) `hashWithSalt` fields
+  hashWithSalt s Tuple { tupleFields = fields } =
+    s `hashWithSalt` (9 :: Int) `hashWithSalt` fields
   hashWithSalt s Project { projectVal = val, projectFields = sym } =
-    s `hashWithSalt` (9 :: Int) `hashWithSalt` sym `hashWithSalt` val
+    s `hashWithSalt` (10 :: Int) `hashWithSalt` sym `hashWithSalt` val
   hashWithSalt s Sym { symRef = sym } =
-    s `hashWithSalt` (10 :: Int) `hashWithSalt` sym
+    s `hashWithSalt` (11 :: Int) `hashWithSalt` sym
   hashWithSalt s With { withVal = val, withArgs = args } =
-    s `hashWithSalt` (11 :: Int) `hashWithSalt` val `hashWithSalt` args
+    s `hashWithSalt` (12 :: Int) `hashWithSalt` val `hashWithSalt` args
   hashWithSalt s Where { whereVal = val, whereProp = prop } =
-    s `hashWithSalt` (12 :: Int) `hashWithSalt` val `hashWithSalt` prop
+    s `hashWithSalt` (13 :: Int) `hashWithSalt` val `hashWithSalt` prop
   hashWithSalt s Anon { anonKind = cls, anonParams = params,
                         anonSuperTypes = supers, anonContent = body } =
-    s `hashWithSalt` (13 :: Int) `hashWithSalt` cls `hashWithSalt`
+    s `hashWithSalt` (14 :: Int) `hashWithSalt` cls `hashWithSalt`
     params `hashWithSalt` supers `hashWithSalt` body
   hashWithSalt s (Literal lit) =
-    s `hashWithSalt` (14 :: Int) `hashWithSalt` lit
+    s `hashWithSalt` (15 :: Int) `hashWithSalt` lit
 
 instance (Hashable expty, Ord expty) => Hashable (Entry expty) where
   hashWithSalt s Entry { entryPat = pat } = s `hashWithSalt` pat
@@ -933,9 +1019,6 @@ instance (Hashable expty, Ord expty) => Hashable (Field expty) where
 instance (Hashable expty, Ord expty) => Hashable (Case expty) where
   hashWithSalt s Case { casePat = pat, caseBody = body } =
     s `hashWithSalt` pat `hashWithSalt` body
-
-instance Functor Component where
-  fmap f c @ Component { compScope = scope } = c { compScope = fmap f scope }
 
 instance Functor Scope where
   fmap f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
@@ -1002,8 +1085,8 @@ instance Functor Exp where
   fmap f e @ Ascribe { ascribeVal = val, ascribeType = ty } =
     e { ascribeVal = fmap f val, ascribeType = fmap f ty }
   fmap f e @ Seq { seqExps = exps } = e { seqExps = fmap (fmap f) exps }
---  fmap f e @ Apply { applyFunc = func, applyArgs = args } =
---    e { applyFunc = fmap f func, applyArgs = fmap f args }
+  fmap f e @ Call { callFunc = func, callArgs = args } =
+    e { callFunc = fmap f func, callArgs = fmap (fmap f) args }
   fmap f e @ RecordType { recordTypeFields = fields } =
     e { recordTypeFields = fmap (fmap f) fields }
   fmap f e @ Record { recordFields = fields } =
@@ -1016,11 +1099,9 @@ instance Functor Exp where
     e { withVal = fmap f val, withArgs = fmap f args }
   fmap f e @ Where { whereVal = val, whereProp = prop } =
     e { whereVal = fmap f val, whereProp = fmap f prop }
-  fmap f e @ Anon { anonParams = params, anonSuperTypes = supers,
-                    anonContent = body } =
+  fmap f e @ Anon { anonParams = params, anonSuperTypes = supers } =
     e { anonParams = fmap (fmap f) params,
-        anonSuperTypes = fmap (fmap f) supers,
-        anonContent = fmap (fmap f) body }
+        anonSuperTypes = fmap (fmap f) supers }
   fmap _ Literal { literalVal = lit } = Literal { literalVal = lit }
 
 instance Functor Entry where
@@ -1036,9 +1117,6 @@ instance Functor Field where
 instance Functor Case where
   fmap f c @ Case { casePat = pat, caseBody = body } =
     c { casePat = fmap f pat, caseBody = f body }
-
-instance Foldable Component where
-  foldMap f Component { compScope = scope } = foldMap f scope
 
 instance Foldable Scope where
   foldMap f Scope { scopeBuilders = builders, scopeTruths = truths,
@@ -1098,8 +1176,8 @@ instance Foldable Exp where
   foldMap f Ascribe { ascribeVal = val, ascribeType = ty } =
     foldMap f val `mappend` foldMap f ty
   foldMap f Seq { seqExps = exps } = foldMap (foldMap f) exps
---  foldMap f Apply { applyFunc = func, applyArgs = args } =
---    e { applyFunc = foldMap f func, applyArgs = foldMap f args }
+  foldMap f Call { callFunc = func, callArgs = args } =
+    foldMap f func `mappend` foldMap (foldMap f) args
   foldMap f RecordType { recordTypeFields = fields } =
     foldMap (foldMap f) fields
   foldMap f Record { recordFields = fields } =
@@ -1112,10 +1190,8 @@ instance Foldable Exp where
     foldMap f val `mappend` foldMap f args
   foldMap f Where { whereVal = val, whereProp = prop } =
     foldMap f val `mappend` foldMap f prop
-  foldMap f Anon { anonParams = params, anonSuperTypes = supers,
-                   anonContent = body } =
-    foldMap (foldMap f) params `mappend` foldMap (foldMap f) supers `mappend`
-    foldMap (foldMap f) body
+  foldMap f Anon { anonParams = params, anonSuperTypes = supers } =
+    foldMap (foldMap f) params `mappend` foldMap (foldMap f) supers
   foldMap _ Literal {} = mempty
 
 instance Foldable Entry where
@@ -1130,10 +1206,6 @@ instance Foldable Field where
 instance Foldable Case where
   foldMap f Case { casePat = pat, caseBody = body } =
     foldMap f pat `mappend` f body
-
-instance Traversable Component where
-  traverse f c @ Component { compScope = scope } =
-    (\scope' -> c { compScope = scope' }) <$> traverse f scope
 
 instance Traversable Scope where
   traverse f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
@@ -1213,8 +1285,9 @@ instance Traversable Exp where
     traverse f val <*> traverse f ty
   traverse f e @ Seq { seqExps = exps } =
     (\exps' -> e { seqExps = exps' }) <$> traverse (traverse f) exps
---  traverse f e @ Apply { applyFunc = func, applyArgs = args } =
---    e { applyFunc = traverse f func, applyArgs = traverse f args }
+  traverse f e @ Call { callFunc = func, callArgs = args } =
+    (\func' args' -> e { callFunc = func', callArgs = args' }) <$>
+      traverse f func <*> traverse (traverse f) args
   traverse f e @ RecordType { recordTypeFields = fields } =
     (\fields' -> e { recordTypeFields = fields' }) <$>
       traverse (traverse f) fields
@@ -1231,13 +1304,10 @@ instance Traversable Exp where
   traverse f e @ Where { whereVal = val, whereProp = prop } =
     (\val' prop' -> e { whereVal = val', whereProp = prop' }) <$>
     traverse f val <*> traverse f prop
-  traverse f e @ Anon { anonParams = params, anonSuperTypes = supers,
-                        anonContent = body } =
-    (\params' supers' body' -> e { anonParams = params',
-                                   anonSuperTypes = supers',
-                                   anonContent = body' }) <$>
-    traverse (traverse f) params <*> traverse (traverse f) supers <*>
-    traverse (traverse f) body
+  traverse f e @ Anon { anonParams = params, anonSuperTypes = supers } =
+    (\params' supers' -> e { anonParams = params',
+                             anonSuperTypes = supers' }) <$>
+    traverse (traverse f) params <*> traverse (traverse f) supers
   traverse _ Literal { literalVal = lit } = pure Literal { literalVal = lit }
 
 instance Traversable Entry where
@@ -1299,6 +1369,14 @@ syntaxDot Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
 -}
 instance Format Assoc where format = string . show
 instance Format Fixity where format = string . show
+
+instance (MonadSymbols m) => FormatM m Ref where
+  formatM Ref { refSymbol = sym, refScopeID = scopeid } =
+    do
+      symdoc <- formatM sym
+      return $! compoundApplyDoc (string "Ref")
+                                 [(string "symbol", symdoc),
+                                  (string "scope", format scopeid)]
 
 instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
          FormatM m (Syntax expty) where
@@ -1372,20 +1450,16 @@ formatElems arr =
                               (string "protected", listDoc protecteddocs),
                               (string "public", listDoc publicdocs)]
 
-instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
-         FormatM m (Component expty) where
+instance (MonadSymbols m, MonadPositions m) => FormatM m Component where
   formatM Component { compExpected = Just expected, compScope = scope } =
     do
       expecteddoc <- formatM expected
-      scopedoc <- formatM scope
       return $ compoundApplyDoc (string "Component")
                               [(string "expected", expecteddoc),
-                               (string "scope", scopedoc)]
+                               (string "scope", format scope)]
   formatM Component { compExpected = Nothing, compScope = scope } =
-    do
-      scopedoc <- formatM scope
-      return $ compoundApplyDoc (string "Component")
-                              [(string "scope", scopedoc)]
+      return $ compoundApplyDoc (string "Component") [(string "scope",
+                                                       format scope)]
 
 instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
          FormatM m (Scope expty) where
@@ -1537,12 +1611,14 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
 
 instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
          FormatM m (Exp refty) where
-  formatM Compound { compoundBody = body, compoundPos = pos } =
+  formatM Compound { compoundBody = body, compoundScope = scope,
+                     compoundPos = pos } =
     do
       posdoc <- formatM pos
       bodydoc <- mapM formatM body
       return (compoundApplyDoc (string "Compound")
                              [(string "pos", posdoc),
+                              (string "scope", format scope),
                               (string "body", listDoc bodydoc)])
   formatM Abs { absKind = kind, absCases = cases, absPos = pos } =
     do
@@ -1577,6 +1653,15 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
       return (compoundApplyDoc (string "Seq")
                              [(string "pos", posdoc),
                               (string "exps", listDoc expdocs)])
+  formatM Call { callFunc = func, callArgs = args, callPos = pos } =
+    do
+      posdoc <- formatM pos
+      funcdoc <- formatM func
+      argdocs <- formatMap args
+      return (compoundApplyDoc (string "Call")
+                               [(string "pos", posdoc),
+                                (string "func", funcdoc),
+                                (string "args", argdocs)])
   formatM Record { recordFields = fields, recordPos = pos } =
     do
       posdoc <- formatM pos
@@ -1641,13 +1726,12 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
       posdoc <- formatM pos
       superdocs <- mapM formatM supers
       paramdocs <- formatM params
-      bodydoc <- formatM body
       return (compoundApplyDoc (string "Anon")
                              [(string "pos", posdoc),
                               (string "kind", format cls),
                               (string "params", paramdocs),
                               (string "supers", listDoc superdocs),
-                              (string "body", bodydoc)])
+                              (string "body", format body)])
   formatM Literal { literalVal = l } = formatM l
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
@@ -1794,9 +1878,8 @@ defsPickler =
                                 (xpElemNodes (gxFromString "public")
                                              (xpList xpickle))))
 
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
-          XmlPickler [NodeG [] tag text] expty) =>
-         XmlPickler [NodeG [] tag text] (Component expty) where
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Component where
   xpickle =
     xpWrap (\(expected, scope) -> Component { compExpected = expected,
                                               compScope = scope },
@@ -1808,25 +1891,27 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Scope expty) where
   xpickle =
-    xpWrap (\(scopeid, (builders, syntax, truths, defs, proofs, imports)) ->
-             Scope { scopeID = scopeid, scopeBuilders = builders,
-                     scopeSyntax = syntax, scopeTruths = truths,
-                     scopeElems = defs, scopeProofs = proofs,
-                     scopeImports = imports },
-            \Scope { scopeID = scopeid, scopeBuilders = builders,
-                     scopeSyntax = syntax, scopeTruths = truths,
-                     scopeElems = defs, scopeProofs = proofs,
-                     scopeImports = imports } ->
-            (scopeid, (builders, syntax, truths, defs, proofs, imports)))
-           (xpElem (gxFromString "Scope") xpickle
-                   (xp6Tuple (xpElemNodes (gxFromString "builders") mapPickler)
-                             (xpElemNodes (gxFromString "syntax") mapPickler)
-                             (xpElemNodes (gxFromString "truths") mapPickler)
-                             (xpElemNodes (gxFromString "defs") defsPickler)
-                             (xpElemNodes (gxFromString "proofs")
-                                          (xpList xpickle))
-                             (xpElemNodes (gxFromString "imports")
-                                          (xpList xpickle))))
+    xpWrap (\(builders, syntax, truths, defs, proofs, imports) ->
+             Scope { scopeBuilders = builders, scopeSyntax = syntax,
+                     scopeTruths = truths, scopeElems = defs,
+                     scopeProofs = proofs, scopeImports = imports },
+            \Scope { scopeBuilders = builders, scopeSyntax = syntax,
+                     scopeTruths = truths, scopeElems = defs,
+                     scopeProofs = proofs, scopeImports = imports } ->
+            (builders, syntax, truths, defs, proofs, imports))
+           (xpElemNodes (gxFromString "Scope")
+                        (xp6Tuple (xpElemNodes (gxFromString "builders")
+                                               mapPickler)
+                                  (xpElemNodes (gxFromString "syntax")
+                                               mapPickler)
+                                  (xpElemNodes (gxFromString "truths")
+                                               mapPickler)
+                                  (xpElemNodes (gxFromString "defs")
+                                               defsPickler)
+                                  (xpElemNodes (gxFromString "proofs")
+                                               (xpList xpickle))
+                                  (xpElemNodes (gxFromString "imports")
+                                               (xpList xpickle))))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
@@ -2051,15 +2136,17 @@ compoundPickler :: (GenericXMLString tag, Show tag,
                    PU [NodeG [] tag text] (Exp resty)
 compoundPickler =
   let
-    revfunc Compound { compoundBody = body, compoundPos = pos } = (body, pos)
+    revfunc Compound { compoundBody = body, compoundScope = scope,
+                       compoundPos = pos } = (scope, (body, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(body, pos) -> Compound { compoundBody = body,
-                                       compoundPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Compound")
-                        (xpPair (xpElemNodes (gxFromString "body")
-                                             (xpList xpickle))
-                                (xpElemNodes (gxFromString "pos") xpickle)))
+    xpWrap (\(scope, (body, pos)) -> Compound { compoundBody = body,
+                                                compoundScope = scope,
+                                                compoundPos = pos }, revfunc)
+           (xpElem (gxFromString "Compound") xpickle
+                   (xpPair (xpElemNodes (gxFromString "body")
+                                        (xpList xpickle))
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 absPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
@@ -2124,6 +2211,23 @@ seqPickler =
            (xpElemNodes (gxFromString "Seq")
                         (xpPair (xpElemNodes (gxFromString "exps") xpickle)
                                 (xpElemNodes (gxFromString "pos") xpickle)))
+
+callPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [NodeG [] tag text] resty) =>
+              PU [NodeG [] tag text] (Exp resty)
+callPickler =
+  let
+    revfunc Call { callFunc = func, callArgs = args, callPos = pos } =
+      (func, args, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(func, args, pos) ->
+             Call { callFunc = func, callArgs = args, callPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Call")
+                        (xpTriple (xpElemNodes (gxFromString "func") xpickle)
+                                  (xpElemNodes (gxFromString "args") mapPickler)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 recordPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text,
@@ -2278,20 +2382,21 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
       picker Match {} = 2
       picker Ascribe {} = 3
       picker Seq {} = 4
-      picker Record {} = 5
-      picker RecordType {} = 6
-      picker Tuple {} = 7
-      picker Project {} = 8
-      picker Sym {} = 9
-      picker With {} = 10
-      picker Where {} = 11
-      picker Anon {} = 12
-      picker Literal {} = 13
+      picker Call {} = 5
+      picker Record {} = 6
+      picker RecordType {} = 7
+      picker Tuple {} = 8
+      picker Project {} = 9
+      picker Sym {} = 10
+      picker With {} = 11
+      picker Where {} = 12
+      picker Anon {} = 13
+      picker Literal {} = 14
     in
       xpAlt picker [compoundPickler, absPickler, matchPickler, ascribePickler,
-                    seqPickler, recordPickler, recordTypePickler, tuplePickler,
-                    projectPickler, symPickler, withPickler, wherePickler,
-                    anonPickler, literalPickler]
+                    seqPickler, callPickler, recordPickler, recordTypePickler,
+                    tuplePickler, projectPickler, symPickler, withPickler,
+                    wherePickler, anonPickler, literalPickler]
 
 makeArray :: [a] -> Array Word a
 makeArray l = listArray (1, fromIntegral (length l)) l

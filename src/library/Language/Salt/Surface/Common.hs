@@ -42,7 +42,6 @@ module Language.Salt.Surface.Common(
        BasicPosition(..),
        Position,
        ScopeID,
-       literalPosition,
        literalDot,
        getNodeID,
        firstScopeID
@@ -56,6 +55,7 @@ import Data.ByteString(ByteString)
 import Data.Hashable
 import Data.Ratio
 import Data.Position.BasicPosition
+import Data.PositionElement
 import Data.Symbol
 import Data.Word
 import Language.Salt.Format
@@ -203,11 +203,11 @@ getNodeID =
     put $! nodeid + 1
     return ("node" ++ show nodeid)
 
-literalPosition :: Literal -> Position
-literalPosition Num { numPos = pos } = pos
-literalPosition Str { strPos = pos } = pos
-literalPosition Char { charPos = pos } = pos
-literalPosition Unit { unitPos = pos } = pos
+instance PositionElement Literal where
+  position Num { numPos = pos } = pos
+  position Str { strPos = pos } = pos
+  position Char { charPos = pos } = pos
+  position Unit { unitPos = pos } = pos
 
 literalDot :: Monad m => Literal -> StateT Word m (Doc, String)
 literalDot Num { numVal = num } =

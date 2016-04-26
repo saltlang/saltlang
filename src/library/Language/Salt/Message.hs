@@ -87,7 +87,8 @@ import Control.Monad.Symbols
 import Data.Hashable
 import Data.Position.BasicPosition
 import Data.Position.DWARFPosition(DWARFPosition, basicPosition)
-import Language.Salt.Surface.Token(Token, position)
+import Data.PositionElement
+import Language.Salt.Surface.Token(Token)
 import Data.Default
 import Data.Symbol
 import Text.Format
@@ -179,7 +180,7 @@ data Message =
     -- | Duplicate record field binding.
   | DuplicateField {
       duplicateFieldName :: !Strict.ByteString,
-      duplicateFieldPos :: !Position
+      duplicateFieldPosList :: ![Position]
     }
   | NamelessField {
       namelessFieldPos :: !Position
@@ -187,7 +188,7 @@ data Message =
     -- | Duplicate truth definition in the current environment.
   | DuplicateTruth {
       duplicateTruthName :: !Strict.ByteString,
-      duplicateTruthPos :: !Position
+      duplicateTruthPosList :: ![Position]
     }
     -- | A bad syntax directive kind.
   | BadSyntax {
@@ -228,7 +229,7 @@ data Message =
     -- | Duplicate truth definition in the current environment.
   | DuplicateBuilder {
       duplicateBuilderName :: !Strict.ByteString,
-      duplicateBuilderPos :: !Position
+      duplicateBuilderPosList :: ![Position]
     }
     -- | Cannot find a file or a component
   | CannotFind {
@@ -401,12 +402,12 @@ instance Hashable Message where
                                  noTopLevelDefPos = pos } =
     s `hashWithSalt` (13 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s DuplicateField { duplicateFieldName = sym,
-                                  duplicateFieldPos = pos } =
+                                  duplicateFieldPosList = pos } =
     s `hashWithSalt` (14 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s NamelessField { namelessFieldPos = pos } =
     s `hashWithSalt` (15 :: Int) `hashWithSalt` pos
   hashWithSalt s DuplicateTruth { duplicateTruthName = sym,
-                                  duplicateTruthPos = pos } =
+                                  duplicateTruthPosList = pos } =
     s `hashWithSalt` (16 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s BadSyntax { badSyntaxPos = pos } =
     s `hashWithSalt` (17 :: Int) `hashWithSalt` pos
@@ -427,7 +428,7 @@ instance Hashable Message where
   hashWithSalt s NamelessUninitDef { namelessUninitDefPos = pos } =
     s `hashWithSalt` (25 :: Int) `hashWithSalt` pos
   hashWithSalt s DuplicateBuilder { duplicateBuilderName = sym,
-                                    duplicateBuilderPos = pos } =
+                                    duplicateBuilderPosList = pos } =
     s `hashWithSalt` (26 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s CannotFind { cannotFindName = cname,
                               cannotFindIsFileName = isfile,
@@ -636,46 +637,46 @@ instance Msg.Message Message where
   highlighting _ = Msg.Foreground
 
 instance Msg.MessagePosition BasicPosition Message where
-  position BadChars { badCharsPos = pos } = Just pos
-  position BadEscape { badEscPos = pos } = Just pos
-  position NewlineCharLiteral { newlineCharPos = pos } = Just pos
-  position TabCharLiteral { tabCharPos = pos } = Just pos
-  position LongCharLiteral { longCharPos = pos } = Just pos
-  position EmptyCharLiteral { emptyCharPos = pos } = Just pos
-  position UntermComment { untermCommentPos = pos } = Just pos
-  position TabStringLiteral { tabStringPos = pos } = Just pos
-  position UntermString { untermStringPos = pos } = Just pos
-  position HardTabs { hardTabsPos = pos } = Just pos
-  position TrailingWhitespace { trailingWhitespacePos = pos } = Just pos
-  position NewlineInString { newlineInStringPos = pos } = Just pos
-  position ParseError { parseErrorToken = tok } = Just (position tok)
-  position NoTopLevelDef { noTopLevelDefPos = pos } = Just pos
-  position DuplicateField { duplicateFieldPos = pos } = Just pos
-  position NamelessField { namelessFieldPos = pos } = Just pos
-  position DuplicateTruth { duplicateTruthPos = pos } = Just pos
-  position BadSyntax { badSyntaxPos = pos } = Just pos
-  position BadSyntaxKind { badSyntaxKindPos = pos } = Just pos
-  position BadSyntaxName { badSyntaxNamePos = pos } = Just pos
-  position BadSyntaxAssoc { badSyntaxAssocPos = pos } = Just pos
-  position BadSyntaxPrec { badSyntaxPrecPos = pos } = Just pos
-  position BadSyntaxRef { badSyntaxRefPos = pos } = Just pos
-  position MultipleFixity { multipleFixityPos = pos } = Just pos
-  position UndefSymbol { undefSymbolPos = pos } = Just pos
-  position NamelessUninitDef { namelessUninitDefPos = pos } = Just pos
-  position DuplicateBuilder { duplicateBuilderPos = pos } = Just pos
-  position CannotFind { cannotFindPos = pos } = Just pos
-  position CannotAccess { cannotAccessPos = pos } = Just pos
-  position BadComponentName { badComponentNamePos = pos } = Just pos
-  position CannotCreate {} = Nothing
-  position ImportNestedScope { importNestedScopePos = pos } = Just pos
-  position InternalError { internalErrorPos = pos } = Just pos
-  position CallNonFunc { callNonFuncPos = pos } = Just pos
-  position NoMatch { noMatchPos = pos } = Just pos
-  position ExpectedFunc { expectedFuncPos = pos } = Just pos
-  position CyclicImport { cyclicImportPos = pos } = Just pos
-  position CyclicInherit { cyclicInheritPos = pos } = Just pos
-  position IllegalAccess { illegalAccessPos = pos } = Just pos
-  position OutOfContext { outOfContextPos = pos } = Just pos
+  positions BadChars { badCharsPos = pos } = [pos]
+  positions BadEscape { badEscPos = pos } = [pos]
+  positions NewlineCharLiteral { newlineCharPos = pos } = [pos]
+  positions TabCharLiteral { tabCharPos = pos } = [pos]
+  positions LongCharLiteral { longCharPos = pos } = [pos]
+  positions EmptyCharLiteral { emptyCharPos = pos } = [pos]
+  positions UntermComment { untermCommentPos = pos } = [pos]
+  positions TabStringLiteral { tabStringPos = pos } = [pos]
+  positions UntermString { untermStringPos = pos } = [pos]
+  positions HardTabs { hardTabsPos = pos } = [pos]
+  positions TrailingWhitespace { trailingWhitespacePos = pos } = [pos]
+  positions NewlineInString { newlineInStringPos = pos } = [pos]
+  positions ParseError { parseErrorToken = tok } = [position tok]
+  positions NoTopLevelDef { noTopLevelDefPos = pos } = [pos]
+  positions DuplicateField { duplicateFieldPosList = poslist } = poslist
+  positions NamelessField { namelessFieldPos = pos } = [pos]
+  positions DuplicateTruth { duplicateTruthPosList = poslist } = poslist
+  positions BadSyntax { badSyntaxPos = pos } = [pos]
+  positions BadSyntaxKind { badSyntaxKindPos = pos } = [pos]
+  positions BadSyntaxName { badSyntaxNamePos = pos } = [pos]
+  positions BadSyntaxAssoc { badSyntaxAssocPos = pos } = [pos]
+  positions BadSyntaxPrec { badSyntaxPrecPos = pos } = [pos]
+  positions BadSyntaxRef { badSyntaxRefPos = pos } = [pos]
+  positions MultipleFixity { multipleFixityPos = pos } = [pos]
+  positions UndefSymbol { undefSymbolPos = pos } = [pos]
+  positions NamelessUninitDef { namelessUninitDefPos = pos } = [pos]
+  positions DuplicateBuilder { duplicateBuilderPosList = poslist } = poslist
+  positions CannotFind { cannotFindPos = pos } = [pos]
+  positions CannotAccess { cannotAccessPos = pos } = [pos]
+  positions BadComponentName { badComponentNamePos = pos } = [pos]
+  positions CannotCreate {} = []
+  positions ImportNestedScope { importNestedScopePos = pos } = [pos]
+  positions InternalError { internalErrorPos = pos } = [pos]
+  positions CallNonFunc { callNonFuncPos = pos } = [pos]
+  positions NoMatch { noMatchPos = pos } = [pos]
+  positions ExpectedFunc { expectedFuncPos = pos } = [pos]
+  positions CyclicImport { cyclicImportPos = pos } = [pos]
+  positions CyclicInherit { cyclicInheritPos = pos } = [pos]
+  positions IllegalAccess { illegalAccessPos = pos } = [pos]
+  positions OutOfContext { outOfContextPos = pos } = [pos]
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -796,13 +797,14 @@ noTopLevelDef sym pos =
 duplicateField :: (MonadMessages Message m, MonadSymbols m) =>
                   Symbol
                -- ^ The duplicate field name.
-               -> Position
+               -> [Position]
                -- ^ The position at which the duplicated field occurs.
                -> m ()
-duplicateField sym pos =
+duplicateField sym poslist =
   do
     str <- name sym
-    message DuplicateField { duplicateFieldName = str, duplicateFieldPos = pos }
+    message DuplicateField { duplicateFieldName = str,
+                             duplicateFieldPosList = poslist }
 
 -- | Report a field binding with no name.
 namelessField :: MonadMessages Message m =>
@@ -815,14 +817,15 @@ namelessField pos = message NamelessField { namelessFieldPos = pos }
 duplicateTruth :: (MonadMessages Message m, MonadSymbols m) =>
                   Symbol
                -- ^ The duplicate truth name.
-               -> Position
+               -> [Position]
                -- ^ The position at which the duplicated truth
                -- definition occurs.
                -> m ()
-duplicateTruth sym pos =
+duplicateTruth sym poslist =
   do
     str <- name sym
-    message DuplicateTruth { duplicateTruthName = str, duplicateTruthPos = pos }
+    message DuplicateTruth { duplicateTruthName = str,
+                             duplicateTruthPosList = poslist }
 
 -- | Report a bad syntax directive.
 badSyntax :: MonadMessages Message m =>
@@ -897,15 +900,15 @@ namelessUninitDef pos = message NamelessUninitDef { namelessUninitDefPos = pos }
 duplicateBuilder :: (MonadMessages Message m, MonadSymbols m) =>
                     Symbol
                  -- ^ The duplicate builder name.
-                 -> Position
+                 -> [Position]
                  -- ^ The position at which the duplicated builder
                  -- definition occurs.
                  -> m ()
-duplicateBuilder sym pos =
+duplicateBuilder sym poslist =
   do
     str <- name sym
     message DuplicateBuilder { duplicateBuilderName = str,
-                               duplicateBuilderPos = pos }
+                               duplicateBuilderPosList = poslist }
 
 -- | Report nonexistent file.
 cannotFindFile :: MonadMessages Message m =>
@@ -1025,7 +1028,7 @@ importNestedScope :: MonadMessages Message m =>
                   -> m ()
 importNestedScope pos = message ImportNestedScope { importNestedScopePos = pos }
 
--- | Report a bad static expression.  This is an internal error.
+-- | Report an internal error.
 internalError :: MonadMessages Message m =>
                  Strict.ByteString
               -- ^ An explanation of the problem

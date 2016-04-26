@@ -33,13 +33,13 @@
 -- | Defines the type of tokens produced by the lexer.  These
 module Language.Salt.Surface.Token(
        Token(..),
-       position,
        keywords,
        ) where
 
 import Control.Monad.Positions
 import Control.Monad.Symbols
 import Data.Position.BasicPosition
+import Data.PositionElement
 import Data.Ratio
 import Data.Symbol
 import Text.Format
@@ -139,50 +139,50 @@ data Token =
   | EOF
     deriving (Ord, Eq)
 
-position :: Token -> Position
-position (Id _ pos) = pos
-position (Num _ pos) = pos
-position (String _ pos) = pos
-position (Character _ pos) = pos
-position (Equal pos) = pos
-position (Ellipsis pos) = pos
-position (Bar pos) = pos
-position (Dot pos) = pos
-position (Colon pos) = pos
-position (Comma pos) = pos
-position (Semicolon pos) = pos
-position (LParen pos) = pos
-position (RParen pos) = pos
-position (LBrack pos) = pos
-position (RBrack pos) = pos
-position (LBrace pos) = pos
-position (RBrace pos) = pos
-position (Lambda pos) = pos
-position (Forall pos) = pos
-position (Exists pos) = pos
-position (Module pos) = pos
-position (Signature pos) = pos
-position (Class pos) = pos
-position (Typeclass pos) = pos
-position (Instance pos) = pos
-position (Theorem pos) = pos
-position (Invariant pos) = pos
-position (Axiom pos) = pos
-position (Proof pos) = pos
-position (With pos) = pos
-position (Where pos) = pos
-position (As pos) = pos
-position (Private pos) = pos
-position (Protected pos) = pos
-position (Public pos) = pos
-position (Match pos) = pos
-position (Let pos) = pos
-position (Fun pos) = pos
-position (Import pos) = pos
-position (Use pos) = pos
-position (Syntax pos) = pos
-position (Component pos) = pos
-position EOF = error "Can't take position of EOF"
+instance PositionElement Token where
+  position (Id _ pos) = pos
+  position (Num _ pos) = pos
+  position (String _ pos) = pos
+  position (Character _ pos) = pos
+  position (Equal pos) = pos
+  position (Ellipsis pos) = pos
+  position (Bar pos) = pos
+  position (Dot pos) = pos
+  position (Colon pos) = pos
+  position (Comma pos) = pos
+  position (Semicolon pos) = pos
+  position (LParen pos) = pos
+  position (RParen pos) = pos
+  position (LBrack pos) = pos
+  position (RBrack pos) = pos
+  position (LBrace pos) = pos
+  position (RBrace pos) = pos
+  position (Lambda pos) = pos
+  position (Forall pos) = pos
+  position (Exists pos) = pos
+  position (Module pos) = pos
+  position (Signature pos) = pos
+  position (Class pos) = pos
+  position (Typeclass pos) = pos
+  position (Instance pos) = pos
+  position (Theorem pos) = pos
+  position (Invariant pos) = pos
+  position (Axiom pos) = pos
+  position (Proof pos) = pos
+  position (With pos) = pos
+  position (Where pos) = pos
+  position (As pos) = pos
+  position (Private pos) = pos
+  position (Protected pos) = pos
+  position (Public pos) = pos
+  position (Match pos) = pos
+  position (Let pos) = pos
+  position (Fun pos) = pos
+  position (Import pos) = pos
+  position (Use pos) = pos
+  position (Syntax pos) = pos
+  position (Component pos) = pos
+  position EOF = error "Can't take position of EOF"
 
 keywords :: [(Strict.ByteString, Position -> Token)]
 keywords = [
