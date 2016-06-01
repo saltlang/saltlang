@@ -137,7 +137,9 @@ data Syntax expty =
     -- | Fixity (and associativity).
     syntaxFixity :: !Fixity,
     -- | Precedence relations.
-    syntaxPrecs :: ![(Ordering, expty)]
+    syntaxPrecs :: ![(Ordering, expty)],
+    -- | The position in source from which this arises.
+    syntaxPos :: !Position
   }
   deriving (Ord, Eq)
 
@@ -1827,11 +1829,15 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Syntax expty) where
   xpickle =
-    xpWrap (\(fixity, precs) -> Syntax { syntaxFixity = fixity,
-                                         syntaxPrecs = precs },
-            \Syntax { syntaxFixity = fixity, syntaxPrecs = precs } ->
-            (fixity, precs))
-           (xpElem (gxFromString "Syntax") xpickle (xpList precPickler))
+    xpWrap (\(fixity, (precs, pos)) -> Syntax { syntaxFixity = fixity,
+                                                syntaxPrecs = precs,
+                                                syntaxPos = pos },
+            \Syntax { syntaxFixity = fixity, syntaxPrecs = precs,
+                      syntaxPos = pos } -> (fixity, (precs, pos)))
+           (xpElem (gxFromString "Syntax") xpickle
+                   (xpPair (xpElemNodes (gxFromString "Syntax")
+                                        (xpList precPickler))
+                           (xpElemNodes (gxFromString "Syntax") xpickle)))
 
 mapPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
