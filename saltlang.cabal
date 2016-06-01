@@ -132,11 +132,7 @@ Library
                         monad-journal, bitwise
   build-tools:          alex, happy
   hs-source-dirs:       src/library
-  exposed-modules:      Control.Monad.Collect
-                        Control.Monad.Collect.Class
---                        Control.Monad.Elaborate.Class
-                        Control.Monad.Components
-                        Control.Monad.Components.Class
+  exposed-modules:      
 --                        Control.Monad.ProofChecker,
 --                        Control.Monad.ProofErrors.Class,
 --                        Control.Monad.ProofNames.Class,
