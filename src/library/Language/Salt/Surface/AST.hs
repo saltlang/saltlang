@@ -203,7 +203,7 @@ data Element =
       importPos :: !Position
     }
   | Syntax {
-      -- | The value to syntax.
+      -- | The syntax directive.
       syntaxExp :: !Exp,
       -- | The position in source from which this arises.
       syntaxPos :: !Position
