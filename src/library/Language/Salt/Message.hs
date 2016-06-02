@@ -79,7 +79,8 @@ module Language.Salt.Message(
        privateAccess,
        protectedAccess,
        localAccess,
-       objectAccess
+       objectAccess,
+       patternBindMismatch
        ) where
 
 import Control.Monad.Messages
@@ -312,6 +313,10 @@ data Message =
       outOfContextKind :: !ContextKind,
       outOfContextSym :: !Strict.ByteString
     }
+  | PatternBindMismatch {
+      patternBindMismatchPos :: ![Position],
+      patternBindMismatchSym :: !Strict.ByteString
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -478,6 +483,9 @@ instance Hashable Message where
   hashWithSalt s DuplicateSyntax { duplicateSyntaxName = sym,
                                    duplicateSyntaxPosList = pos } =
     s `hashWithSalt` (40 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+  hashWithSalt s PatternBindMismatch { patternBindMismatchPos = pos,
+                                       patternBindMismatchSym = sym } =
+    s `hashWithSalt` (41 :: Int) `hashWithSalt` sym `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -521,6 +529,7 @@ instance Msg.Message Message where
   severity IllegalAccess {} = Msg.Error
   severity OutOfContext {} = Msg.Error
   severity DuplicateSyntax {} = Msg.Error
+  severity PatternBindMismatch {} = Msg.Error
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -593,6 +602,9 @@ instance Msg.Message Message where
     string " from static context"
   brief DuplicateSyntax { duplicateSyntaxName = namestr } =
     string "Multiple syntax directives for symbol " <+> bytestring namestr
+  brief PatternBindMismatch { patternBindMismatchSym = sym } =
+    string "Symbol " <+> bytestring sym <+>
+    string " is not defined by other options in the pattern"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -690,6 +702,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions IllegalAccess { illegalAccessPos = pos } = [pos]
   positions OutOfContext { outOfContextPos = pos } = [pos]
   positions DuplicateSyntax { duplicateSyntaxPosList = poslist } = poslist
+  positions PatternBindMismatch { patternBindMismatchPos = poslist } = poslist
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1180,9 +1193,9 @@ objectAccess sym pos =
 -- | Report duplicate syntax directives.
 duplicateSyntax :: (MonadMessages Message m, MonadSymbols m) =>
                    Symbol
-                -- ^ The duplicate builder name.
+                -- ^ The duplicate syntax name.
                 -> [Position]
-                -- ^ The position at which the duplicated builder
+                -- ^ The position at which the duplicated syntax
                 -- definition occurs.
                 -> m ()
 duplicateSyntax sym poslist =
@@ -1190,3 +1203,16 @@ duplicateSyntax sym poslist =
     str <- name sym
     message DuplicateSyntax { duplicateSyntaxName = str,
                               duplicateSyntaxPosList = poslist }
+
+-- | Report extra symbols in an option pattern binding.
+patternBindMismatch :: (MonadMessages Message m, MonadSymbols m) =>
+                       Symbol
+                    -- ^ The extra binding symbol.
+                    -> [Position]
+                    -- ^ The position at which the extra symbol occurs.
+                    -> m ()
+patternBindMismatch sym poslist =
+  do
+    str <- name sym
+    message PatternBindMismatch { patternBindMismatchSym = str,
+                                  patternBindMismatchPos = poslist }
