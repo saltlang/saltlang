@@ -123,10 +123,11 @@ import qualified Language.Salt.Message as Message
        GREATER { Token.Greater _ }
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
-       INSTANCE
+       INSTANCE LESS GREATER LEFT RIGHT NONASSOC PREC POSTFIX INFIX
 %right LAMBDA FORALL EXISTS MATCH
+%right COLON
 %right BAR
-%nonassoc COLON WITH POSTFIX INFIX LEFT RIGHT NONASSOC PREC
+%nonassoc WITH
 %nonassoc AS
 %left WHERE
 
@@ -926,21 +927,27 @@ pattern :: { Pattern }
               in
                 Typed { typedPat = $1, typedType = ty, typedPos = pos }
             }
-        | ID AS pattern
+        | ident AS pattern
             { let
-                pos = position $1 <> position $3
+                (idname, idpos) = $1
+                pos = idpos <> position $3
               in
-                As { asName = name $1, asPat = $3, asPos = pos }
+                As { asName = idname, asPat = $3, asPos = pos }
             }
-        | ID pattern
+        | ident pattern %prec ID
             { let
-                pos = position $1 <> position $2
+                (idname, idpos) = $1
+                pos = idpos <> position $2
               in
-                Deconstruct { deconstructName = name $1, deconstructPat = $2,
+                Deconstruct { deconstructName = idname, deconstructPat = $2,
                               deconstructPos = pos }
             }
-        | ID
-            { Name { nameSym = name $1, namePos = position $1 } }
+        | ident
+            { let
+                (idname, idpos) = $1
+              in
+                Name { nameSym = idname, namePos = idpos }
+            }
         | literal
             { Exact $1 }
 
