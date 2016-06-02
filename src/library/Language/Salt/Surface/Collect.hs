@@ -77,7 +77,7 @@ data TempScope expty =
   TempScope {
     tempScopeBuilders :: !(HashMap Symbol [Syntax.Builder expty]),
     tempScopeTruths :: !(HashMap Symbol [Syntax.Truth expty]),
-    tempScopeSyntax :: ![Syntax.Syntax expty],
+    tempScopeSyntax :: !(HashMap Symbol [Syntax.Syntax expty]),
     tempScopeProofs :: ![Syntax.Proof expty],
     tempScopeImports :: ![Syntax.Import expty],
     tempScopeElems :: !(IOArray Visibility [expty])
@@ -171,14 +171,19 @@ addProof sym proof @ Syntax.Proof { Syntax.proofPos = pos } =
       _ -> internalError scopeStackUnderflow pos
 
 -- | Add a syntax definition to the current scope.
-addSyntax :: Syntax.Syntax expty -> m ()
+addSyntax :: Monad m => Symbol -> Syntax.Syntax expty -> m ()
 addSyntax sym syntax @ Syntax.Syntax { Syntax.syntaxPos = pos } =
   do
     state @ CollectState { collectScopes = scopes } <- get
     case scopes of
-      -- Append to the list of proofs
-      first @ TempScope { tempScopeSyntax = syntax } : rest ->
-        put state { collectScopes = first { tempScopeSyntax = syntax } : rest }
+      first @ TempScope { tempScopeSyntax = syntaxes } : rest ->
+        let
+          -- Concatenate the new entry with the existing ones
+          newsyntax = HashMap.insertWith (++) sym [syntax] syntaxes
+          newscope = first { tempScopeTruths = newsyntax }
+          newstate = state { collectScopes = newscope : rest }
+        in
+          put newstate
       -- A stack underflow is an internal error
       _ -> internalError scopeStackUnderflow pos
 
@@ -213,6 +218,13 @@ finishScope =
     collapseTruths sym (truths @ first : _) =
       do
         duplicateTruth sym (map position truths)
+        return first
+
+    collapseSyntax _ [] = error "Empty syntax list!"
+    collapseSyntax _ [single] = return single
+    collapseSyntax sym (syntax @ first : _) =
+      do
+        duplicateSyntax sym (map position syntax)
         return first
   in do
     CollectState { collectNextScope = scopeid, collectScopes = scopes,
@@ -357,270 +369,6 @@ collectPattern AST.Name { AST.nameSym = sym, AST.namePos = pos } =
   return Syntax.Name { Syntax.nameSym = sym, Syntax.namePos = pos }
 collectPattern AST.Exact { AST.exactLit = l } =
   return Syntax.Exact { Syntax.exactLit = l }
-
--- | Collect a syntax directive.  This implements a simple recursive
--- descent parser to parse the syntax directives.
---
--- Syntax directives are represented as expressions, in order to avoid
--- the need to define things like @left@, @right@, @<@ and such as
--- keywords, thus complicating the grammar.  (This also allows syntax
--- directives to be expanded later on).
---
--- This function does the work of parsing the directives, converting
--- them into annotations on definitions in the scope.
---
--- The format for syntax directives (including the syntax keyword is:
---
--- > syntax id (postfix | infix (left | right | nonassoc) |
--- >            prec (< | > | ==) id (. id)* )+
-collectSyntax :: (MonadMessages Message m, MonadSymbols m) =>
-                 AST.Exp -> CollectT m ()
--- If it's not a seq, it's a syntax error
-collectSyntax AST.Seq { AST.seqPos = pos, AST.seqExps = [_] } = badSyntax pos
-collectSyntax syntax AST.Seq { AST.seqExps = AST.Sym { AST.symName = sym} :
-                                             body } =
-  let
-    -- | Add a precedence relationship to the current scope.
-    addPrec :: (MonadMessages Message m, MonadSymbols m,
-                MonadCollect (Syntax.Exp Symbol) m) =>
-               HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)) ->
-               Ordering -> AST.Exp ->
-               m (HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)))
-    addPrec syntax' ord exp =
-      -- Look for the symbol in the scope.
-      case HashMap.lookup sym syntax' of
-        -- If we find the definition, update it.
-        Just s @ Syntax.Syntax { Syntax.syntaxPrecs = precs } ->
-          do
-            -- Convert the expression from AST to Syntax.  We'll
-            -- check its form later.
-            collectedExp <- collectExp exp
-            -- Add the precedence relation to the symbol definition.
-            return $! HashMap.insert sym s { Syntax.syntaxPrecs =
-                                               (ord, collectedExp) : precs }
-                                     syntax'
-              -- We already reported undefined symbols.
-        Nothing -> return syntax'
-
-    -- | Add a fixity to the current scope.  Report an error if
-    -- the symbol already has a fixity other than prefix.
-    addFixity :: (MonadMessages Message m, MonadSymbols m,
-                  MonadCollect (Syntax.Exp Symbol) m) =>
-                 HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)) ->
-                 Syntax.Fixity -> Position ->
-                 m (HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)))
-    addFixity syntax' fixity pos =
-      -- Look for the symbol in the scope.
-      case HashMap.lookup sym syntax' of
-        -- If we find the definition, and its fixity is prefix, update it.
-        Just s @ Syntax.Syntax { Syntax.syntaxFixity = Syntax.Prefix } ->
-          let
-            newsyntax = s { Syntax.syntaxFixity = fixity }
-          in
-            return $! HashMap.insert sym newsyntax syntax'
-        -- Otherwise report multiple fixities for this symbol.
-        Just _ ->
-          do
-            multipleFixity pos
-            return syntax'
-        -- We already reported undefined symbols.
-        Nothing -> return syntax'
-
-    -- | Precedence identifier.
-    --
-    -- > syntax id prec (< | > | ==) id (. id)
-    -- >                             ^
-    precName :: (MonadMessages Message m, MonadSymbols m,
-                 MonadCollect (Syntax.Exp Symbol) m) =>
-                Ordering ->
-                HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)) ->
-                [AST.Exp] ->
-                m (HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)))
-    -- If this is the last directive, so add the precedence
-    -- relation.
-    precName ord syntax' [exp] = addPrec syntax' ord exp
-    -- Otherwise, there's another directive after this one.
-    precName ord syntax' (exp : rest) =
-      do
-        -- Add the precedence relation
-        newdefs <- addPrec syntax' ord exp
-        -- Parse the next directive
-        startDirective newdefs rest
-    precName _ _ [] = error "Shouldn't see empty list"
-
-    -- | Precedence relation.
-    --
-    -- > syntax id prec (< | > | ==) id (. id)*
-    -- >                ^
-    precRelation :: (MonadMessages Message m, MonadSymbols m,
-                     MonadCollect (Syntax.Exp Symbol) m) =>
-                    HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)) ->
-                    [AST.Exp] ->
-                    m (HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)))
-    -- If the list ends prematurely, it's a parse error
-    precRelation syntax' [e] =
-      do
-        badSyntax (position e)
-        return syntax'
-    -- If the top-level expression is a Seq, then the first
-    -- expression must be a Sym, which is the relationship.  We
-    -- expect to see a Field or Sym next.
-    precRelation syntax' (AST.Sym { AST.symName = kindsym,
-                                    AST.symPos = pos } : rest) =
-      do
-        kind <- name kindsym
-        -- Get the precedence relationship from the symbol's name.
-        case kind of
-          "<" -> precName LT syntax' rest
-          ">" -> precName GT syntax' rest
-          "==" -> precName EQ syntax' rest
-          -- Not a valid precedence relation.
-          _ ->
-            do
-              badSyntaxPrec pos
-              return syntax'
-    -- The first expression must be a Sym, or else it's a parse error.
-    precRelation syntax' (first : _) =
-      do
-        badSyntaxPrec (position first)
-        return syntax'
-    precRelation _ [] = error "Shouldn't see empty list"
-
-    -- | Infix associativity
-    --
-    -- > syntax id infix (left | right | nonassoc) directive*
-    -- >                 ^
-    infixAssoc :: (MonadMessages Message m, MonadSymbols m,
-                   MonadCollect (Syntax.Exp Symbol) m) =>
-                  Position ->
-                  HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)) ->
-                  [AST.Exp] ->
-                  m (HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)))
-    -- If the top-level expression is a Sym, it must be the
-    -- associativity, and this is the last directive.
-    infixAssoc fixitypos syntax' [ AST.Sym { AST.symName = kindsym,
-                                             AST.symPos = pos } ] =
-      do
-        kind <- name kindsym
-        -- Get the associativity from the symbol's name, then add
-        -- the infix fixity to the scope.
-        case kind of
-          "left" -> addFixity syntax' (Syntax.Infix Syntax.Left) fixitypos
-          "right" -> addFixity syntax' (Syntax.Infix Syntax.Right) fixitypos
-          "nonassoc" ->
-            addFixity syntax' (Syntax.Infix Syntax.NonAssoc) fixitypos
-          -- Not a valid fixity.
-          _ ->
-            do
-              badSyntaxAssoc pos
-              return syntax'
-    infixAssoc fixitypos syntax' (AST.Sym { AST.symName = kindsym,
-                                            AST.symPos = pos } : rest) =
-      do
-        kind <- name kindsym
-        -- Get the associativity from the symbol's name, then add
-        -- the infix fixity to the scope, then parse another
-        -- directive with the rest of the expression.
-        case kind of
-          "left" ->
-            do
-              newdefs <- addFixity syntax' (Syntax.Infix Syntax.Left)
-                                   fixitypos
-              startDirective newdefs rest
-          "right" ->
-            do
-              newdefs <- addFixity syntax' (Syntax.Infix Syntax.Right)
-                                   fixitypos
-              startDirective newdefs rest
-          "nonassoc" ->
-            do
-              newdefs <- addFixity syntax' (Syntax.Infix Syntax.NonAssoc)
-                                   fixitypos
-              startDirective newdefs rest
-          -- Not a valid fixity.
-          _ ->
-            do
-              badSyntaxAssoc pos
-              return syntax'
-    -- If the first expression isn't a Sym, it's a parse error.
-    infixAssoc _ syntax' (first : _) =
-      do
-        badSyntaxAssoc (position first)
-        return syntax'
-    infixAssoc _ _ [] = error "Shouldn't see empty string here"
-
-    -- | Start of one directive.
-    --
-    -- > syntax id (postfix | infix (left | right | nonassoc) |
-    -- >            prec (< | > | ==) id (. id)* )+
-    -- >           ^
-    startDirective :: (MonadMessages Message m, MonadSymbols m,
-                       MonadCollect (Syntax.Exp Symbol) m) =>
-                      HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)) ->
-                      [AST.Exp] ->
-                      m (HashMap Symbol (Syntax.Syntax (Syntax.Exp Symbol)))
-    -- It's ok for the top-level to be a Sym, as long as it's "postfix".
-    startDirective syntax' [ AST.Sym { AST.symName = kindsym,
-                                       AST.symPos = pos } ] =
-      do
-        kind <- name kindsym
-        case kind of
-          "postfix" -> addFixity syntax' Syntax.Postfix pos
-          -- Infixes expect an associativity
-          "infix" ->
-            do
-              badSyntax pos
-              return syntax'
-          -- Precedence relations expect more
-          "prec" ->
-            do
-              badSyntax pos
-              return syntax'
-          -- This wasn't a known syntax directive
-          _ ->
-            do
-              badSyntaxKind pos
-              return syntax'
-    -- If the list ends prematurely, it's a parse error
-    startDirective syntax' [e] =
-      do
-        badSyntax (position e)
-        return syntax'
-    -- The first expression is a Sym (the kind), and there's more.
-    startDirective syntax' (AST.Sym { AST.symName = kindsym,
-                                      AST.symPos = pos } : rest ) =
-      do
-        kind <- name kindsym
-        -- Look at the kind to figure out what to do next.
-        case kind of
-          -- Postfix has no more info, so add it to the scope and
-          -- try to parse another directive.
-          "postfix" ->
-            do
-              newdefs <- addFixity syntax' Syntax.Postfix pos
-              startDirective newdefs rest
-          -- Infix expects to see an associativity next.
-          "infix" -> infixAssoc pos syntax' rest
-          -- Precedence relations expect more content.
-          "prec" -> precRelation syntax' rest
-          -- This wasn't a known syntax directive
-          _ ->
-            do
-              badSyntaxKind pos
-              return syntax'
-    -- If the first expression isn't a Sym, it's a parse error.
-    startDirective syntax' (first : _) =
-      do
-        badSyntaxKind (position first)
-        return syntax'
-    startDirective _ [] = error "Shouldn't see empty string here"
-  in
-    startDirective syntax body
--- If the first expression isn't a Sym, then it's a parse error.
-collectSyntax AST.Seq { AST.seqExps = first : _ } =
-  badSyntaxName (position first)
--- If it's not a seq, it's a syntax error
-collectSyntax exp = badSyntax (position exp)
 
 -- | Fold function to collect compound expression components.
 collectCompound :: (MonadMessages Message m, MonadSymbols m) =>
@@ -943,7 +691,18 @@ collectElement vis AST.Truth { AST.truthName = sym,
                                 Syntax.truthContent = collectedContent,
                                 Syntax.truthProof = Just collectedProof,
                                 Syntax.truthPos = pos }
-collectElement _ AST.Syntax { AST.syntaxExp = exp } = collectSyntax exp
+collectElement _ AST.Syntax { AST.syntaxSym = sym, AST.syntaxFixity = fixity,
+                              AST.syntaxPrecs = precs, AST.syntaxPos = pos } =
+  let
+    collectPrecs (ordering, exp) =
+      do
+        collectedExp <- collectExp exp
+        return (ordering, collectedExp)
+  in do
+    collectedPrecs <- mapM collectPrecs precs
+    addSyntax sym Syntax.Syntax { Syntax.syntaxFixity = fixity,
+                                  Syntax.syntaxPrecs = collectedPrecs,
+                                  Syntax.syntaxPos = pos }
 -- Proofs and imports get added to directives, and are processed in a
 -- later phase.
 collectElement _ AST.Proof { AST.proofName = pname, AST.proofBody = body,

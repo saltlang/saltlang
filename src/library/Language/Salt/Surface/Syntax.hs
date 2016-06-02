@@ -77,12 +77,6 @@ import Text.XML.Expat.Tree(NodeG)
 
 import qualified Data.HashMap.Strict as HashMap
 
-data Assoc = Left | Right | NonAssoc
-  deriving (Ord, Eq, Enum, Show)
-
-data Fixity = Prefix | Infix !Assoc | Postfix
-  deriving (Ord, Eq, Show)
-
 -- | A reference to a definition in a scope.
 data Ref =
   Ref {
@@ -889,15 +883,6 @@ instance Hashable Component where
   hashWithSalt s Component { compExpected = expected, compScope = scope } =
     s `hashWithSalt` expected `hashWithSalt` scope
 
-instance Hashable Assoc where
-  hashWithSalt s = hashWithSalt s . fromEnum
-
-instance Hashable Fixity where
-  hashWithSalt s Prefix = hashWithSalt s (0 :: Int)
-  hashWithSalt s (Infix assoc) =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` assoc
-  hashWithSalt s Postfix = hashWithSalt s (2 :: Int)
-
 instance (Hashable expty, Ord expty) => Hashable (Syntax expty) where
   hashWithSalt s Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
     s `hashWithSalt` fixity `hashWithSalt` precs
@@ -1369,8 +1354,6 @@ syntaxDot Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
             dquoted (string nodeid <> string ":value") <>
             char ';' <$> vcat (map (elemEdge nodeid) precdocs), nodeid)
 -}
-instance Format Assoc where format = string . show
-instance Format Fixity where format = string . show
 
 instance (MonadSymbols m) => FormatM m Ref where
   formatM Ref { refSymbol = sym, refScopeID = scopeid } =
@@ -1778,46 +1761,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
                               (string "pattern", patdoc),
                               (string "body", bodydoc)])
 
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
-         XmlPickler (Attributes tag text) Assoc where
-  xpickle = xpAlt fromEnum
-                  [xpWrap (const Left, const ())
-                          (xpAttrFixed (gxFromString "assoc")
-                                       (gxFromString "Left")),
-                   xpWrap (const Right, const ())
-                          (xpAttrFixed (gxFromString "assoc")
-                                       (gxFromString "Right")),
-                   xpWrap (const NonAssoc, const ())
-                          (xpAttrFixed (gxFromString "assoc")
-                                       (gxFromString "NonAssoc"))]
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
-         XmlPickler (Attributes tag text) Fixity where
-  xpickle =
-    let
-      picker Prefix = 0
-      picker (Infix _) = 1
-      picker Postfix = 2
-
-      unpackInfix (Infix a) = ((), Just a)
-      unpackInfix _ = error "Can't unpack"
-
-      packInfix ((), Just a) = Infix a
-      packInfix _ = error "Need associativity for infix"
-    in
-      xpAlt picker [xpWrap (const Prefix, const ((), Nothing))
-                           (xpPair (xpAttrFixed (gxFromString "fixity")
-                                                (gxFromString "Prefix"))
-                                   (xpOption xpZero)),
-                    xpWrap (packInfix, unpackInfix)
-                           (xpPair (xpAttrFixed (gxFromString "fixity")
-                                                (gxFromString "Infix"))
-                                   (xpOption xpickle)),
-                    xpWrap (const Postfix, const ((), Nothing))
-                           (xpPair (xpAttrFixed (gxFromString "fixity")
-                                                (gxFromString "Postfix"))
-                                   (xpOption xpZero))]
-
 precPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
                 XmlPickler [NodeG [] tag text] expty) =>
@@ -1835,9 +1778,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
             \Syntax { syntaxFixity = fixity, syntaxPrecs = precs,
                       syntaxPos = pos } -> (fixity, (precs, pos)))
            (xpElem (gxFromString "Syntax") xpickle
-                   (xpPair (xpElemNodes (gxFromString "Syntax")
+                   (xpPair (xpElemNodes (gxFromString "precs")
                                         (xpList precPickler))
-                           (xpElemNodes (gxFromString "Syntax") xpickle)))
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 mapPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,

@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -45,6 +45,7 @@ import Data.Symbol
 import Text.Format
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree
+import Prelude hiding (Either(..))
 
 import Data.ByteString.UTF8 as Strict
 
@@ -135,6 +136,22 @@ data Token =
   | Syntax !Position
   -- | The text 'component'
   | Component !Position
+  -- | The text 'postfix'
+  | Postfix !Position
+  -- | The text 'infix'
+  | Infix !Position
+  -- | The text 'left'
+  | Left !Position
+  -- | The text 'right'
+  | Right !Position
+  -- | The text 'nonassoc'
+  | NonAssoc !Position
+  -- | The text 'prec'
+  | Prec !Position
+  -- | The text '<'
+  | Less !Position
+  -- | The text '>'
+  | Greater !Position
   -- | The end-of-file token
   | EOF
     deriving (Ord, Eq)
@@ -182,6 +199,14 @@ instance PositionElement Token where
   position (Use pos) = pos
   position (Syntax pos) = pos
   position (Component pos) = pos
+  position (Postfix pos) = pos
+  position (Infix pos) = pos
+  position (Left pos) = pos
+  position (Right pos) = pos
+  position (NonAssoc pos) = pos
+  position (Prec pos) = pos
+  position (Less pos) = pos
+  position (Greater pos) = pos
   position EOF = error "Can't take position of EOF"
 
 keywords :: [(Strict.ByteString, Position -> Token)]
@@ -214,7 +239,15 @@ keywords = [
     (Strict.fromString "import", Import),
     (Strict.fromString "use", Use),
     (Strict.fromString "syntax", Syntax),
-    (Strict.fromString "component", Component)
+    (Strict.fromString "component", Component),
+    (Strict.fromString "postfix", Postfix),
+    (Strict.fromString "infix", Infix),
+    (Strict.fromString "left", Left),
+    (Strict.fromString "right", Right),
+    (Strict.fromString "nonassoc", NonAssoc),
+    (Strict.fromString "prec", Prec),
+    (Strict.fromString "<", Less),
+    (Strict.fromString ">", Greater)
   ]
 
 idPickler :: (GenericXMLString tag, Show tag,
@@ -647,6 +680,86 @@ componentPickler =
   in
     xpWrap (Component, revfunc) (xpElemNodes (gxFromString "Component") xpickle)
 
+postfixPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Token
+postfixPickler =
+  let
+    revfunc (Postfix pos) = pos
+    revfunc _ = error $! "Can't convert to Postfix"
+  in
+    xpWrap (Postfix, revfunc) (xpElemNodes (gxFromString "Postfix") xpickle)
+
+infixPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+infixPickler =
+  let
+    revfunc (Infix pos) = pos
+    revfunc _ = error $! "Can't convert to Infix"
+  in
+    xpWrap (Infix, revfunc) (xpElemNodes (gxFromString "Infix") xpickle)
+
+leftPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Token
+leftPickler =
+  let
+    revfunc (Left pos) = pos
+    revfunc _ = error $! "Can't convert to Left"
+  in
+    xpWrap (Left, revfunc) (xpElemNodes (gxFromString "Left") xpickle)
+
+rightPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] Token
+rightPickler =
+  let
+    revfunc (Right pos) = pos
+    revfunc _ = error $! "Can't convert to Right"
+  in
+    xpWrap (Right, revfunc) (xpElemNodes (gxFromString "Right") xpickle)
+
+nonAssocPickler :: (GenericXMLString tag, Show tag,
+                    GenericXMLString text, Show text) =>
+                   PU [NodeG [] tag text] Token
+nonAssocPickler =
+  let
+    revfunc (NonAssoc pos) = pos
+    revfunc _ = error $! "Can't convert to NonAssoc"
+  in
+    xpWrap (NonAssoc, revfunc) (xpElemNodes (gxFromString "NonAssoc") xpickle)
+
+precPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Token
+precPickler =
+  let
+    revfunc (Prec pos) = pos
+    revfunc _ = error $! "Can't convert to Prec"
+  in
+    xpWrap (Prec, revfunc) (xpElemNodes (gxFromString "Prec") xpickle)
+
+lessPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Token
+lessPickler =
+  let
+    revfunc (Less pos) = pos
+    revfunc _ = error $! "Can't convert to Less"
+  in
+    xpWrap (Less, revfunc) (xpElemNodes (gxFromString "Less") xpickle)
+
+greaterPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Token
+greaterPickler =
+  let
+    revfunc (Greater pos) = pos
+    revfunc _ = error $! "Can't convert to Greater"
+  in
+    xpWrap (Greater, revfunc) (xpElemNodes (gxFromString "Greater") xpickle)
+
 eofPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Token
@@ -700,6 +813,14 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker (Use _) = 40
       picker (Syntax _) = 41
       picker (Component _) = 42
+      picker (Postfix _) = 43
+      picker (Infix _) = 44
+      picker (Left _) = 45
+      picker (Right _) = 46
+      picker (NonAssoc _) = 47
+      picker (Prec _) = 48
+      picker (Less _) = 49
+      picker (Greater _) = 50
     in
       xpAlt picker [eofPickler, idPickler, numPickler, strPickler,
                     charPickler,equalPickler, ellipsisPickler, barPickler,
@@ -712,7 +833,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                     proofPickler, withPickler, wherePickler, asPickler,
                     privatePickler, protectedPickler, publicPickler,
                     matchPickler, letPickler, funPickler, importPickler,
-                    usePickler, syntaxPickler, componentPickler ]
+                    usePickler, syntaxPickler, componentPickler,
+                    postfixPickler, infixPickler, leftPickler, rightPickler,
+                    nonAssocPickler, precPickler, lessPickler, greaterPickler ]
 
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos @ File {} doc =
@@ -788,3 +911,11 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Token where
   formatM (Use pos) = addPosition pos (string "keyword \"use\"")
   formatM (Syntax pos) = addPosition pos (string "keyword \"syntax\"")
   formatM (Component pos) = addPosition pos (string "keyword \"component\"")
+  formatM (Postfix pos) = addPosition pos (string "keyword \"postfix\"")
+  formatM (Infix pos) = addPosition pos (string "keyword \"infix\"")
+  formatM (Left pos) = addPosition pos (string "keyword \"left\"")
+  formatM (Right pos) = addPosition pos (string "keyword \"right\"")
+  formatM (NonAssoc pos) = addPosition pos (string "keyword \"nonassoc\"")
+  formatM (Prec pos) = addPosition pos (string "keyword \"prec\"")
+  formatM (Less pos) = addPosition pos (string "operator \"<\"")
+  formatM (Greater pos) = addPosition pos (string "operator \">\"")

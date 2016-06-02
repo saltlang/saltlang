@@ -32,6 +32,8 @@
 
 -- | A module containing common structures for both AST and Syntax.
 module Language.Salt.Surface.Common(
+       Assoc(..),
+       Fixity(..),
        FieldName(..),
        BuilderKind(..),
        ContextKind(..),
@@ -72,6 +74,12 @@ newtype FieldName = FieldName { fieldSym :: Symbol }
 
 newtype ScopeID = ScopeID { scopeID :: Word }
   deriving (Eq, Ord, Ix)
+
+data Assoc = LeftAssoc | RightAssoc | NonAssoc
+  deriving (Ord, Eq, Enum, Show)
+
+data Fixity = Prefix | Infix !Assoc | Postfix
+  deriving (Ord, Eq, Show)
 
 -- | Scope classes.  These define the exact semantics of a scoped
 -- entity declaration.
@@ -242,6 +250,15 @@ literalDot Unit {} =
             brackets (string "label = " <> dquoted (string "Unit") <!>
                       string "shape = \"record\"") <> char ';', nodeid)
 
+instance Hashable Assoc where
+  hashWithSalt s = hashWithSalt s . fromEnum
+
+instance Hashable Fixity where
+  hashWithSalt s Prefix = hashWithSalt s (0 :: Int)
+  hashWithSalt s (Infix assoc) =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` assoc
+  hashWithSalt s Postfix = hashWithSalt s (2 :: Int)
+
 instance Hashable FieldName where
   hashWithSalt s FieldName { fieldSym = sym } = s `hashWithSalt` sym
 
@@ -260,6 +277,9 @@ instance Enum ScopeID where
 
 instance MonadSymbols m => FormatM m FieldName where
   formatM = formatM . fieldSym
+
+instance Format Assoc where format = string . show
+instance Format Fixity where format = string . show
 
 instance Format ScopeID where
   format = format . scopeID
@@ -522,5 +542,45 @@ instance Show AbstractionKind where
   show Lambda = "lambda"
   show Forall = "forall"
   show Exists = "exists"
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler (Attributes tag text) Assoc where
+  xpickle = xpAlt fromEnum
+                  [xpWrap (const LeftAssoc, const ())
+                          (xpAttrFixed (gxFromString "assoc")
+                                       (gxFromString "Left")),
+                   xpWrap (const RightAssoc, const ())
+                          (xpAttrFixed (gxFromString "assoc")
+                                       (gxFromString "Right")),
+                   xpWrap (const NonAssoc, const ())
+                          (xpAttrFixed (gxFromString "assoc")
+                                       (gxFromString "NonAssoc"))]
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler (Attributes tag text) Fixity where
+  xpickle =
+    let
+      picker Prefix = 0
+      picker (Infix _) = 1
+      picker Postfix = 2
+
+      unpackInfix (Infix a) = ((), Just a)
+      unpackInfix _ = error "Can't unpack"
+
+      packInfix ((), Just a) = Infix a
+      packInfix _ = error "Need associativity for infix"
+    in
+      xpAlt picker [xpWrap (const Prefix, const ((), Nothing))
+                           (xpPair (xpAttrFixed (gxFromString "fixity")
+                                                (gxFromString "Prefix"))
+                                   (xpOption xpZero)),
+                    xpWrap (packInfix, unpackInfix)
+                           (xpPair (xpAttrFixed (gxFromString "fixity")
+                                                (gxFromString "Infix"))
+                                   (xpOption xpickle)),
+                    xpWrap (const Postfix, const ((), Nothing))
+                           (xpPair (xpAttrFixed (gxFromString "fixity")
+                                                (gxFromString "Postfix"))
+                                   (xpOption xpZero))]
 
 instance Format AbstractionKind where format = string . show

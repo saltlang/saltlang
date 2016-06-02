@@ -51,6 +51,7 @@ module Language.Salt.Message(
        duplicateField,
        namelessField,
        duplicateTruth,
+       duplicateSyntax,
        badSyntax,
        badSyntaxKind,
        badSyntaxName,
@@ -217,19 +218,24 @@ data Message =
   | MultipleFixity {
       multipleFixityPos :: !Position
     }
-  -- | The undefined symbol.
+    -- | Reference to undefined symbol
   | UndefSymbol {
       undefSymbolSym :: !Strict.ByteString,
       undefSymbolPos :: !Position
     }
-  -- | An uninitialized definition with no top-level name.
+    -- | An uninitialized definition with no top-level name.
   | NamelessUninitDef {
       namelessUninitDefPos :: !Position
     }
-    -- | Duplicate truth definition in the current environment.
+    -- | Duplicate builder definition in the current environment.
   | DuplicateBuilder {
       duplicateBuilderName :: !Strict.ByteString,
       duplicateBuilderPosList :: ![Position]
+    }
+    -- | Duplicate builder definition in the current environment.
+  | DuplicateSyntax {
+      duplicateSyntaxName :: !Strict.ByteString,
+      duplicateSyntaxPosList :: ![Position]
     }
     -- | Cannot find a file or a component
   | CannotFind {
@@ -469,6 +475,9 @@ instance Hashable Message where
     s `hashWithSalt` (38 :: Int) `hashWithSalt` pos
   hashWithSalt s OutOfContext { outOfContextPos = pos } =
     s `hashWithSalt` (39 :: Int) `hashWithSalt` pos
+  hashWithSalt s DuplicateSyntax { duplicateSyntaxName = sym,
+                                   duplicateSyntaxPosList = pos } =
+    s `hashWithSalt` (40 :: Int) `hashWithSalt` sym `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity BadChars {} = Msg.Error
@@ -511,6 +520,7 @@ instance Msg.Message Message where
   severity CyclicInherit {} = Msg.Error
   severity IllegalAccess {} = Msg.Error
   severity OutOfContext {} = Msg.Error
+  severity DuplicateSyntax {} = Msg.Error
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -581,6 +591,8 @@ instance Msg.Message Message where
     string "Cannot access " <> format kind <>
     string " element " <> bytestring sym <>
     string " from static context"
+  brief DuplicateSyntax { duplicateSyntaxName = namestr } =
+    string "Multiple syntax directives for symbol " <+> bytestring namestr
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -677,6 +689,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions CyclicInherit { cyclicInheritPos = pos } = [pos]
   positions IllegalAccess { illegalAccessPos = pos } = [pos]
   positions OutOfContext { outOfContextPos = pos } = [pos]
+  positions DuplicateSyntax { duplicateSyntaxPosList = poslist } = poslist
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1163,3 +1176,17 @@ objectAccess sym pos =
     str <- name sym
     message OutOfContext { outOfContextSym = str, outOfContextKind = Object,
                            outOfContextPos = basicpos }
+
+-- | Report duplicate syntax directives.
+duplicateSyntax :: (MonadMessages Message m, MonadSymbols m) =>
+                   Symbol
+                -- ^ The duplicate builder name.
+                -> [Position]
+                -- ^ The position at which the duplicated builder
+                -- definition occurs.
+                -> m ()
+duplicateSyntax sym poslist =
+  do
+    str <- name sym
+    message DuplicateSyntax { duplicateSyntaxName = str,
+                              duplicateSyntaxPosList = poslist }

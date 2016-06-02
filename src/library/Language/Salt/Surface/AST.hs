@@ -204,7 +204,11 @@ data Element =
     }
   | Syntax {
       -- | The syntax directive.
-      syntaxExp :: !Exp,
+      syntaxSym :: !Symbol,
+      -- | Fixity (and associativity).
+      syntaxFixity :: !Fixity,
+      -- | Precedence relations.
+      syntaxPrecs :: ![(Ordering, Exp)],
       -- | The position in source from which this arises.
       syntaxPos :: !Position
     }
@@ -527,7 +531,9 @@ instance Eq Element where
     Proof { proofName = name2, proofBody = body2 } =
       name1 == name2 && body1 == body2
   Import { importExp = exp1 } == Import { importExp = exp2 } = exp1 == exp2
-  Syntax { syntaxExp = exp1 } == Syntax { syntaxExp = exp2 } = exp1 == exp2
+  Syntax { syntaxSym = sym1, syntaxPrecs = precs1, syntaxFixity = fixity1 } ==
+    Syntax { syntaxSym = sym2, syntaxPrecs = precs2, syntaxFixity = fixity2 } =
+      sym1 == sym2 && fixity1 == fixity2 && precs1 == precs2
   _ == _ = False
 
 instance Eq Compound where
@@ -685,8 +691,15 @@ instance Ord Element where
     compare exp1 exp2
   compare Import {} _ = GT
   compare _ Import {} = LT
-  compare Syntax { syntaxExp = exp1 } Syntax { syntaxExp = exp2 } =
-    compare exp1 exp2
+  compare Syntax { syntaxSym = sym1, syntaxPrecs = precs1,
+                   syntaxFixity = fixity1 }
+          Syntax { syntaxSym = sym2, syntaxPrecs = precs2,
+                   syntaxFixity = fixity2 } =
+    case compare fixity1 fixity2 of
+      EQ -> case compare sym1 sym2 of
+        EQ -> compare precs1 precs2
+        out -> out
+      out -> out
 
 instance Ord Compound where
   compare Exp { expVal = e1} Exp { expVal = e2 } = compare e1 e2
@@ -877,8 +890,10 @@ instance Hashable Element where
     s `hashWithSalt` (6 :: Int) `hashWithSalt` sym `hashWithSalt` body
   hashWithSalt s Import { importExp = exp } =
     s `hashWithSalt` (7 :: Int) `hashWithSalt` exp
-  hashWithSalt s Syntax { syntaxExp = exp } =
-    s `hashWithSalt` (8 :: Int) `hashWithSalt` exp
+  hashWithSalt s Syntax { syntaxSym = sym, syntaxPrecs = precs,
+                          syntaxFixity = fixity } =
+    s `hashWithSalt` (8 :: Int) `hashWithSalt`
+    sym `hashWithSalt` fixity `hashWithSalt` precs
 
 instance Hashable Compound where
   hashWithSalt s Element { elemVal = e } =
@@ -1187,16 +1202,16 @@ elementDot Import { importExp = exp } =
                       string "shape = \"record\"") <>
             char ';' <!> dquoted (string nodeid) <> string ":exp" <>
             string " -> " <> dquoted (string namename), nodeid)
-elementDot Syntax { syntaxExp = exp } =
+elementDot Syntax { } =
   do
     nodeid <- getNodeID
-    (expnode, expname) <- expDot exp
-    return (expnode <!> dquoted (string nodeid) <+>
+    --(expnode, expname) <- expDot exp
+    return ({-expnode <!>-} dquoted (string nodeid) <+>
             brackets (string "label = " <>
                       dquoted (string "Syntax | <exp> exp") <!>
                       string "shape = \"record\"") <>
             char ';' <!> dquoted (string nodeid) <> string ":exp" <>
-            string " -> " <> dquoted (string expname), nodeid)
+            string " -> " {-<> dquoted (string expname)-}, nodeid)
 
 compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
 compoundDot Exp { expVal = e } = expDot e
@@ -1742,12 +1757,27 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
       return (compoundApplyDoc (string "Import")
                              [(string "exp", expdoc),
                               (string "pos", posdoc)])
-  formatM Syntax { syntaxExp = exp, syntaxPos = pos } =
-    do
-      expdoc <- formatM exp
+  formatM Syntax { syntaxSym = sym, syntaxFixity = fixity,
+                   syntaxPrecs = precs, syntaxPos = pos } =
+    let
+      formatPrec (ord, exp) =
+        let
+          orddoc = case ord of
+            LT -> string "<"
+            EQ -> string "=="
+            GT -> string ">"
+        in do
+          expdoc <- formatM exp
+          return $! compoundApplyDoc (string "Prec") [(string "ord", orddoc),
+                                                      (string "name", expdoc)]
+    in do
+      symdoc <- formatM sym
       posdoc <- formatM pos
+      precdocs <- mapM formatPrec precs
       return (compoundApplyDoc (string "Syntax")
-                             [(string "exp", expdoc),
+                             [(string "sym", symdoc),
+                              (string "fixity", format fixity),
+                              (string "precs", listDoc precdocs),
                               (string "pos", posdoc)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Compound where
@@ -2149,18 +2179,30 @@ importPickler =
                         (xpPair (xpElemNodes (gxFromString "name") xpickle)
                                 (xpElemNodes (gxFromString "pos") xpickle)))
 
+precPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [NodeG [] tag text] expty) =>
+              PU [NodeG [] tag text] (Ordering, expty)
+precPickler = xpElem (gxFromString "prec")
+                     (xpAttr (gxFromString "order") xpPrim) xpickle
+
 syntaxPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Element
 syntaxPickler =
   let
-    revfunc Syntax { syntaxExp = exp, syntaxPos = pos } = (exp, pos)
+    revfunc Syntax { syntaxSym = sym, syntaxFixity = fixity,
+                     syntaxPrecs = precs, syntaxPos = pos } =
+      ((fixity, sym), (precs, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(exp, pos) -> Syntax { syntaxExp = exp, syntaxPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Syntax")
-                        (xpPair (xpElemNodes (gxFromString "name") xpickle)
-                                (xpElemNodes (gxFromString "pos") xpickle)))
+    xpWrap (\((fixity, sym), (precs, pos)) ->
+             Syntax { syntaxSym = sym, syntaxFixity = fixity,
+                      syntaxPrecs = precs, syntaxPos = pos }, revfunc)
+           (xpElem (gxFromString "Syntax") (xpPair xpickle xpickle)
+                   (xpPair (xpElemNodes (gxFromString "precs")
+                                        (xpList precPickler))
+                           (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Element where

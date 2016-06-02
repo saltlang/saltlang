@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -36,6 +36,7 @@ module Language.Salt.Surface.Parser(
 
 import Control.Monad.Except
 import Control.Monad.Genpos
+import Control.Monad.Gensym
 import Control.Monad.SourceBuffer hiding (linebreak)
 import Control.Monad.Trans
 import Data.ByteString(ByteString)
@@ -112,12 +113,20 @@ import qualified Language.Salt.Message as Message
        USE { Token.Use _ }
        SYNTAX { Token.Syntax _ }
        COMPONENT { Token.Component _ }
+       POSTFIX { Token.Postfix _ }
+       INFIX { Token.Infix _ }
+       LEFT { Token.Left _ }
+       RIGHT { Token.Right _ }
+       NONASSOC { Token.NonAssoc _ }
+       PREC { Token.Prec _ }
+       LESS { Token.Less _ }
+       GREATER { Token.Greater _ }
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
        INSTANCE
 %right LAMBDA FORALL EXISTS MATCH
 %right BAR
-%nonassoc COLON WITH
+%nonassoc COLON WITH POSTFIX INFIX LEFT RIGHT NONASSOC PREC
 %nonassoc AS
 %left WHERE
 
@@ -166,16 +175,65 @@ use_list :: { [Use] }
          |
              { [] }
 
+ident :: { (Symbol, Position) }
+      : ID
+          { (name $1, position $1) }
+      | POSTFIX
+          {% do
+               idname <- symbol (Strict.fromString "postfix")
+               return (idname, position $1)
+          }
+      | INFIX
+          {% do
+               idname <- symbol (Strict.fromString "infix")
+               return (idname, position $1)
+          }
+      | LEFT
+          {% do
+               idname <- symbol (Strict.fromString "left")
+               return (idname, position $1)
+          }
+      | RIGHT
+          {% do
+               idname <- symbol (Strict.fromString "right")
+               return (idname, position $1)
+          }
+      | NONASSOC
+          {% do
+               idname <- symbol (Strict.fromString "nonassoc")
+               return (idname, position $1)
+          }
+      | PREC
+          {% do
+               idname <- symbol (Strict.fromString "prec")
+               return (idname, position $1)
+          }
+      | LESS
+          {% do
+               idname <- symbol (Strict.fromString "<")
+               return (idname, position $1)
+          }
+      | GREATER
+          {% do
+               idname <- symbol (Strict.fromString ">")
+               return (idname, position $1)
+          }
+
 qual_id :: { ([Symbol], Position) }
-        : qual_id DOT ID
+        : qual_id DOT ident
             { let
-                pos = headpos <> position $3
                 (list, headpos) = $1
+                (qualname, qualpos) = $3
+                pos = headpos <> qualpos
               in
-                (name $3 : list, pos)
+                (qualname : list, pos)
             }
-        | ID
-            { ([ name $1 ], position $1) }
+        | ident
+            { let
+                (idname, idpos) = $1
+              in
+                ([idname], idpos)
+            }
 
 def_list :: { [Element] }
          : closed_def_list
@@ -210,9 +268,10 @@ open_def_list :: { [Element] }
                   { [ $1 ] }
 
 closed_def :: { Element }
-           : type_builder_kind ID args_opt extends
+           : type_builder_kind ident args_opt extends
              LBRACE def_list group_list RBRACE
                { let
+                   (idname, _) = $2
                    content = case $6 of
                      [] -> reverse $7
                      _ ->
@@ -227,19 +286,20 @@ closed_def :: { Element }
                    builderpos = snd $1 <> position $8
                  in
                    Builder { builderKind = fst $1,
-                             builderName = name $2,
+                             builderName = idname,
                              builderSuperTypes = reverse $4,
                              builderParams = reverse $3,
                              builderContent = Body content,
                              builderPos = builderpos }
                }
-           | truth_kind ID args_opt EQUAL exp PROOF LBRACE stm_list RBRACE
+           | truth_kind ident args_opt EQUAL exp PROOF LBRACE stm_list RBRACE
                { let
+                   (idname, _) = $2
                    content = buildExp $5
                    compoundpos = position $7 <> position $9
                    pos = snd $1 <> position $9
                  in
-                   Truth { truthName = name $2, truthKind = fst $1,
+                   Truth { truthName = idname, truthKind = fst $1,
                            truthProof =
                              Just Compound { compoundBody = reverse $8,
                                              compoundPos = compoundpos },
@@ -256,35 +316,70 @@ closed_def :: { Element }
                            proofPos = pos }
                }
 
+fixity :: { (Fixity, Position) }
+       : POSTFIX
+           { (Postfix, position $1) }
+       | INFIX LEFT
+           { (Infix LeftAssoc, position $1) }
+       | INFIX RIGHT
+           { (Infix RightAssoc, position $1) }
+       | INFIX NONASSOC
+           { (Infix NonAssoc, position $1) }
+
+prec_op :: { Ordering }
+        : EQUAL
+            { EQ }
+        | LESS
+            { LT }
+        | GREATER
+            { GT }
+
+precs :: { [(Ordering, Exp)] }
+      : precs PREC prec_op exp
+          { let
+              content = buildExp $4
+            in
+              ($3, content) : $1
+          }
+      | PREC prec_op exp
+          { let
+              content = buildExp $3
+            in
+              [($2, content)]
+          }
+
 open_def :: { Element }
-         : type_builder_kind ID args_opt extends EQUAL exp
+         : type_builder_kind ident args_opt extends EQUAL exp
              { let
+                 (idname, _) = $2
                  builderpos = snd $1 <> position content
                  content = buildExp $6
                in
                  Builder { builderKind = fst $1,
-                           builderName = name $2,
+                           builderName = idname,
                            builderSuperTypes = reverse $4,
                            builderParams = reverse $3,
                            builderContent = Value content,
                            builderPos = builderpos }
              }
-         | truth_kind ID args_opt EQUAL exp
+         | truth_kind ident args_opt EQUAL exp
              { let
+                 (idname, _) = $2
                  content = buildExp $5
                  pos = snd $1 <> position content
                in
-                 Truth { truthName = name $2, truthKind = fst $1,
+                 Truth { truthName = idname, truthKind = fst $1,
                          truthProof = Nothing, truthContent = content,
                          truthPos = pos }
              }
-         | truth_kind ID args_opt EQUAL exp PROOF EQUAL exp
+         | truth_kind ident args_opt EQUAL exp PROOF EQUAL exp
              { let
+                 (idname, _) = $2
                  content = buildExp $5
                  proof = buildExp $8
                  pos = snd $1 <> position proof
                in
-                 Truth { truthName = name $2, truthKind = fst $1,
+                 Truth { truthName = idname, truthKind = fst $1,
                          truthProof = Just proof, truthContent = content,
                          truthPos = pos }
              }
@@ -301,17 +396,45 @@ open_def :: { Element }
                in
                  Import { importExp = $2, importPos = pos }
              }
-         | SYNTAX exp
+         | SYNTAX ident fixity precs
              { let
-                 exp = buildExp $2
-                 pos = position $1 <> position exp
+                 (idname, _) = $2
+                 (fixity, _) = $3
+                 pos = position $1 <> position (snd (head $4))
                in
-                 Syntax { syntaxExp = exp, syntaxPos = pos }
+                 Syntax { syntaxSym = idname, syntaxFixity = fixity,
+                          syntaxPrecs = $4, syntaxPos = pos }
+             }
+         | SYNTAX ident fixity
+             { let
+                 (idname, _) = $2
+                 (fixity, fixitypos) = $3
+                 pos = position $1 <> fixitypos
+               in
+                 Syntax { syntaxSym = idname, syntaxFixity = fixity,
+                          syntaxPrecs = [], syntaxPos = pos }
+             }
+         | SYNTAX ident precs
+             { let
+                 (idname, _) = $2
+                 pos = position $1 <> position (snd (head $3))
+               in
+                 Syntax { syntaxSym = idname, syntaxFixity = Prefix,
+                          syntaxPrecs = $3, syntaxPos = pos }
+             }
+         | SYNTAX ident
+             { let
+                 (idname, idpos) = $2
+                 pos = position $1 <> idpos
+               in
+                 Syntax { syntaxSym = idname, syntaxFixity = Prefix,
+                          syntaxPrecs = [], syntaxPos = pos }
              }
 
 closed_value_def :: { Element }
-                 : FUN ID case_list pattern LBRACE stm_list RBRACE
+                 : FUN ident case_list pattern LBRACE stm_list RBRACE
                      { let
+                         (idname, _) = $2
                          compoundpos = position $5 <> position $7
                          casepos = position $4 <> position $7
                          funpos = position $1 <> position $7
@@ -320,7 +443,7 @@ closed_value_def :: { Element }
                          cases = Case { casePat = $4, caseBody = body,
                                         casePos = casepos } : $3
                        in
-                         Fun { funName = name $2, funCases = reverse cases,
+                         Fun { funName = idname, funCases = reverse cases,
                                funPos = funpos }
                      }
 
@@ -337,13 +460,14 @@ open_value_def :: { Element }
                        Def { defPattern = $1, defInit = Just init,
                              defPos = pos }
                    }
-               | FUN ID case_list pattern EQUAL exp
+               | FUN ident case_list pattern EQUAL exp
                    { let
+                       (idname, _) = $2
                        body = buildExp $6
                        casepos = position (head $3) <> position body
                        funpos = position $1 <> position body
                      in
-                       Fun { funName = name $2,
+                       Fun { funName = idname,
                              funCases = reverse (Case { casePat = $4,
                                                         caseBody = body,
                                                         casePos = casepos } :
@@ -403,38 +527,42 @@ args_opt :: { [Field] }
              { [] }
 
 field_list :: { [Field] }
-           : field_list COMMA ID COLON exp
+           : field_list COMMA ident COLON exp
                { let
+                   (idname, idpos) = $3
                    val = buildExp $5
-                   pos = position $3 <> position val
+                   pos = idpos <> position val
                  in
-                   Field { fieldName = FieldName { fieldSym = name $3 },
+                   Field { fieldName = FieldName { fieldSym = idname },
                            fieldVal = val, fieldPos = pos } : $1
                }
-           | ID COLON exp
+           | ident COLON exp
                { let
+                   (idname, idpos) = $1
                    val = buildExp $3
-                   pos = position $1 <> position val
+                   pos = idpos <> position val
                  in
-                   [ Field { fieldName = FieldName { fieldSym = name $1 },
+                   [ Field { fieldName = FieldName { fieldSym = idname },
                              fieldVal = val, fieldPos = pos } ]
                }
 
 bind_list :: { [Field] }
-          : bind_list COMMA ID EQUAL exp
+          : bind_list COMMA ident EQUAL exp
               { let
+                  (idname, idpos) = $3
                   val = buildExp $5
-                  pos = position $3 <> position val
+                  pos = idpos <> position val
                 in
-                  Field { fieldName = FieldName { fieldSym = name $3 },
+                  Field { fieldName = FieldName { fieldSym = idname },
                           fieldVal = val, fieldPos = pos } : $1
               }
-          | ID EQUAL exp
+          | ident EQUAL exp
               { let
+                  (idname, idpos) = $1
                   val = buildExp $3
-                  pos = position $1 <> position val
+                  pos = idpos <> position val
                 in
-                  [ Field { fieldName = FieldName { fieldSym = name $1 },
+                  [ Field { fieldName = FieldName { fieldSym = idname },
                             fieldVal = val, fieldPos = pos } ]
               }
 
@@ -502,19 +630,19 @@ static_exp :: { Exp }
                                                  recordPos = recpos } ],
                          seqPos = seqpos }
                }
-           | static_exp DOT ID
+           | static_exp DOT ident
                { let
-                   pos = position $1 <>  position $3
+                   (idname, idpos) = $3
+                   pos = position $1 <>  idpos
                  in
                    Project { projectVal = $1,
-                             projectFields = [FieldName { fieldSym = name $3 }],
+                             projectFields = [FieldName { fieldSym = idname }],
                              projectPos = pos }
                }
            | type_builder_kind args_opt extends
              LBRACE def_list group_list RBRACE
                { let
-                   grouppos = position (last $5) <>
-                               position (head $5)
+                   grouppos = position (last $5) <> position (head $5)
                    builderpos = snd $1 <> position $7
                  in
                    Anon { anonKind = fst $1,
@@ -526,8 +654,12 @@ static_exp :: { Exp }
                                         reverse $6,
                           anonPos = builderpos }
                }
-           | ID
-               { Sym { symName = name $1, symPos = position $1 } }
+           | ident
+               { let
+                   (idname, idpos) = $1
+                 in
+                   Sym { symName = idname, symPos = idpos }
+               }
 
 exp_list :: { [Exp] }
          : exp_list COMMA exp
@@ -626,12 +758,13 @@ inner_exp :: { Exp }
                  Compound { compoundBody = reverse $2,
                             compoundPos = compoundpos }
              }
-          | inner_exp DOT ID
+          | inner_exp DOT ident
              { let
-                 pos = position $1 <> position $3
+                 (idname, idpos) = $3
+                 pos = position $1 <> idpos
                in
                  Project { projectVal = $1,
-                           projectFields = [FieldName { fieldSym = name $3 }],
+                           projectFields = [FieldName { fieldSym = idname }],
                            projectPos = pos }
              }
           | inner_exp DOT LPAREN project_list RPAREN
@@ -643,16 +776,27 @@ inner_exp :: { Exp }
              }
  --         | inner_exp LBRACK exp_list RBRACK
  --            {}
-          | ID
-             { Sym { symName = name $1, symPos = position $1 } }
+          | ident
+             { let
+                 (idname, idpos) = $1
+               in
+                 Sym { symName = idname, symPos = idpos } }
           | literal
              { Literal $1 }
 
 project_list :: { [FieldName] }
-             : project_list COMMA ID
-                 { FieldName { fieldSym = name $3 } : $1 }
-             | ID
-                 { [ FieldName { fieldSym = name $1 } ] }
+             : project_list COMMA ident
+                 { let
+                     (idname, _) = $3
+                   in
+                     FieldName { fieldSym = idname } : $1
+                 }
+             | ident
+                 { let
+                     (idname, _) = $1
+                   in
+                     [ FieldName { fieldSym = idname } ]
+                 }
 
 abstraction_kind :: { (AbstractionKind, Position) }
                  : FUN
@@ -775,18 +919,18 @@ pattern :: { Pattern }
                 Split { splitFields = reverse $2, splitStrict = True,
                         splitPos = pos }
             }
-        | ID AS pattern
-            { let
-                pos = position $1 <> position $3
-              in
-                As { asName = name $1, asPat = $3, asPos = pos }
-            }
         | pattern COLON exp
             { let
                 ty = buildExp $3
                 pos = position $1 <> position ty
               in
                 Typed { typedPat = $1, typedType = ty, typedPos = pos }
+            }
+        | ID AS pattern
+            { let
+                pos = position $1 <> position $3
+              in
+                As { asName = name $1, asPat = $3, asPos = pos }
             }
         | ID pattern
             { let
@@ -816,11 +960,12 @@ match_list :: { [Entry] }
                }
            | match_list COMMA pattern
                { Unnamed $3 : $1 }
-           | ID EQUAL pattern
+           | ident EQUAL pattern
                { let
-                   pos = position $1 <> position $3
+                   (idname, idpos) = $1
+                   pos = idpos <> position $3
                  in
-                   [ Named { namedSym = name $1, namedVal = $3,
+                   [ Named { namedSym = idname, namedVal = $3,
                              namedPos = pos } ]
                }
            | pattern
