@@ -75,10 +75,18 @@ newtype FieldName = FieldName { fieldSym :: Symbol }
 newtype ScopeID = ScopeID { scopeID :: Word }
   deriving (Eq, Ord, Ix)
 
+-- | Associativity for syntax directives.
 data Assoc = LeftAssoc | RightAssoc | NonAssoc
   deriving (Ord, Eq, Enum, Show)
 
-data Fixity = Prefix | Infix !Assoc | Postfix
+-- | Fixity for syntax directives.
+data Fixity =
+    Prefix
+  | Infix {
+      -- | The associativity of the infix operator.
+      infixAssoc :: !Assoc
+    }
+  | Postfix
   deriving (Ord, Eq, Show)
 
 -- | Scope classes.  These define the exact semantics of a scoped

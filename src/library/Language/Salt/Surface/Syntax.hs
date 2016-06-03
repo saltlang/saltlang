@@ -36,6 +36,7 @@
 -- amount of processing has been done.  However, symbols have not been
 -- resolved and inherited scopes have not been constructed.
 module Language.Salt.Surface.Syntax(
+       DefID,
        Ref(..),
        Surface(..),
        Component(..),
@@ -77,6 +78,9 @@ import Text.XML.Expat.Tree(NodeG)
 
 import qualified Data.HashMap.Strict as HashMap
 
+-- | Unique ID for initializers.
+newtype DefID = DefID { defID :: Word } deriving (Eq, Ord, Ix)
+
 -- | A reference to a definition in a scope.
 data Ref =
   Ref {
@@ -116,8 +120,10 @@ data Scope expty =
     -- | The truth environment for this scope.  This contains all
     -- theorems, axioms, and invariants.
     scopeTruths :: !(HashMap Symbol (Truth expty)),
-    -- | All concrete definitions for this scope.
-    scopeElems :: !(Array Visibility [Def expty]),
+    -- | All concrete definitions in this scope.
+    scopeDefs :: !(Array DefID (Def expty)),
+    -- | A map from names to definition IDs.
+    scopeNames :: !(Array Visibility (HashMap Symbol [DefID])),
     -- | Proofs given in this scope.
     scopeProofs :: ![Proof expty],
     -- | Imports in this scope.
@@ -214,8 +220,10 @@ data Import expty =
 data Compound expty =
     -- | An ordinary expression.
     Exp { expVal :: !expty }
-    -- | The position of a declaration.
+    -- | The position of a symbol declaration.
   | Decl { declSym :: !Symbol }
+    -- | The position of an initializer.
+  | Init { initId :: !DefID }
 
 -- | A pattern, for pattern match expressions.
 data Pattern expty =
@@ -446,6 +454,16 @@ data Case expty =
     casePos :: !Position
   }
 
+instance Enum DefID where
+  succ = DefID . succ . defID
+  pred = DefID . pred . defID
+  toEnum = DefID . toEnum
+  fromEnum = fromEnum . defID
+  enumFromThen DefID { defID = n } = map DefID . enumFromThen n . defID
+  enumFromTo DefID { defID = n } = map DefID . enumFromTo n . defID
+  enumFromThenTo DefID { defID = n } DefID { defID = m } =
+    map DefID . enumFromThenTo n m . defID
+
 instance PositionElement (Builder expty) where
   position Builder { builderPos = pos } = pos
 
@@ -460,6 +478,9 @@ instance PositionElement (Proof expty) where
 
 instance PositionElement (Import expty) where
   position Import { importPos = pos } = pos
+
+instance PositionElement (Syntax expty) where
+  position Syntax { syntaxPos = pos } = pos
 
 instance PositionElement (Pattern expty) where
   position Option { optionPos = pos } = pos
@@ -536,6 +557,7 @@ instance Eq expty => Eq (Import expty) where
 instance Eq expty => Eq (Compound expty) where
   Exp { expVal = exp1 } == Exp { expVal = exp2 } = exp1 == exp2
   Decl { declSym = sym1 } == Decl { declSym = sym2 } = sym1 == sym2
+  Init { initId = id1 } == Init { initId = id2 } = id1 == id2
   _ == _ = False
 
 instance Eq expty => Eq (Pattern expty) where
@@ -638,25 +660,33 @@ instance Ord expty => Ord (Truth expty) where
 
 instance Ord expty => Ord (Scope expty) where
   compare Scope { scopeBuilders = builders1, scopeSyntax = syntax1,
-                  scopeTruths = truths1, scopeElems = defs1,
-                  scopeProofs = proofs1, scopeImports = imports1 }
+                  scopeTruths = truths1, scopeDefs = defs1,
+                  scopeProofs = proofs1, scopeImports = imports1,
+                  scopeNames = names1 }
           Scope { scopeBuilders = builders2, scopeSyntax = syntax2,
-                  scopeTruths = truths2, scopeElems = defs2,
-                  scopeProofs = proofs2, scopeImports = imports2 } =
+                  scopeTruths = truths2, scopeDefs = defs2,
+                  scopeProofs = proofs2, scopeImports = imports2,
+                  scopeNames = names2 } =
     let
+      mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
+
       builderlist1 = sort (HashMap.toList builders1)
       builderlist2 = sort (HashMap.toList builders2)
       truthlist1 = sort (HashMap.toList truths1)
       truthlist2 = sort (HashMap.toList truths2)
       syntaxlist1 = sort (HashMap.toList syntax1)
       syntaxlist2 = sort (HashMap.toList syntax2)
+      namelist1 = map mapfun (assocs names1)
+      namelist2 = map mapfun (assocs names2)
     in
       case compare builderlist1 builderlist2 of
         EQ -> case compare syntaxlist1 syntaxlist2 of
           EQ -> case compare truthlist1 truthlist2 of
             EQ -> case compare defs1 defs2 of
               EQ -> case compare proofs1 proofs2 of
-                EQ -> compare imports1 imports2
+                EQ -> case compare imports1 imports2 of
+                  EQ -> compare namelist1 namelist2
+                  out -> out
                 out -> out
               out -> out
             out -> out
@@ -705,8 +735,10 @@ instance Ord expty => Ord (Compound expty) where
   compare Exp { expVal = exp1 } Exp { expVal = exp2 } = compare exp1 exp2
   compare Exp {} _ = LT
   compare _ Exp {} = GT
-  compare Decl { declSym = sym1 } Decl { declSym = sym2 } =
-    compare sym1 sym2
+  compare Decl { declSym = sym1 } Decl { declSym = sym2 } = compare sym1 sym2
+  compare Decl {} _ = LT
+  compare _ Decl {} = GT
+  compare Init { initId = id1 } Init { initId = id2 } = compare id1 id2
 
 instance Ord expty => Ord (Pattern expty) where
   compare Option { optionPats = pats1 } Option { optionPats = pats2 } =
@@ -875,6 +907,9 @@ instance Ord expty => Ord (Case expty) where
       EQ -> compare body1 body2
       out -> out
 
+instance Hashable DefID where
+  hashWithSalt s = hashWithSalt s . fromEnum
+
 instance Hashable Ref where
   hashWithSalt s Ref { refScopeID = scope, refSymbol = sym } =
     s `hashWithSalt` scope `hashWithSalt` sym
@@ -895,16 +930,20 @@ instance (Hashable expty, Ord expty) => Hashable (Truth expty) where
 
 instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
   hashWithSalt s Scope { scopeBuilders = builders, scopeSyntax = syntax,
-                         scopeTruths = truths, scopeElems = defs,
-                         scopeProofs = proofs, scopeImports = imports } =
+                         scopeTruths = truths, scopeDefs = defs,
+                         scopeProofs = proofs, scopeImports = imports,
+                         scopeNames = names } =
     let
+      mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
       builderlist = sort (HashMap.toList builders)
       truthlist = sort (HashMap.toList truths)
       syntaxlist = sort (HashMap.toList syntax)
+      namelist = map mapfun (assocs names)
     in
       s `hashWithSalt` builderlist `hashWithSalt`
       syntaxlist `hashWithSalt` truthlist `hashWithSalt`
-      elems defs `hashWithSalt` proofs `hashWithSalt` imports
+      elems defs `hashWithSalt` proofs `hashWithSalt`
+      imports `hashWithSalt` namelist
 
 instance (Hashable expty, Ord expty) => Hashable (Builder expty) where
   hashWithSalt s Builder { builderKind = kind, builderVisibility = vis,
@@ -930,6 +969,8 @@ instance (Hashable expty, Ord expty) => Hashable (Compound expty) where
     s `hashWithSalt` (0 :: Int) `hashWithSalt` exp
   hashWithSalt s Decl { declSym = sym } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` sym
+  hashWithSalt s Init { initId = defid } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` defid
 
 instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
   hashWithSalt s Option { optionPats = pats } =
@@ -1009,12 +1050,12 @@ instance (Hashable expty, Ord expty) => Hashable (Case expty) where
 
 instance Functor Scope where
   fmap f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
-                     scopeSyntax = syntax, scopeElems = defs,
+                     scopeSyntax = syntax, scopeDefs = defs,
                      scopeProofs = proofs, scopeImports = imports } =
     d { scopeBuilders = fmap (fmap f) builders,
         scopeTruths = fmap (fmap f) truths,
         scopeSyntax = fmap (fmap f) syntax,
-        scopeElems = fmap (fmap (fmap f)) defs,
+        scopeDefs = fmap (fmap f) defs,
         scopeProofs = fmap (fmap f) proofs,
         scopeImports = fmap (fmap f) imports }
 
@@ -1047,6 +1088,7 @@ instance Functor Import where
 instance Functor Compound where
   fmap f c @ Exp { expVal = e } = c { expVal = f e }
   fmap _ Decl { declSym = sym } = Decl { declSym = sym }
+  fmap _ Init { initId = defid } = Init { initId = defid }
 
 instance Functor Pattern where
   fmap f p @ Option { optionPats = pats } =
@@ -1107,12 +1149,12 @@ instance Functor Case where
 
 instance Foldable Scope where
   foldMap f Scope { scopeBuilders = builders, scopeTruths = truths,
-                    scopeSyntax = syntax, scopeElems = defs,
+                    scopeSyntax = syntax, scopeDefs = defs,
                     scopeProofs = proofs, scopeImports = imports } =
     foldMap (foldMap f) builders `mappend`
     foldMap (foldMap f) truths `mappend`
     foldMap (foldMap f) syntax `mappend`
-    foldMap (foldMap (foldMap f)) defs `mappend`
+    foldMap (foldMap f) defs `mappend`
     foldMap (foldMap f) proofs `mappend`
     foldMap (foldMap f) imports
 
@@ -1142,6 +1184,7 @@ instance Foldable Import where
 instance Foldable Compound where
   foldMap f Exp { expVal = e } = f e
   foldMap _ Decl {} = mempty
+  foldMap _ Init {} = mempty
 
 instance Foldable Pattern where
   foldMap f Option { optionPats = pats } = foldMap (foldMap f) pats
@@ -1196,14 +1239,14 @@ instance Foldable Case where
 
 instance Traversable Scope where
   traverse f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
-                     scopeSyntax = syntax, scopeElems = defs,
+                     scopeSyntax = syntax, scopeDefs = defs,
                      scopeProofs = proofs, scopeImports = imports } =
     (\builders' truths' syntax' defs' proofs' imports' ->
       d { scopeBuilders = builders', scopeTruths = truths',
-          scopeSyntax = syntax', scopeElems = defs',
+          scopeSyntax = syntax', scopeDefs = defs',
           scopeProofs = proofs', scopeImports = imports' }) <$>
     traverse (traverse f) builders <*> traverse (traverse f) truths <*>
-    traverse (traverse f) syntax <*> traverse (traverse (traverse f)) defs <*>
+    traverse (traverse f) syntax <*> traverse (traverse f) defs <*>
     traverse (traverse f) proofs <*> traverse (traverse f) imports
 
 instance Traversable Syntax where
@@ -1240,6 +1283,7 @@ instance Traversable Import where
 instance Traversable Compound where
   traverse f c @ Exp { expVal = e } = (\e' -> c { expVal = e' }) <$> f e
   traverse _ Decl { declSym = sym } = pure Decl { declSym = sym }
+  traverse _ Init { initId = defid } = pure Init { initId = defid }
 
 instance Traversable Pattern where
   traverse f p @ Option { optionPats = pats } =
@@ -1355,6 +1399,12 @@ syntaxDot Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
             char ';' <$> vcat (map (elemEdge nodeid) precdocs), nodeid)
 -}
 
+instance Format DefID where
+  format = format . fromEnum
+
+instance Monad m => FormatM m DefID where
+  formatM = return . format
+
 instance (MonadSymbols m) => FormatM m Ref where
   formatM Ref { refSymbol = sym, refScopeID = scopeid } =
     do
@@ -1421,19 +1471,33 @@ formatMap hashmap =
     entrydocs <- mapM formatEntry (HashMap.toList hashmap)
     return $! listDoc entrydocs
 
-formatElems :: (MonadSymbols m, MonadPositions m, FormatM m expty) =>
-               Array Visibility [Def expty] -> m Doc
-formatElems arr =
+formatListMap :: (MonadSymbols m, MonadPositions m,
+                  FormatM m key, FormatM m val) =>
+                 HashMap key [val] -> m Doc
+formatListMap hashmap =
+  let
+    formatEntry (sym, ent) =
+      do
+        symdoc <- formatM sym
+        entdoc <- mapM formatM ent
+        return $! tupleDoc [symdoc, listDoc entdoc]
+  in do
+    entrydocs <- mapM formatEntry (HashMap.toList hashmap)
+    return $! listDoc entrydocs
+
+formatNames :: (MonadSymbols m, MonadPositions m) =>
+               Array Visibility (HashMap Symbol [DefID]) -> m Doc
+formatNames arr =
   do
-    hiddendocs <- mapM formatM (arr ! Hidden)
-    privatedocs <- mapM formatM (arr ! Private)
-    protecteddocs <- mapM formatM (arr ! Protected)
-    publicdocs <- mapM formatM (arr ! Public)
-    return $! compoundApplyDoc (string "Elems")
-                             [(string "hidden", listDoc hiddendocs),
-                              (string "private", listDoc privatedocs),
-                              (string "protected", listDoc protecteddocs),
-                              (string "public", listDoc publicdocs)]
+    hiddendocs <- formatListMap (arr ! Hidden)
+    privatedocs <- formatListMap (arr ! Private)
+    protecteddocs <- formatListMap (arr ! Protected)
+    publicdocs <- formatListMap (arr ! Public)
+    return $! compoundApplyDoc (string "Names")
+                             [(string "hidden", hiddendocs),
+                              (string "private", privatedocs),
+                              (string "protected", protecteddocs),
+                              (string "public", publicdocs)]
 
 instance (MonadSymbols m, MonadPositions m) => FormatM m Component where
   formatM Component { compExpected = Just expected, compScope = scope } =
@@ -1449,19 +1513,26 @@ instance (MonadSymbols m, MonadPositions m) => FormatM m Component where
 instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
          FormatM m (Scope expty) where
   formatM Scope { scopeBuilders = builders, scopeSyntax = syntax,
-                  scopeTruths = truths, scopeElems = defs,
-                  scopeProofs = proofs } =
-    do
+                  scopeTruths = truths, scopeDefs = defs,
+                  scopeProofs = proofs, scopeNames = names } =
+    let
+      mapfun (idx, def) =
+        do
+          defdoc <- formatM def
+          return $! tupleDoc [format idx, defdoc]
+    in do
       buildersdoc <- formatMap builders
       syntaxdoc <- formatMap syntax
       truthsdoc <- formatMap truths
-      elemsdoc <- formatElems defs
+      namesdoc <- formatNames names
+      defsdoc <- mapM mapfun (assocs defs)
       proofsdoc <- mapM formatM proofs
       return $! compoundApplyDoc (string "Scope")
                                [(string "builders", buildersdoc),
                                 (string "syntax", syntaxdoc),
                                 (string "truths", truthsdoc),
-                                (string "elems", elemsdoc),
+                                (string "defs", listDoc defsdoc),
+                                (string "names", namesdoc),
                                 (string "proofs", listDoc proofsdoc)]
 
 instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
@@ -1530,7 +1601,9 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
   formatM Decl { declSym = sym } =
     do
       symdoc <- formatM sym
-      return (string "declaration of" <> symdoc)
+      return $! string "declaration of" <> symdoc
+  formatM Init { initId = defid } =
+    return $! string "declaration of" <> format defid
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Pattern expty) where
@@ -1793,6 +1866,27 @@ mapPickler = xpWrap (HashMap.fromList, HashMap.toList)
                                  (xpList (xpElem (gxFromString "entry")
                                                  xpickle xpickle)))
 
+listMapPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text,
+                   XmlPickler (Attributes tag text) key,
+                   XmlPickler [NodeG [] tag text] val,
+                   Hashable key, Eq key) =>
+                  PU [NodeG [] tag text] (HashMap key [val])
+listMapPickler = xpWrap (HashMap.fromList, HashMap.toList)
+                        (xpElemNodes (gxFromString "Map")
+                                     (xpList (xpElem (gxFromString "entry")
+                                                     xpickle (xpList xpickle))))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] DefID  where
+  xpickle = xpWrap (toEnum, fromEnum)
+                   (xpElemAttrs (gxFromString "DefID")
+                                (xpAttr (gxFromString "id") xpPrim))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [(tag, text)] DefID  where
+  xpickle = xpWrap (toEnum, fromEnum) (xpAttr (gxFromString "def-id") xpPrim)
+
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Truth expty) where
@@ -1809,23 +1903,35 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                                                     xpickle))
                              (xpElemNodes (gxFromString "pos") xpickle)))
 
-defsPickler :: (GenericXMLString tag, Show tag,
-                GenericXMLString text, Show text,
-                XmlPickler [NodeG [] tag text] expty) =>
-               PU [NodeG [] tag text] (Array Visibility [Def expty])
-defsPickler =
+namesPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text) =>
+                PU [NodeG [] tag text] (Array Visibility
+                                              (HashMap Symbol [DefID]))
+namesPickler =
   xpWrap (\(hiddens, privates, protecteds, publics) ->
            listArray (Hidden, Public) [hiddens, privates, protecteds, publics],
           \arr -> (arr ! Hidden, arr ! Private, arr ! Protected, arr ! Public))
          (xpElemNodes (gxFromString "defs")
                       (xp4Tuple (xpElemNodes (gxFromString "hidden")
-                                             (xpList xpickle))
+                                             listMapPickler)
                                 (xpElemNodes (gxFromString "private")
-                                             (xpList xpickle))
+                                             listMapPickler)
                                 (xpElemNodes (gxFromString "protected")
-                                             (xpList xpickle))
+                                             listMapPickler)
                                 (xpElemNodes (gxFromString "public")
-                                             (xpList xpickle))))
+                                             listMapPickler)))
+
+defsPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [NodeG [] tag text] expty) =>
+               PU [NodeG [] tag text] (Array DefID (Def expty))
+defsPickler =
+  let
+    defPickler = xpElem (gxFromString "def") xpickle xpickle
+  in
+    xpWrap (\entries -> array (toEnum 0, toEnum (length entries - 1)) entries,
+            assocs)
+           (xpElemNodes (gxFromString "defs") (xpList defPickler))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] Component where
@@ -1840,27 +1946,31 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Scope expty) where
   xpickle =
-    xpWrap (\(builders, syntax, truths, defs, proofs, imports) ->
+    xpWrap (\((builders, syntax, truths), (defs, names, proofs, imports)) ->
              Scope { scopeBuilders = builders, scopeSyntax = syntax,
-                     scopeTruths = truths, scopeElems = defs,
-                     scopeProofs = proofs, scopeImports = imports },
+                     scopeTruths = truths, scopeNames = names,
+                     scopeProofs = proofs, scopeImports = imports,
+                     scopeDefs = defs },
             \Scope { scopeBuilders = builders, scopeSyntax = syntax,
-                     scopeTruths = truths, scopeElems = defs,
-                     scopeProofs = proofs, scopeImports = imports } ->
-            (builders, syntax, truths, defs, proofs, imports))
+                     scopeTruths = truths, scopeNames = names,
+                     scopeProofs = proofs, scopeImports = imports,
+                     scopeDefs = defs } ->
+            ((builders, syntax, truths), (defs, names, proofs, imports)))
            (xpElemNodes (gxFromString "Scope")
-                        (xp6Tuple (xpElemNodes (gxFromString "builders")
-                                               mapPickler)
-                                  (xpElemNodes (gxFromString "syntax")
-                                               mapPickler)
-                                  (xpElemNodes (gxFromString "truths")
-                                               mapPickler)
-                                  (xpElemNodes (gxFromString "defs")
-                                               defsPickler)
-                                  (xpElemNodes (gxFromString "proofs")
-                                               (xpList xpickle))
-                                  (xpElemNodes (gxFromString "imports")
-                                               (xpList xpickle))))
+                        (xpPair (xpTriple (xpElemNodes (gxFromString "builders")
+                                                       mapPickler)
+                                          (xpElemNodes (gxFromString "syntax")
+                                                       mapPickler)
+                                          (xpElemNodes (gxFromString "truths")
+                                                       mapPickler))
+                                (xp4Tuple (xpElemNodes (gxFromString "defs")
+                                                       defsPickler)
+                                          (xpElemNodes (gxFromString "names")
+                                                       namesPickler)
+                                          (xpElemNodes (gxFromString "proofs")
+                                                       (xpList xpickle))
+                                          (xpElemNodes (gxFromString "imports")
+                                                       (xpList xpickle)))))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
@@ -1943,6 +2053,16 @@ elementPickler =
   in
     xpWrap (Decl, revfunc) (xpElemNodes (gxFromString "Decl") xpickle)
 
+initPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [NodeG [] tag text] expty) =>
+               PU [NodeG [] tag text] (Compound expty)
+initPickler =
+  let
+    revfunc Init { initId = defid } = defid
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Init, revfunc) (xpElemAttrs (gxFromString "Init") xpickle)
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
@@ -1951,8 +2071,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
     let
       picker Exp {} = 0
       picker Decl {} = 1
+      picker Init {} = 2
     in
-      xpAlt picker [expPickler, elementPickler]
+      xpAlt picker [expPickler, elementPickler, initPickler]
 
 optionPickler :: (GenericXMLString tag, Show tag,
                   GenericXMLString text, Show text,
