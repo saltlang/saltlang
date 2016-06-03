@@ -70,22 +70,44 @@ import qualified Language.Salt.Surface.Syntax as Syntax
 
 type Table = BasicHashTable [Symbol] (Maybe Syntax.Component)
 
+-- | A temporary scope.  We build this up and then convert it into a
+-- real scope.
 data TempScope expty =
   TempScope {
+    -- | The scope's ID
     tempScopeDefID :: !Syntax.DefID,
+    -- | Builder definitions.  We keep all definitions to generate
+    -- nicer error messages.
     tempScopeBuilders :: !(HashMap Symbol [Syntax.Builder expty]),
+    -- | Truth definitions.  We keep all definitions to generate
+    -- nicer error messages.
     tempScopeTruths :: !(HashMap Symbol [Syntax.Truth expty]),
+    -- | Syntax directives.  We keep all directives to generate
+    -- nicer error messages.
     tempScopeSyntax :: !(HashMap Symbol [Syntax.Syntax expty]),
+    -- | Proofs.  There is no difference between the format here and
+    -- in a real scope.
     tempScopeProofs :: ![Syntax.Proof expty],
+    -- | Imports.  There is no difference between the format here and
+    -- in a real scope.
     tempScopeImports :: ![Syntax.Import expty],
+    -- | Names.  We write to this array, then freeze the array when
+    -- completing the scope.
     tempScopeNames :: !(IOArray Visibility (HashMap Symbol [Syntax.DefID])),
+    -- | Definitions.  We turn this into an array when completing the scope.
     tempScopeDefs :: ![(Syntax.DefID, Syntax.Def expty)]
   }
 
+-- | State of collect phase (the components are kept in a hash table
+-- in a ReaderT.
 data CollectState expty =
   CollectState {
+    -- | Running counter of scopeIDs
     collectNextScope :: !ScopeID,
+    -- | A stack of scopes.  We add definitions into the top of the stack.
     collectScopes :: ![TempScope expty],
+    -- | Scopes that have been finished.  This will be turned into an
+    -- array at the end of collect.
     collectFinishedScopes :: ![(ScopeID, Syntax.Scope expty)]
   }
 
@@ -98,7 +120,7 @@ emptyState = CollectState { collectNextScope = toEnum 0, collectScopes = [],
 scopeStackUnderflow :: Strict.ByteString
 scopeStackUnderflow = Strict.fromString "Scope stack underflow"
 
--- | Begin a new scope.
+-- | Begin a new scope.  This pushes a new empty scope onto the scope stack.
 beginScope :: MonadIO m => CollectT m ()
 beginScope =
   do
@@ -114,25 +136,37 @@ beginScope =
                                              tempScopeDefID = toEnum 0 } :
                                  scopes }
 
--- | Check whether a component exists
-componentExists :: MonadIO m => [Symbol] -> CollectT m Bool
+-- | Check whether a component exists.
+componentExists :: MonadIO m =>
+                   [Symbol]
+                -- ^ Component name to check.
+                -> CollectT m Bool
+                -- ^ Whether the component exists.
 componentExists path =
   do
     tab <- ask
     res <- liftIO $! HashTable.lookup tab path
     return $! isJust res
 
--- | Add a component to the register
-addComponent :: MonadIO m => [Symbol] -> Syntax.Component -> CollectT m ()
+-- | Add a component.
+addComponent :: MonadIO m =>
+                [Symbol]
+             -- ^ The component name.
+             -> Syntax.Component
+             -- ^ The component.
+             -> CollectT m ()
 addComponent path component =
   do
     tab <- ask
     liftIO $! HashTable.insert tab path $! Just component
 
--- | Add a Builder definition to the current scope.
+-- | Add a 'Builder' definition to the current scope.
 addBuilder :: MonadMessages Message m =>
-              Symbol -> Syntax.Builder (Syntax.Exp Symbol) ->
-              CollectT m ()
+              Symbol
+           -- ^ The name of the 'Builder'.
+           -> Syntax.Builder (Syntax.Exp Symbol)
+           -- ^ The 'Builder' definition.
+           -> CollectT m ()
 addBuilder sym builder @ Syntax.Builder { Syntax.builderPos = pos } =
   do
     cstate @ CollectState { collectScopes = scopes } <- get
@@ -148,9 +182,13 @@ addBuilder sym builder @ Syntax.Builder { Syntax.builderPos = pos } =
       -- A stack underflow is an internal error
       _ -> internalError scopeStackUnderflow pos
 
--- | Add a Truth definition to the current scope.
+-- | Add a 'Truth' definition to the current scope.
 addTruth :: MonadMessages Message m =>
-            Symbol -> Syntax.Truth (Syntax.Exp Symbol) -> CollectT m ()
+            Symbol
+         -- ^ The name of the 'Truth'.
+         -> Syntax.Truth (Syntax.Exp Symbol)
+         -- ^ The 'Truth' definition.
+         -> CollectT m ()
 addTruth sym truth @ Syntax.Truth { Syntax.truthPos = pos } =
   do
     cstate @ CollectState { collectScopes = scopes } <- get
@@ -166,9 +204,11 @@ addTruth sym truth @ Syntax.Truth { Syntax.truthPos = pos } =
       -- A stack underflow is an internal error
       _ -> internalError scopeStackUnderflow pos
 
--- | Add a Proof definition to the current scope.
+-- | Add a 'Proof' to the current scope.
 addProof :: MonadMessages Message m =>
-            Syntax.Proof (Syntax.Exp Symbol) -> CollectT m ()
+            Syntax.Proof (Syntax.Exp Symbol)
+         -- ^ The 'Proof' definition.
+         -> CollectT m ()
 addProof proof @ Syntax.Proof { Syntax.proofPos = pos } =
   do
     cstate @ CollectState { collectScopes = scopes } <- get
@@ -183,7 +223,9 @@ addProof proof @ Syntax.Proof { Syntax.proofPos = pos } =
 
 -- | Add an import to the current scope.
 addImport :: MonadMessages Message m =>
-             Syntax.Import (Syntax.Exp Symbol) -> CollectT m ()
+             Syntax.Import (Syntax.Exp Symbol)
+          -- ^ The 'Import' structure.
+          -> CollectT m ()
 addImport import' @ Syntax.Import { Syntax.importPos = pos } =
   do
     cstate @ CollectState { collectScopes = scopes } <- get
@@ -196,9 +238,13 @@ addImport import' @ Syntax.Import { Syntax.importPos = pos } =
       -- A stack underflow is an internal error
       _ -> internalError scopeStackUnderflow pos
 
--- | Add a syntax definition to the current scope.
+-- | Add a syntax directive to the current scope.
 addSyntax :: MonadMessages Message m =>
-             Symbol -> Syntax.Syntax (Syntax.Exp Symbol) -> CollectT m ()
+             Symbol
+          -- ^ The 'Symbol' to which the syntax directive applies.
+          -> Syntax.Syntax (Syntax.Exp Symbol)
+          -- ^ The syntax directive.
+          -> CollectT m ()
 addSyntax sym syntax @ Syntax.Syntax { Syntax.syntaxPos = pos } =
   do
     cstate @ CollectState { collectScopes = scopes } <- get
@@ -214,15 +260,17 @@ addSyntax sym syntax @ Syntax.Syntax { Syntax.syntaxPos = pos } =
       -- A stack underflow is an internal error
       _ -> internalError scopeStackUnderflow pos
 
--- | Add a definition into a scope, merging it in with what's already there.
+-- | Add a definition into a scope, get a 'DefID' for it.
 addDef :: MonadMessages Message m =>
-          Syntax.Def (Syntax.Exp Symbol) ->
-          CollectT m Syntax.DefID
+          Syntax.Def (Syntax.Exp Symbol)
+       -- ^ The definition to add.
+       -> CollectT m Syntax.DefID
+       -- ^ The 'DefID' for the definition that was added.
 addDef def @ Syntax.Def {} =
   do
     cstate @ CollectState { collectScopes = scopes } <- get
     case scopes of
-      -- Append to the list of defs for this visibility
+      -- Append to the list of defs, bump the defid
       first @ TempScope { tempScopeDefID = defid,
                           tempScopeDefs = defs } : rest ->
         let
@@ -235,9 +283,17 @@ addDef def @ Syntax.Def {} =
       -- A stack underflow is an internal error
       _ -> error "Scope stack underflow"
 
--- | Add a definition into a scope, merging it in with what's already there.
+-- | Add names that refer to a given 'DefID'
 addNames :: (MonadMessages Message m, MonadIO m) =>
-            Visibility -> [Symbol] -> Syntax.DefID -> Position -> CollectT m ()
+            Visibility
+         -- ^ The visibility of the names.
+         -> [Symbol]
+         -- ^ The names to add.
+         -> Syntax.DefID
+         -- ^ The 'DefID' to which the names refer.
+         -> Position
+         -- ^ The position at which the names are bound.
+         -> CollectT m ()
 addNames vis syms defid pos =
   do
     CollectState { collectScopes = scopes } <- get
@@ -252,11 +308,16 @@ addNames vis syms defid pos =
       -- A stack underflow is an internal error
       _ -> internalError scopeStackUnderflow pos
 
--- | Finish the current scope and return its ID
+-- | Finish the current scope and return its ID.  This removes the
+-- scope from the stack.
 finishScope :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                CollectT m ScopeID
+            -- ^ The 'ScopeID' for the completed scope.
 finishScope =
   let
+    -- These functions turn lists of definitions into single
+    -- definitions.  If the lists are length 1, then we're good.
+    -- Otherwise, we have a namespace collision.
     collapseBuilders _ (_, []) = error "Empty builder list!"
     collapseBuilders accum (sym, [single]) =
       return $! HashMap.insert sym single accum
@@ -293,7 +354,10 @@ finishScope =
         let
           defarr = array (toEnum 0, pred defid) defs
         in do
+          -- Freeze the names array
           namesarr <- liftIO $! Unsafe.unsafeFreeze names
+          -- Collapse all element types that report errors on
+          -- namespace collisions, and report those errors.
           collapsedbuilders <- foldM collapseBuilders HashMap.empty
                                      (HashMap.toList builders)
           collapsedtruths <- foldM collapseTruths HashMap.empty
@@ -315,21 +379,30 @@ finishScope =
               }
           return scopeid
 
+-- | Collect a pattern.  Also collect all the names that it binds.
 collectPattern :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                  AST.Pattern ->
-                  CollectT m (Syntax.Pattern (Syntax.Exp Symbol), [Symbol])
+                  AST.Pattern
+               -- ^ The pattern to collect.
+               -> CollectT m (Syntax.Pattern (Syntax.Exp Symbol), [Symbol])
+               -- ^ Collected pattern and names that it binds.
 collectPattern pat =
   let
-    -- | Collect a pattern, return the name to which the pattern is bound
-    -- at the top level.
+    -- | Foldable version of collectPattern', also returns the name to
+    -- which the top-level pattern is bound.
     collectNamedPattern :: (MonadMessages Message m,
                             MonadSymbols m, MonadIO m) =>
-                           HashMap Symbol [Position] -> AST.Pattern ->
-                           CollectT m (Maybe Symbol,
+                           HashMap Symbol [Position]
+                        -- ^ Set of bound names.
+                        -> AST.Pattern
+                        -- ^ The pattern to collect.
+                        -> CollectT m (Maybe Symbol,
                                        Syntax.Pattern (Syntax.Exp Symbol),
                                        HashMap Symbol [Position])
-    -- For an as-pattern, bind the field with that name to its own
-    -- name, and further deconstruct the pattern.
+                        -- ^ The top-level binding, the collected
+                        -- pattern, and the bound names.  For an
+                        -- as-pattern, bind the field with that name
+                        -- to its own name, and further deconstruct
+                        -- the pattern.
     collectNamedPattern binds AST.As { AST.asName = sym, AST.asPat = inner,
                                        AST.asPos = pos } =
       do
@@ -360,14 +433,18 @@ collectPattern pat =
         (collectedPat, newbinds) <- collectPattern' binds pat'
         return (Nothing, collectedPat, newbinds)
 
-    -- | Collect an entry
+    -- | Collect an entry.  This is a foldable function.  Note that we
+    -- keep all pattern for a given name for error reporting purposes.
     collectEntry :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                     (HashMap Symbol [Syntax.Entry (Syntax.Exp Symbol)],
-                     HashMap Symbol [Position]) ->
-                    AST.Entry ->
-                    CollectT m (HashMap Symbol
+                     HashMap Symbol [Position])
+                 -- ^ Incoming name-pattern bindings and set of bound names.
+                 -> AST.Entry
+                 -- ^ The entry to collect.
+                 -> CollectT m (HashMap Symbol
                                         [Syntax.Entry (Syntax.Exp Symbol)],
                                 HashMap Symbol [Position])
+                 -- ^ The name-pattern bindings and set of bound names.
     -- For a named entry, use the name as the index and the pattern as
     -- the pattern.
     collectEntry (accum, binds) AST.Named { AST.namedSym = sym,
@@ -385,8 +462,10 @@ collectPattern pat =
       let
         pos = position pat
       in do
+        -- See if the pattern has a top-level binding name.
         named <- collectNamedPattern binds pat'
         case named of
+          -- If it does, use that as the name for the entry.
           (Just sym, collectedPat, newbinds) ->
             return (HashMap.insertWith (++) sym
                                        [Syntax.Entry {
@@ -394,16 +473,24 @@ collectPattern pat =
                                           Syntax.entryPos = pos
                                         }] accum,
                     HashMap.insertWith (++) sym [pos] newbinds)
+          -- Otherwise, it's an error
           (Nothing, _, newbinds) ->
             do
               namelessField (position pat)
               return (accum, newbinds)
 
+    -- | Internal foldable form of collectPattern.  This returns bound
+    -- names as a 'HashMap' to all positions, which aids in error
+    -- reporting.
     collectPattern' :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                       HashMap Symbol [Position] -> AST.Pattern ->
-                       CollectT m (Syntax.Pattern (Syntax.Exp Symbol),
+                       HashMap Symbol [Position]
+                    -- ^ The incoming set of bound names.
+                    -> AST.Pattern
+                    -- ^ The pattern to collect.
+                    -> CollectT m (Syntax.Pattern (Syntax.Exp Symbol),
                                    HashMap Symbol [Position])
-    -- For split, collect all fields into a HashMap.
+                    -- ^ The collected pattern and bound names.
+    -- For split, collect all fields, then report duplicates.
     collectPattern' binds AST.Split { AST.splitFields = fields,
                                       AST.splitStrict = strict,
                                       AST.splitPos = pos } =
@@ -419,25 +506,32 @@ collectPattern pat =
             duplicateField sym (map position syntax)
             return $! HashMap.insert sym first accum
       in do
+        -- First collect all field patterns
         (collectedFields, newbinds) <-
           foldM collectEntry (HashMap.empty, binds) fields
+        -- Collapse all field patterns and report duplicates
         collapsedFields <- foldM collapseField HashMap.empty
                                  (HashMap.toList collectedFields)
         return (Syntax.Split { Syntax.splitStrict = strict,
                                Syntax.splitFields = collapsedFields,
                                Syntax.splitPos = pos }, newbinds)
-
-    -- The rest of these are entirely straightforward
+    -- For option, collect all the options, then check for mismatches
     collectPattern' binds AST.Option { AST.optionPats = pats,
                                        AST.optionPos = pos } =
       let
+        -- | Check for any extra bound names in any patterns, return the
+        -- common name bindings.
         checkMismatch :: (MonadMessages Message m, MonadSymbols m) =>
-                         [HashMap Symbol [Position]] ->
-                         m (HashMap Symbol [Position])
+                         [HashMap Symbol [Position]]
+                      -- ^ The bound names for each option.
+                      -> m (HashMap Symbol [Position])
+                      -- ^ The common bound names.
         checkMismatch bindlist =
           let
+            -- | The common names among all bindings
             commonbinds = foldr1 (HashMap.intersectionWith (++)) bindlist
 
+            -- | Report any extra name bindings over 'commonbinds'.
             appfun :: (MonadMessages Message m, MonadSymbols m) =>
                       HashMap Symbol [Position] -> m ()
             appfun binds' =
@@ -456,10 +550,24 @@ collectPattern pat =
             (collectedPat, newbinds) <- collectPattern' binds' pat'
             return (collectedPat : optlist, newbinds : bindlist)
       in do
+        -- First collect all options
         (collected, bindlist) <- foldM (foldfun binds) ([], []) pats
+        -- Check for any mismatched bindings
         newbinds <- checkMismatch bindlist
         return (Syntax.Option { Syntax.optionPats = collected,
                                 Syntax.optionPos = pos }, newbinds)
+    -- As and Name add bindings, so make sure to add them to the bound name set
+    collectPattern' binds AST.As { AST.asName = sym, AST.asPat = inner,
+                                   AST.asPos = pos } =
+      do
+        (collectedPat, newbinds) <- collectPattern' binds inner
+        return (Syntax.As { Syntax.asName = sym, Syntax.asPat = collectedPat,
+                            Syntax.asPos = pos },
+                HashMap.insertWith (++) sym [pos] newbinds)
+    collectPattern' binds AST.Name { AST.nameSym = sym, AST.namePos = pos } =
+      return (Syntax.Name { Syntax.nameSym = sym, Syntax.namePos = pos },
+              HashMap.insertWith (++) sym [pos] binds)
+    -- The rest of these are entirely straightforward
     collectPattern' binds AST.Deconstruct { AST.deconstructName = sym,
                                             AST.deconstructPat = inner,
                                             AST.deconstructPos = pos } =
@@ -476,41 +584,41 @@ collectPattern pat =
         return (Syntax.Typed { Syntax.typedPat = collectedPat,
                                Syntax.typedType = collectedType,
                                Syntax.typedPos = pos }, newbinds)
-    collectPattern' binds AST.As { AST.asName = sym, AST.asPat = inner,
-                                   AST.asPos = pos } =
-      do
-        (collectedPat, newbinds) <- collectPattern' binds inner
-        return (Syntax.As { Syntax.asName = sym, Syntax.asPat = collectedPat,
-                            Syntax.asPos = pos },
-                HashMap.insertWith (++) sym [pos] newbinds)
-    collectPattern' binds AST.Name { AST.nameSym = sym, AST.namePos = pos } =
-      return (Syntax.Name { Syntax.nameSym = sym, Syntax.namePos = pos },
-              HashMap.insertWith (++) sym [pos] binds)
     collectPattern' binds AST.Exact { AST.exactLit = l } =
       return (Syntax.Exact { Syntax.exactLit = l }, binds)
   in do
     (collectedPat, binds) <- collectPattern' HashMap.empty pat
     return (collectedPat, HashMap.keys binds)
 
--- | Fold function to collect compound expression components.
+-- | Foldable function to collect compound expression components.
 collectCompound :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                   [Syntax.Compound (Syntax.Exp Symbol)] -> AST.Compound ->
-                   CollectT m [Syntax.Compound (Syntax.Exp Symbol)]
--- For the rest, collect the tree and add it to the statement list.
-collectCompound accum
-                AST.Element { AST.elemVal = AST.Def { AST.defPattern = pat,
-                                                      AST.defInit = init,
-                                                      AST.defPos = pos } } =
+                   [Syntax.Compound (Syntax.Exp Symbol)]
+                -- ^ The incoming compound content.
+                -> AST.Compound
+                -- ^ The compound content to collect.
+                -> CollectT m [Syntax.Compound (Syntax.Exp Symbol)]
+                -- ^ The compound content.
+-- For definitions, add the definition to the scope, and add an
+-- initializer mark to the content.
+collectCompound accum AST.Element {
+                        AST.elemVal = AST.Def { AST.defPattern = pat,
+                                                AST.defInit = init,
+                                                AST.defPos = pos }
+                      } =
   do
+    -- Collect the initializer and pattern
     collectedInit <- case init of
       Just exp -> liftM Just (collectExp exp)
       Nothing -> return Nothing
     (collectedPat, binds) <- collectPattern pat
+    -- Add the definition to the scope
     defid <- addDef Syntax.Def { Syntax.defPattern = collectedPat,
                                  Syntax.defInit = collectedInit,
                                  Syntax.defPos = pos }
     addNames Public binds defid pos
+    -- Indicate that the definition is initialized here
     return $! Syntax.Init { Syntax.initId = defid } : accum
+-- Builders have initializers, so add the marker
 collectCompound accum AST.Element {
                         AST.elemVal = elem @ AST.Builder {
                                                AST.builderName = sym
@@ -525,7 +633,8 @@ collectCompound accum AST.Element {
   do
     collectElement Public elem
     return $! Syntax.Decl { Syntax.declSym = sym } : accum
--- All other elements just get added to the scope
+-- All other elements (truths, proofs, etc) just get added to the
+-- scope; they don't have a runtime presence
 collectCompound accum AST.Element { AST.elemVal = elem } =
   do
     collectElement Public elem
@@ -538,7 +647,10 @@ collectCompound accum AST.Exp { AST.expVal = exp } =
 
 -- | Collect an expression.
 collectExp :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-              AST.Exp -> CollectT m (Syntax.Exp Symbol)
+              AST.Exp
+           -- ^ Expression to collect.
+           -> CollectT m (Syntax.Exp Symbol)
+           -- ^ Collected expression.
 -- For a compound statement, construct a sub-scope
 collectExp AST.Compound { AST.compoundBody = body, AST.compoundPos = pos } =
   do
@@ -595,6 +707,8 @@ collectExp AST.Seq { AST.seqExps = exps, AST.seqPos = pos } =
   do
     collectedExps <- mapM collectExp exps
     return Syntax.Seq { Syntax.seqExps = collectedExps, Syntax.seqPos = pos }
+collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =
+  return Syntax.Sym { Syntax.symRef = sym, Syntax.symPos = pos }
 -- The remainder of these are straightforward
 collectExp AST.Abs { AST.absKind = kind, AST.absCases = cases,
                      AST.absPos = pos } =
@@ -631,8 +745,6 @@ collectExp AST.Project { AST.projectVal = val, AST.projectFields = fields,
     return Syntax.Project { Syntax.projectVal = collectedVal,
                             Syntax.projectFields = fields,
                             Syntax.projectPos = pos }
-collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =
-  return Syntax.Sym { Syntax.symRef = sym, Syntax.symPos = pos }
 collectExp AST.With { AST.withVal = val, AST.withArgs = args,
                       AST.withPos = pos } =
   do
@@ -666,15 +778,16 @@ collectExp (AST.Literal lit) = return (Syntax.Literal lit)
 -- | Collect a list of AST fields into a Syntax fields structure (a HashMap
 -- and an ordering), and report duplicates.
 collectFields :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                 [AST.Field] -> Position ->
-                 CollectT m (Syntax.Fields (Syntax.Exp Symbol))
+                 [AST.Field]
+              -> Position
+              -- ^ The position of the whole fields list.
+              -> CollectT m (Syntax.Fields (Syntax.Exp Symbol))
+              -- ^ The collected fields.
 collectFields fields fieldspos =
   let
-    collapseField :: (MonadMessages Message m, MonadSymbols m) =>
-                     (HashMap FieldName (Syntax.Field (Syntax.Exp Symbol))) ->
-                     (FieldName, [Syntax.Field (Syntax.Exp Symbol)]) ->
-                     CollectT m (HashMap FieldName
-                                         (Syntax.Field (Syntax.Exp Symbol)))
+    -- This is another foldable function that turns lists of fields
+    -- into single fields, reporting duplicate field errors whenever
+    -- the lists have more than one element.
     collapseField accum (_, []) =
       do
         internalError (Strict.fromString "Empty field list") fieldspos
@@ -687,7 +800,7 @@ collectFields fields fieldspos =
         duplicateField sym (map position fields')
         return $! HashMap.insert fname first accum
 
-    -- | Fold function.  Builds both a list and a HashMap.
+    -- | Foldable function.  Builds both a list and a HashMap.
     collectField :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                     (HashMap FieldName [Syntax.Field (Syntax.Exp Symbol)],
                      [FieldName]) ->
@@ -706,8 +819,9 @@ collectFields fields fieldspos =
                                                }] tab,
                 fname : fields')
   in do
-    -- Get a HashMap as well as a list of field names.
+    -- Gather up all the fields, as well as their order.
     (tab, fieldlist) <- foldM collectField (HashMap.empty, []) fields
+    -- Collapse and report duplicates.
     collapsed <- foldM collapseField HashMap.empty (HashMap.toList tab)
     return Syntax.Fields {
              -- The list of field names becomes an array.
@@ -719,7 +833,10 @@ collectFields fields fieldspos =
 
 -- | Collect a case.  This is straightforward.
 collectCase :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-               AST.Case -> CollectT m (Syntax.Case (Syntax.Exp Symbol))
+               AST.Case
+            -- ^ Case to collect.
+            -> CollectT m (Syntax.Case (Syntax.Exp Symbol))
+            -- ^ The collected case.
 collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
                        AST.casePos = pos } =
   do
@@ -866,7 +983,8 @@ collectElement _ AST.Proof { AST.proofName = pname, AST.proofBody = body,
 -- HashMaps, and saves the imports and proofs.  Syntax directives then get
 -- parsed and used to update definitions.
 collectScope :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                AST.Scope -> CollectT m ScopeID
+                AST.Scope
+             -> CollectT m ScopeID
 collectScope groups =
   let
     -- | Collect a group.  This rolls all elements of the group into the
