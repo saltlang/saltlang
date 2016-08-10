@@ -28,7 +28,8 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
-{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FlexibleContexts,
+             DeriveTraversable, DeriveFoldable, DeriveFunctor #-}
 
 -- | Abstract Syntax structure.  This represents the surface language
 -- in a more abstract form than is found in the AST structure.  In
@@ -98,6 +99,7 @@ data Surface expty =
     -- | List of all components in the program.
     surfComponents :: ![Component]
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | A component.  Essentially, a scope that may or may not have an
 -- expected definition.
@@ -129,7 +131,7 @@ data Scope expty =
     -- | Imports in this scope.
     scopeImports :: ![Import expty]
   }
-  deriving Eq
+  deriving (Eq, Functor, Foldable, Traversable)
 
 -- | Syntax information for a symbol.
 data Syntax expty =
@@ -141,7 +143,7 @@ data Syntax expty =
     -- | The position in source from which this arises.
     syntaxPos :: !Position
   }
-  deriving (Ord, Eq)
+  deriving (Ord, Eq, Functor, Foldable, Traversable)
 
 -- | Truths.  These are similar to declarations, except that they
 -- affect the proof environment.  These include theorems and
@@ -159,6 +161,7 @@ data Truth expty =
     -- | The position in source from which this arises.
     truthPos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | A builder definition.
 data Builder expty =
@@ -176,6 +179,7 @@ data Builder expty =
     -- | The position in source from which this arises.
     builderPos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | Directives.  These are static commands, like imports or proofs,
 -- which influence a scope, but do not directly define anything.
@@ -190,6 +194,7 @@ data Proof expty =
       -- | The position in source from which this arises.
       proofPos :: !Position
     }
+    deriving (Functor, Foldable, Traversable)
 
 -- | Value Definitions.
 data Def expty =
@@ -203,6 +208,7 @@ data Def expty =
     -- | The position in source from which this arises.
     defPos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | An import.
 data Import expty =
@@ -214,6 +220,7 @@ data Import expty =
     -- | The position in source from which this arises.
     importPos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
@@ -224,6 +231,7 @@ data Compound expty =
   | Decl { declSym :: !Symbol }
     -- | The position of an initializer.
   | Init { initId :: !DefID }
+    deriving (Functor, Foldable, Traversable)
 
 -- | A pattern, for pattern match expressions.
 data Pattern expty =
@@ -281,6 +289,7 @@ data Pattern expty =
       namePos :: !Position
     }
   | Exact { exactLit :: !Literal }
+    deriving (Functor, Foldable, Traversable)
 
 -- | Expressions.  These represent computed values of any type.
 data Exp refty =
@@ -412,6 +421,7 @@ data Exp refty =
     }
     -- | Number literal.
   | Literal { literalVal :: !Literal }
+    deriving (Functor, Foldable, Traversable)
 
 -- | An entry in a record field or call argument list.
 data Entry expty =
@@ -422,7 +432,8 @@ data Entry expty =
     entryPat :: !(Pattern expty),
     -- | The position in source from which this arises.
     entryPos :: !Position
-   }
+  }
+  deriving (Functor, Foldable, Traversable)
 
 -- | Representation of fields.  This contains information for
 -- interpreting record as well as tuple values.
@@ -433,6 +444,7 @@ data Fields expty =
     -- | A mapping from field positions to names.
     fieldsOrder :: !(Array Word FieldName)
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | A field.
 data Field expty =
@@ -442,6 +454,7 @@ data Field expty =
     -- | The position in source from which this arises.
     fieldPos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | A case in a match statement or a function definition.
 data Case expty =
@@ -453,6 +466,7 @@ data Case expty =
     -- | The position in source from which this arises.
     casePos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
 
 instance Enum DefID where
   succ = DefID . succ . defID
@@ -1047,316 +1061,6 @@ instance (Hashable expty, Ord expty) => Hashable (Field expty) where
 instance (Hashable expty, Ord expty) => Hashable (Case expty) where
   hashWithSalt s Case { casePat = pat, caseBody = body } =
     s `hashWithSalt` pat `hashWithSalt` body
-
-instance Functor Scope where
-  fmap f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
-                     scopeSyntax = syntax, scopeDefs = defs,
-                     scopeProofs = proofs, scopeImports = imports } =
-    d { scopeBuilders = fmap (fmap f) builders,
-        scopeTruths = fmap (fmap f) truths,
-        scopeSyntax = fmap (fmap f) syntax,
-        scopeDefs = fmap (fmap f) defs,
-        scopeProofs = fmap (fmap f) proofs,
-        scopeImports = fmap (fmap f) imports }
-
-instance Functor Syntax where
-  fmap f s @ Syntax { syntaxPrecs = precs } =
-    s { syntaxPrecs = fmap (fmap f) precs }
-
-instance Functor Truth where
-  fmap f t @ Truth { truthContent = content, truthProof = proof } =
-    t { truthContent = f content, truthProof = fmap f proof }
-
-instance Functor Builder where
-  fmap f b @ Builder { builderParams = params, builderSuperTypes = supers,
-                       builderContent = content } =
-    b { builderParams = fmap f params,
-        builderSuperTypes = fmap f supers,
-        builderContent = f content }
-
-instance Functor Proof where
-  fmap f p @ Proof { proofName = pname, proofBody = body } =
-    p { proofName = f pname, proofBody = f body }
-
-instance Functor Def where
-  fmap f d @ Def { defPattern = pat, defInit = init } =
-    d { defPattern = fmap f pat, defInit = fmap f init }
-
-instance Functor Import where
-  fmap f i @ Import { importExp = exp } = i { importExp = f exp }
-
-instance Functor Compound where
-  fmap f c @ Exp { expVal = e } = c { expVal = f e }
-  fmap _ Decl { declSym = sym } = Decl { declSym = sym }
-  fmap _ Init { initId = defid } = Init { initId = defid }
-
-instance Functor Pattern where
-  fmap f p @ Option { optionPats = pats } =
-    p { optionPats = fmap (fmap f) pats }
-  fmap f p @ Deconstruct { deconstructPat = pat } =
-    p { deconstructPat = fmap f pat }
-  fmap f p @ Split { splitFields = fields } =
-    p { splitFields = fmap (fmap f) fields }
-  fmap f p @ Typed { typedPat = pat, typedType = ty } =
-    p { typedPat = fmap f pat, typedType = f ty }
-  fmap f p @ As { asPat = pat } = p { asPat = fmap f pat }
-  fmap _ Name { nameSym = sym, namePos = pos } =
-    Name { nameSym = sym, namePos = pos }
-  fmap _ Exact { exactLit = lit } = Exact { exactLit = lit }
-
-instance Functor Exp where
-  fmap f e @ Compound { compoundBody = body } =
-    e { compoundBody = fmap (fmap (fmap f)) body }
-  fmap f e @ Abs { absCases = cases } =
-    e { absCases = fmap (fmap (fmap f)) cases }
-  fmap f e @ Match { matchVal = val, matchCases = cases } =
-    e { matchVal = fmap f val, matchCases = fmap (fmap (fmap f)) cases }
-  fmap f e @ Ascribe { ascribeVal = val, ascribeType = ty } =
-    e { ascribeVal = fmap f val, ascribeType = fmap f ty }
-  fmap f e @ Seq { seqExps = exps } = e { seqExps = fmap (fmap f) exps }
-  fmap f e @ Call { callFunc = func, callArgs = args } =
-    e { callFunc = fmap f func, callArgs = fmap (fmap f) args }
-  fmap f e @ RecordType { recordTypeFields = fields } =
-    e { recordTypeFields = fmap (fmap f) fields }
-  fmap f e @ Record { recordFields = fields } =
-    e { recordFields = fmap (fmap f) fields }
-  fmap f e @ Tuple { tupleFields = fields } =
-    e { tupleFields = fmap (fmap f) fields }
-  fmap f e @ Project { projectVal = val } = e { projectVal = fmap f val }
-  fmap f e @ Sym { symRef = ref } = e { symRef = f ref }
-  fmap f e @ With { withVal = val, withArgs = args } =
-    e { withVal = fmap f val, withArgs = fmap f args }
-  fmap f e @ Where { whereVal = val, whereProp = prop } =
-    e { whereVal = fmap f val, whereProp = fmap f prop }
-  fmap f e @ Anon { anonParams = params, anonSuperTypes = supers } =
-    e { anonParams = fmap (fmap f) params,
-        anonSuperTypes = fmap (fmap f) supers }
-  fmap _ Literal { literalVal = lit } = Literal { literalVal = lit }
-
-instance Functor Entry where
-  fmap f e @ Entry { entryPat = pat } = e { entryPat = fmap f pat }
-
-instance Functor Fields where
-  fmap f s @ Fields { fieldsBindings = binds } =
-    s { fieldsBindings = fmap (fmap f) binds }
-
-instance Functor Field where
-  fmap f d @ Field { fieldVal = val } = d { fieldVal = f val }
-
-instance Functor Case where
-  fmap f c @ Case { casePat = pat, caseBody = body } =
-    c { casePat = fmap f pat, caseBody = f body }
-
-instance Foldable Scope where
-  foldMap f Scope { scopeBuilders = builders, scopeTruths = truths,
-                    scopeSyntax = syntax, scopeDefs = defs,
-                    scopeProofs = proofs, scopeImports = imports } =
-    foldMap (foldMap f) builders `mappend`
-    foldMap (foldMap f) truths `mappend`
-    foldMap (foldMap f) syntax `mappend`
-    foldMap (foldMap f) defs `mappend`
-    foldMap (foldMap f) proofs `mappend`
-    foldMap (foldMap f) imports
-
-instance Foldable Syntax where
-  foldMap f Syntax { syntaxPrecs = precs } = foldMap (foldMap f) precs
-
-instance Foldable Truth where
-  foldMap f Truth { truthContent = content, truthProof = proof } =
-    f content `mappend` foldMap f proof
-
-instance Foldable Builder where
-  foldMap f Builder { builderParams = params, builderSuperTypes = supers,
-                      builderContent = content } =
-    foldMap f params `mappend` foldMap f supers `mappend` f content
-
-instance Foldable Proof where
-  foldMap f Proof { proofName = pname, proofBody = body } =
-    f pname `mappend` f body
-
-instance Foldable Def where
-  foldMap f Def { defPattern = pat, defInit = init } =
-    foldMap f pat `mappend` foldMap f init
-
-instance Foldable Import where
-  foldMap f Import { importExp = exp } = f exp
-
-instance Foldable Compound where
-  foldMap f Exp { expVal = e } = f e
-  foldMap _ Decl {} = mempty
-  foldMap _ Init {} = mempty
-
-instance Foldable Pattern where
-  foldMap f Option { optionPats = pats } = foldMap (foldMap f) pats
-  foldMap f Deconstruct { deconstructPat = pat } = foldMap f pat
-  foldMap f Split { splitFields = fields } = foldMap (foldMap f) fields
-  foldMap f Typed { typedPat = pat, typedType = ty } =
-    foldMap f pat `mempty` f ty
-  foldMap f As { asPat = pat } = foldMap f pat
-  foldMap _ Name {} = mempty
-  foldMap _ Exact {} = mempty
-
-instance Foldable Exp where
-  foldMap f Compound { compoundBody = body } =
-    foldMap (foldMap (foldMap f)) body
-  foldMap f Abs { absCases = cases } =
-    foldMap (foldMap (foldMap f)) cases
-  foldMap f Match { matchVal = val, matchCases = cases } =
-    foldMap f val `mappend` foldMap (foldMap (foldMap f)) cases
-  foldMap f Ascribe { ascribeVal = val, ascribeType = ty } =
-    foldMap f val `mappend` foldMap f ty
-  foldMap f Seq { seqExps = exps } = foldMap (foldMap f) exps
-  foldMap f Call { callFunc = func, callArgs = args } =
-    foldMap f func `mappend` foldMap (foldMap f) args
-  foldMap f RecordType { recordTypeFields = fields } =
-    foldMap (foldMap f) fields
-  foldMap f Record { recordFields = fields } =
-    foldMap (foldMap f) fields
-  foldMap f Tuple { tupleFields = fields } =
-    foldMap (foldMap f) fields
-  foldMap f Project { projectVal = val } = foldMap f val
-  foldMap f Sym { symRef = ref } = f ref
-  foldMap f With { withVal = val, withArgs = args } =
-    foldMap f val `mappend` foldMap f args
-  foldMap f Where { whereVal = val, whereProp = prop } =
-    foldMap f val `mappend` foldMap f prop
-  foldMap f Anon { anonParams = params, anonSuperTypes = supers } =
-    foldMap (foldMap f) params `mappend` foldMap (foldMap f) supers
-  foldMap _ Literal {} = mempty
-
-instance Foldable Entry where
-  foldMap f Entry { entryPat = pat } = foldMap f pat
-
-instance Foldable Fields where
-  foldMap f Fields { fieldsBindings = binds } = foldMap (foldMap f) binds
-
-instance Foldable Field where
-  foldMap f Field { fieldVal = val } = f val
-
-instance Foldable Case where
-  foldMap f Case { casePat = pat, caseBody = body } =
-    foldMap f pat `mappend` f body
-
-instance Traversable Scope where
-  traverse f d @ Scope { scopeBuilders = builders, scopeTruths = truths,
-                     scopeSyntax = syntax, scopeDefs = defs,
-                     scopeProofs = proofs, scopeImports = imports } =
-    (\builders' truths' syntax' defs' proofs' imports' ->
-      d { scopeBuilders = builders', scopeTruths = truths',
-          scopeSyntax = syntax', scopeDefs = defs',
-          scopeProofs = proofs', scopeImports = imports' }) <$>
-    traverse (traverse f) builders <*> traverse (traverse f) truths <*>
-    traverse (traverse f) syntax <*> traverse (traverse f) defs <*>
-    traverse (traverse f) proofs <*> traverse (traverse f) imports
-
-instance Traversable Syntax where
-  traverse f s @ Syntax { syntaxPrecs = precs } =
-    (\precs' -> s { syntaxPrecs = precs' }) <$> traverse (traverse f) precs
-
-instance Traversable Truth where
-  traverse f t @ Truth { truthContent = content, truthProof = proof } =
-    (\content' proof' -> t { truthContent = content', truthProof = proof' }) <$>
-      f content <*> traverse f proof
-
-instance Traversable Builder where
-  traverse f b @ Builder { builderParams = params, builderSuperTypes = supers,
-                           builderContent = content } =
-    (\params' supers' content' -> b { builderParams = params',
-                                      builderSuperTypes = supers',
-                                      builderContent = content' }) <$>
-      traverse f params <*> traverse f supers <*> f content
-
-instance Traversable Proof where
-  traverse f p @ Proof { proofName = pname, proofBody = body } =
-    (\pname' body' -> p { proofName = pname', proofBody = body' }) <$>
-      f pname <*> f body
-
-instance Traversable Def where
-  traverse f d @ Def { defPattern = pat, defInit = init } =
-    (\pat' init' -> d { defPattern = pat', defInit = init' }) <$>
-      traverse f pat <*> traverse f init
-
-instance Traversable Import where
-  traverse f i @ Import { importExp = exp } =
-    (\exp' -> i { importExp = exp' }) <$> f exp
-
-instance Traversable Compound where
-  traverse f c @ Exp { expVal = e } = (\e' -> c { expVal = e' }) <$> f e
-  traverse _ Decl { declSym = sym } = pure Decl { declSym = sym }
-  traverse _ Init { initId = defid } = pure Init { initId = defid }
-
-instance Traversable Pattern where
-  traverse f p @ Option { optionPats = pats } =
-    (\pats' -> p { optionPats = pats' }) <$> traverse (traverse f) pats
-  traverse f p @ Deconstruct { deconstructPat = pat } =
-    (\pat' -> p { deconstructPat = pat' }) <$> traverse f pat
-  traverse f p @ Split { splitFields = fields } =
-    (\fields' -> p { splitFields = fields' }) <$> traverse (traverse f) fields
-  traverse f p @ Typed { typedPat = pat, typedType = ty } =
-    (\pat' ty' -> p { typedPat = pat', typedType = ty' }) <$>
-    traverse f pat <*> f ty
-  traverse f p @ As { asPat = pat } =
-    (\pat' -> p { asPat = pat' }) <$> traverse f pat
-  traverse _ Name { nameSym = sym, namePos = pos } =
-    pure Name { nameSym = sym, namePos = pos }
-  traverse _ Exact { exactLit = lit } = pure Exact { exactLit = lit }
-
-instance Traversable Exp where
-  traverse f e @ Compound { compoundBody = body } =
-    (\body' -> e { compoundBody = body' }) <$>
-    traverse (traverse (traverse f)) body
-  traverse f e @ Abs { absCases = cases } =
-    (\cases' -> e { absCases = cases' }) <$>
-    traverse (traverse (traverse f)) cases
-  traverse f e @ Match { matchVal = val, matchCases = cases } =
-    (\val' cases' -> e { matchVal = val', matchCases = cases' }) <$>
-    traverse f val <*> traverse (traverse (traverse f)) cases
-  traverse f e @ Ascribe { ascribeVal = val, ascribeType = ty } =
-    (\val' ty' -> e { ascribeVal = val', ascribeType = ty' }) <$>
-    traverse f val <*> traverse f ty
-  traverse f e @ Seq { seqExps = exps } =
-    (\exps' -> e { seqExps = exps' }) <$> traverse (traverse f) exps
-  traverse f e @ Call { callFunc = func, callArgs = args } =
-    (\func' args' -> e { callFunc = func', callArgs = args' }) <$>
-      traverse f func <*> traverse (traverse f) args
-  traverse f e @ RecordType { recordTypeFields = fields } =
-    (\fields' -> e { recordTypeFields = fields' }) <$>
-      traverse (traverse f) fields
-  traverse f e @ Record { recordFields = fields } =
-    (\fields' -> e { recordFields = fields' }) <$> traverse (traverse f) fields
-  traverse f e @ Tuple { tupleFields = fields } =
-    (\fields' -> e { tupleFields = fields' }) <$> traverse (traverse f) fields
-  traverse f e @ Project { projectVal = val } =
-    (\val' -> e { projectVal = val' }) <$> traverse f val
-  traverse f e @ Sym { symRef = ref } = (\ref' -> e { symRef = ref' }) <$> f ref
-  traverse f e @ With { withVal = val, withArgs = args } =
-    (\val' args' -> e { withVal = val', withArgs = args' }) <$>
-      traverse f val <*> traverse f args
-  traverse f e @ Where { whereVal = val, whereProp = prop } =
-    (\val' prop' -> e { whereVal = val', whereProp = prop' }) <$>
-    traverse f val <*> traverse f prop
-  traverse f e @ Anon { anonParams = params, anonSuperTypes = supers } =
-    (\params' supers' -> e { anonParams = params',
-                             anonSuperTypes = supers' }) <$>
-    traverse (traverse f) params <*> traverse (traverse f) supers
-  traverse _ Literal { literalVal = lit } = pure Literal { literalVal = lit }
-
-instance Traversable Entry where
-  traverse f e @ Entry { entryPat = pat } =
-    (\pat' -> e { entryPat = pat' }) <$> traverse f pat
-
-instance Traversable Fields where
-  traverse f s @ Fields { fieldsBindings = binds } =
-    (\binds' -> s { fieldsBindings = binds' }) <$> traverse (traverse f) binds
-
-instance Traversable Field where
-  traverse f d @ Field { fieldVal = val } =
-    (\val' -> d { fieldVal = val' }) <$> f val
-
-instance Traversable Case where
-  traverse f c @ Case { casePat = pat, caseBody = body } =
-    (\pat' body' -> c { casePat = pat', caseBody = body' }) <$>
-    traverse f pat <*> f body
 
 {-
 precDot :: MonadSymbols m => (Ordering, Exp) -> StateT Word m (Doc, String)

@@ -29,7 +29,8 @@
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# Language FlexibleInstances, FlexibleContexts, UndecidableInstances,
-             MultiParamTypeClasses #-}
+             MultiParamTypeClasses, DeriveTraversable, DeriveFoldable,
+             DeriveFunctor #-}
 
 -- | The Salt core language.  Salt's surface syntax is transliterated
 -- into Core, which is then type-checked and compiled.  Core is
@@ -870,106 +871,19 @@ instance (Hashable b, Hashable s, Ord b) => Hashable (Cmd b s) where
 instance (Hashable b, Hashable s, Ord b) => Hashable (Comp b s) where
   hashWithSalt = hashWithSalt1
 
-instance Functor (Case b) where
-  fmap f c @ Case { caseBody = body } = c { caseBody = fmap f body }
+instance Functor (Case b) where fmap = fmapDefault
+instance Functor (Element b) where fmap = fmapDefault
+instance Functor (Intro b) where fmap = fmapDefault
+instance Functor (Elim b) where fmap = fmapDefault
+instance Functor (Cmd b) where fmap = fmapDefault
+instance Functor (Comp b) where fmap = fmapDefault
 
-instance Functor (Element b) where
-  fmap f e @ Element { elemPat = pat, elemType = ty } =
-    e { elemPat = pat, elemType = fmap f ty }
-
-instance Functor (Intro b) where
-  fmap f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
-    t { funcTypeArgs = fmap (fmap f) argtys, funcTypeRetTy = fmap f retty }
-  fmap f t @ RecordType { recTypeBody = body } =
-    t { recTypeBody = fmap (fmap f) body }
-  fmap f t @ RefineType { refineType = ty, refineCases = cases } =
-    t { refineType = fmap f ty, refineCases = fmap (fmap f) cases }
-  fmap f t @ CompType { compType = ty, compCases = cases } =
-    t { compType = fmap f ty, compCases = fmap (fmap f) cases }
-  fmap f t @ Quantified { quantType = ty, quantCases = cases } =
-    t { quantType = fmap f ty, quantCases = fmap (fmap f) cases }
-  fmap f t @ Eta { etaTerm = term, etaType = ty } =
-    t { etaTerm = fmap f term, etaType = fmap f ty }
-  fmap f t @ Lambda { lambdaCases = cases } =
-    t { lambdaCases = fmap (fmap f) cases }
-  fmap f t @ Record { recFields = vals } = t { recFields = fmap (fmap f) vals }
-  fmap f t @ Tuple { tupleFields = vals } =
-    t { tupleFields = fmap (fmap f) vals }
-  fmap f t @ Fix { fixTerm = term } = t { fixTerm = fmap f term }
-  fmap f t @ Comp { compBody = body } = t { compBody = fmap f body }
-  fmap f t @ Elim { elimTerm = term } = t { elimTerm = fmap f term }
-  fmap _ Literal { literalVal = lit, literalPos = p } =
-    Literal { literalVal = lit, literalPos = p }
-  fmap _ Constructor { constructorSym = sym, constructorPos = p } =
-    Constructor { constructorSym = sym, constructorPos = p }
-  fmap _ BadIntro { badIntroPos = p } = BadIntro { badIntroPos = p }
-
-instance Functor (Elim b) where
-  fmap f t @ Call { callArg = arg, callFunc = func } =
-    t { callArg = fmap f arg, callFunc = fmap f func }
-  fmap f t @ Typed { typedTerm = term, typedType = ty } =
-    t { typedTerm = fmap f term, typedType = fmap f ty }
-  fmap f t @ Var { varSym = sym } = t { varSym = f sym }
-  fmap _ BadElim { badElimPos = p } = BadElim { badElimPos = p }
-
-instance Functor (Cmd b) where
-  fmap f c @ Eval { evalTerm = term } = c { evalTerm = fmap f term }
-  fmap f c @ Value { valTerm = term } = c { valTerm = fmap f term }
-  fmap _ (BadCmd p) = BadCmd p
-
-instance Functor (Comp b) where
-  fmap f c @ Seq { seqType = ty, seqPat = pat, seqCmd = cmd, seqNext = next } =
-    c { seqCmd = fmap f cmd, seqNext = fmap f next,
-        seqType = fmap f ty, seqPat = pat }
-  fmap f c @ End { endCmd = cmd } = c { endCmd = fmap f cmd }
-  fmap _ (BadComp p) = BadComp p
-
-instance Foldable (Case b) where
-  foldMap f Case { caseBody = body } = foldMap f body
-
-instance Foldable (Element b) where
-  foldMap f Element { elemType = ty } = foldMap f ty
-
-instance Foldable (Intro b) where
-  foldMap f FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
-    foldMap (foldMap f) argtys `mappend` foldMap f retty
-  foldMap f RecordType { recTypeBody = body } = foldMap (foldMap f) body
-  foldMap f RefineType { refineType = ty, refineCases = cases } =
-    foldMap f ty `mappend` foldMap (foldMap f) cases
-  foldMap f CompType { compType = ty, compCases = cases } =
-    foldMap f ty `mappend` foldMap (foldMap f) cases
-  foldMap f Quantified { quantType = ty, quantCases = cases } =
-    foldMap f ty `mappend` foldMap (foldMap f) cases
-  foldMap f Eta { etaTerm = term, etaType = ty } =
-    foldMap f term `mappend` foldMap f ty
-  foldMap f Lambda { lambdaCases = cases } = foldMap (foldMap f) cases
-  foldMap f Record { recFields = vals } = foldMap (foldMap f) vals
-  foldMap f Tuple { tupleFields = vals } = foldMap (foldMap f) vals
-  foldMap f Fix { fixTerm = term } = foldMap f term
-  foldMap f Comp { compBody = body } = foldMap f body
-  foldMap f Elim { elimTerm = term } = foldMap f term
-  foldMap _ Literal {} = mempty
-  foldMap _ Constructor {} = mempty
-  foldMap _ BadIntro {} = mempty
-
-instance Foldable (Elim b) where
-  foldMap f Call { callArg = arg, callFunc = func } =
-    foldMap f arg `mappend` foldMap f func
-  foldMap f Typed { typedTerm = term, typedType = ty } =
-    foldMap f term `mappend` foldMap f ty
-  foldMap f Var { varSym = sym } = f sym
-  foldMap _ BadElim {} = mempty
-
-instance Foldable (Cmd b) where
-  foldMap f Value { valTerm = term } = foldMap f term
-  foldMap f Eval { evalTerm = term } = foldMap f term
-  foldMap _ (BadCmd _) = mempty
-
-instance Foldable (Comp b) where
-  foldMap f Seq { seqType = ty, seqCmd = cmd, seqNext = next } =
-    foldMap f ty `mappend` foldMap f cmd `mappend` foldMap f next
-  foldMap f End { endCmd = cmd } = foldMap f cmd
-  foldMap _ (BadComp _) = mempty
+instance Foldable (Case b) where foldMap = foldMapDefault
+instance Foldable (Element b) where foldMap = foldMapDefault
+instance Foldable (Intro b) where foldMap = foldMapDefault
+instance Foldable (Elim b) where foldMap = foldMapDefault
+instance Foldable (Cmd b) where foldMap = foldMapDefault
+instance Foldable (Comp b) where foldMap = foldMapDefault
 
 instance Traversable (Case b) where
   traverse f c @ Case { caseBody = body } =
