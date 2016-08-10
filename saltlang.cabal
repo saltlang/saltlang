@@ -98,19 +98,19 @@ Test-Suite library-UnitTest
   type:                 exitcode-stdio-1.0
   Main-Is:              UnitTest.hs
   hs-source-dirs:       src/library test/library
-  build-depends:        base >= 4.8 && < 5, Cabal >= 1.16.0, compiler-misc, bound,
+  build-depends:        base >= 4.8 && < 5, Cabal >= 1.16.0, compiler-toolbox, bound,
                         containers, prelude-extras, mtl >= 2.2, hashable, hashable-extras,
                         bytestring, utf8-string, hexpat, hexpat-pickle, array,
-                        filepath, blaze-builder, dynamic-pp, unordered-containers,
+                        filepath, blaze-builder, dynamic-pprint, unordered-containers,
                         semigroups, data-default, bitwise, HUnit-Plus,
                         monad-journal
 
 Executable saltc
   default-language:     Haskell2010
-  build-depends:        base, compiler-misc, bound, containers, prelude-extras,
+  build-depends:        base, compiler-toolbox, bound, containers, prelude-extras,
                         mtl, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, saltlang, filepath,
-                        blaze-builder, dynamic-pp, bitwise
+                        blaze-builder, dynamic-pprint, bitwise
   hs-source-dirs:       src/saltc
   main-is:              Language/Salt/Compiler/Main.hs
 
@@ -125,10 +125,10 @@ Executable saltc
 
 Library
   default-language:     Haskell2010
-  build-depends:        base, compiler-misc, bound, containers, prelude-extras,
+  build-depends:        base, compiler-toolbox, bound, containers, prelude-extras,
                         mtl >= 2.2, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
-                        hashtables, filepath, semigroups, dynamic-pp, data-default,
+                        hashtables, filepath, semigroups, dynamic-pprint, data-default,
                         monad-journal, bitwise
   build-tools:          alex, happy
   hs-source-dirs:       src/library
