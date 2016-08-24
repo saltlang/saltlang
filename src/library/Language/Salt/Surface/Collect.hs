@@ -28,7 +28,8 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -Wall -Werror #-}
-{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings, FlexibleContexts, FlexibleInstances,
+             MultiParamTypeClasses #-}
 
 module Language.Salt.Surface.Collect(
        collectComponents,
@@ -41,7 +42,7 @@ import Control.Monad.Genpos
 import Control.Monad.Loader.Class
 import Control.Monad.Messages
 import Control.Monad.Reader
-import Control.Monad.State
+import Control.Monad.ScopeBuilder
 import Control.Monad.Symbols
 import Data.Array hiding (accum, elems)
 import Data.Array.IO(IOArray)
@@ -51,6 +52,7 @@ import Data.HashTable.IO(BasicHashTable)
 import Data.Maybe
 import Data.Position.Filename
 import Data.PositionElement
+import Data.ScopeID
 import Data.Symbol
 import Language.Salt.Message
 import Language.Salt.Surface.Common
@@ -72,8 +74,8 @@ type Table = BasicHashTable [Symbol] (Maybe Syntax.Component)
 
 -- | A temporary scope.  We build this up and then convert it into a
 -- real scope.
-data TempScope expty =
-  TempScope {
+data TempSaltScope expty =
+  TempSaltScope {
     -- | The scope's ID
     tempScopeDefID :: !Syntax.DefID,
     -- | Builder definitions.  We keep all definitions to generate
@@ -95,46 +97,79 @@ data TempScope expty =
     -- completing the scope.
     tempScopeNames :: !(IOArray Visibility (HashMap Symbol [Syntax.DefID])),
     -- | Definitions.  We turn this into an array when completing the scope.
-    tempScopeDefs :: ![(Syntax.DefID, Syntax.Def expty)]
+    tempScopeDefs :: ![(Syntax.DefID, Syntax.Def expty)],
+    tempScopePos :: !Position
   }
 
--- | State of collect phase (the components are kept in a hash table
--- in a ReaderT.
-data CollectState expty =
-  CollectState {
-    -- | Running counter of scopeIDs
-    collectNextScope :: !ScopeID,
-    -- | A stack of scopes.  We add definitions into the top of the stack.
-    collectScopes :: ![TempScope expty],
-    -- | Scopes that have been finished.  This will be turned into an
-    -- array at the end of collect.
-    collectFinishedScopes :: ![(ScopeID, Syntax.Scope expty)]
-  }
+instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
+         TempScope (TempSaltScope expty) (Syntax.Scope expty) m where
+  createSubscope pos _ =
+    do
+      namesarr <- liftIO $! IOArray.newArray (Hidden, Public) HashMap.empty
+      return TempSaltScope {
+               tempScopeDefID = toEnum 0, tempScopeBuilders = HashMap.empty,
+               tempScopeTruths = HashMap.empty, tempScopeSyntax = HashMap.empty,
+               tempScopeDefs = [], tempScopeProofs = [], tempScopePos = pos,
+               tempScopeImports = [], tempScopeNames = namesarr
+             }
 
-type CollectT m = StateT (CollectState (Syntax.Exp Symbol)) (ReaderT Table m)
+  finalizeScope TempSaltScope {
+                  tempScopeBuilders = builders, tempScopeTruths = truths,
+                  tempScopeProofs = proofs, tempScopeSyntax = syntax,
+                  tempScopeImports = imports, tempScopeNames = names,
+                  tempScopeDefs = defs, tempScopeDefID = defid
+                } =
+    let
+      -- These functions turn lists of definitions into single
+      -- definitions.  If the lists are length 1, then we're good.
+      -- Otherwise, we have a namespace collision.
+      collapseBuilders _ (_, []) = error "Empty builder list!"
+      collapseBuilders accum (sym, [single]) =
+        return $! HashMap.insert sym single accum
+      collapseBuilders accum (sym, builderlist @ (first : _)) =
+        do
+          duplicateBuilder sym (map position builderlist)
+          return $! HashMap.insert sym first accum
 
-emptyState :: CollectState expty
-emptyState = CollectState { collectNextScope = toEnum 0, collectScopes = [],
-                            collectFinishedScopes = [] }
+      collapseTruths _ (_, []) = error "Empty truth list!"
+      collapseTruths accum (sym, [single]) =
+        return $! HashMap.insert sym single accum
+      collapseTruths accum (sym, truthlist @ (first : _)) =
+        do
+          duplicateTruth sym (map position truthlist)
+          return $! HashMap.insert sym first accum
 
-scopeStackUnderflow :: Strict.ByteString
-scopeStackUnderflow = Strict.fromString "Scope stack underflow"
+      collapseSyntax _ (_, []) = error "Empty syntax list!"
+      collapseSyntax accum (sym, [single]) =
+        return $! HashMap.insert sym single accum
+      collapseSyntax accum (sym, syntaxlist @ (first : _)) =
+        do
+          duplicateSyntax sym (map position syntaxlist)
+          return $! HashMap.insert sym first accum
 
--- | Begin a new scope.  This pushes a new empty scope onto the scope stack.
-beginScope :: MonadIO m => CollectT m ()
-beginScope =
-  do
-    namesarr <- liftIO $! IOArray.newArray (Hidden, Public) HashMap.empty
-    cstate @ CollectState { collectScopes = scopes } <- get
-    put cstate { collectScopes = TempScope { tempScopeBuilders = HashMap.empty,
-                                             tempScopeTruths = HashMap.empty,
-                                             tempScopeSyntax = HashMap.empty,
-                                             tempScopeDefs = [],
-                                             tempScopeProofs = [],
-                                             tempScopeImports = [],
-                                             tempScopeNames = namesarr,
-                                             tempScopeDefID = toEnum 0 } :
-                                 scopes }
+      defarr = array (toEnum 0, pred defid) defs
+    in do
+      -- Freeze the names array
+      namesarr <- liftIO $! Unsafe.unsafeFreeze names
+      -- Collapse all element types that report errors on
+      -- namespace collisions, and report those errors.
+      collapsedbuilders <- foldM collapseBuilders HashMap.empty
+                                 (HashMap.toList builders)
+      collapsedtruths <- foldM collapseTruths HashMap.empty
+                               (HashMap.toList truths)
+      collapsedsyntax <- foldM collapseSyntax HashMap.empty
+                               (HashMap.toList syntax)
+      return Syntax.Scope { Syntax.scopeBuilders = collapsedbuilders,
+                            Syntax.scopeTruths = collapsedtruths,
+                            Syntax.scopeSyntax = collapsedsyntax,
+                            Syntax.scopeProofs = proofs,
+                            Syntax.scopeImports = imports,
+                            Syntax.scopeDefs = defarr,
+                            Syntax.scopeNames = namesarr }
+
+type CollectT m =
+  ReaderT Table (ScopeBuilderT (TempSaltScope (Syntax.Exp Symbol))
+                               (Syntax.Scope (Syntax.Exp Symbol)) m)
 
 -- | Check whether a component exists.
 componentExists :: MonadIO m =>
@@ -158,226 +193,132 @@ addComponent :: MonadIO m =>
 addComponent path component =
   do
     tab <- ask
-    liftIO $! HashTable.insert tab path $! Just component
+    liftIO $! HashTable.insert tab path (Just component)
 
 -- | Add a 'Builder' definition to the current scope.
-addBuilder :: MonadMessages Message m =>
+addBuilder :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
               Symbol
            -- ^ The name of the 'Builder'.
            -> Syntax.Builder (Syntax.Exp Symbol)
            -- ^ The 'Builder' definition.
            -> CollectT m ()
-addBuilder sym builder @ Syntax.Builder { Syntax.builderPos = pos } =
-  do
-    cstate @ CollectState { collectScopes = scopes } <- get
-    case scopes of
-      first @ TempScope { tempScopeBuilders = builders } : rest ->
-        let
-          -- Concatenate the new entry with the existing ones
-          newbuilders = HashMap.insertWith (++) sym [builder] builders
-          newscope = first { tempScopeBuilders = newbuilders }
-          newstate = cstate { collectScopes = newscope : rest }
-        in
-          put newstate
-      -- A stack underflow is an internal error
-      _ -> internalError scopeStackUnderflow pos
+addBuilder sym builder =
+  let
+    addBuilder' :: TempSaltScope (Syntax.Exp Symbol) ->
+                   TempSaltScope (Syntax.Exp Symbol)
+    addBuilder' scope @ TempSaltScope { tempScopeBuilders = builders } =
+      let
+        newbuilders = HashMap.insertWith (++) sym [builder] builders
+      in
+        scope { tempScopeBuilders = newbuilders }
+  in
+    updateScope addBuilder'
 
 -- | Add a 'Truth' definition to the current scope.
-addTruth :: MonadMessages Message m =>
+addTruth :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
             Symbol
          -- ^ The name of the 'Truth'.
          -> Syntax.Truth (Syntax.Exp Symbol)
          -- ^ The 'Truth' definition.
          -> CollectT m ()
-addTruth sym truth @ Syntax.Truth { Syntax.truthPos = pos } =
-  do
-    cstate @ CollectState { collectScopes = scopes } <- get
-    case scopes of
-      first @ TempScope { tempScopeTruths = truths } : rest ->
-        let
-          -- Concatenate the new entry with the existing ones
-          newtruths = HashMap.insertWith (++) sym [truth] truths
-          newscope = first { tempScopeTruths = newtruths }
-          newstate = cstate { collectScopes = newscope : rest }
-        in
-          put newstate
-      -- A stack underflow is an internal error
-      _ -> internalError scopeStackUnderflow pos
+addTruth sym truth =
+  let
+    addTruth' :: TempSaltScope (Syntax.Exp Symbol) ->
+                 TempSaltScope (Syntax.Exp Symbol)
+    addTruth' scope @ TempSaltScope { tempScopeTruths = truths } =
+      let
+        newtruths = HashMap.insertWith (++) sym [truth] truths
+      in
+        scope { tempScopeTruths = newtruths }
+  in
+    updateScope addTruth'
 
 -- | Add a 'Proof' to the current scope.
-addProof :: MonadMessages Message m =>
+addProof :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
             Syntax.Proof (Syntax.Exp Symbol)
          -- ^ The 'Proof' definition.
          -> CollectT m ()
-addProof proof @ Syntax.Proof { Syntax.proofPos = pos } =
-  do
-    cstate @ CollectState { collectScopes = scopes } <- get
-    case scopes of
-      -- Append to the list of proofs
-      first @ TempScope { tempScopeProofs = proofs } : rest ->
-        put cstate { collectScopes = first { tempScopeProofs = proof :
-                                                               proofs } :
-                                     rest }
-      -- A stack underflow is an internal error
-      _ -> internalError scopeStackUnderflow pos
+addProof proof =
+  let
+    addProof' :: TempSaltScope (Syntax.Exp Symbol) ->
+                   TempSaltScope (Syntax.Exp Symbol)
+    addProof' scope @ TempSaltScope { tempScopeProofs = proofs } =
+      scope { tempScopeProofs = proof : proofs }
+  in
+    updateScope addProof'
 
 -- | Add an import to the current scope.
-addImport :: MonadMessages Message m =>
+addImport :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
              Syntax.Import (Syntax.Exp Symbol)
           -- ^ The 'Import' structure.
           -> CollectT m ()
-addImport import' @ Syntax.Import { Syntax.importPos = pos } =
-  do
-    cstate @ CollectState { collectScopes = scopes } <- get
-    case scopes of
-      -- Append to the list of proofs
-      first @ TempScope { tempScopeImports = imports } : rest ->
-        put cstate { collectScopes = first { tempScopeImports = import' :
-                                                                imports } :
-                                     rest }
-      -- A stack underflow is an internal error
-      _ -> internalError scopeStackUnderflow pos
+addImport import' =
+  let
+    addImport' :: TempSaltScope (Syntax.Exp Symbol) ->
+                  TempSaltScope (Syntax.Exp Symbol)
+    addImport' scope @ TempSaltScope { tempScopeImports = imports } =
+      scope { tempScopeImports = import' : imports }
+  in
+    updateScope addImport'
 
 -- | Add a syntax directive to the current scope.
-addSyntax :: MonadMessages Message m =>
+addSyntax :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
              Symbol
           -- ^ The 'Symbol' to which the syntax directive applies.
           -> Syntax.Syntax (Syntax.Exp Symbol)
           -- ^ The syntax directive.
           -> CollectT m ()
-addSyntax sym syntax @ Syntax.Syntax { Syntax.syntaxPos = pos } =
-  do
-    cstate @ CollectState { collectScopes = scopes } <- get
-    case scopes of
-      first @ TempScope { tempScopeSyntax = syntaxes } : rest ->
-        let
-          -- Concatenate the new entry with the existing ones
-          newsyntax = HashMap.insertWith (++) sym [syntax] syntaxes
-          newscope = first { tempScopeSyntax = newsyntax }
-          newstate = cstate { collectScopes = newscope : rest }
-        in
-          put newstate
-      -- A stack underflow is an internal error
-      _ -> internalError scopeStackUnderflow pos
+addSyntax sym syntax =
+  let
+    addSyntax' :: TempSaltScope (Syntax.Exp Symbol) ->
+                 TempSaltScope (Syntax.Exp Symbol)
+    addSyntax' scope @ TempSaltScope { tempScopeSyntax = syntaxes } =
+      let
+        newsyntaxes = HashMap.insertWith (++) sym [syntax] syntaxes
+      in
+        scope { tempScopeSyntax = newsyntaxes }
+  in
+    updateScope addSyntax'
 
 -- | Add a definition into a scope, get a 'DefID' for it.
-addDef :: MonadMessages Message m =>
+addDef :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
           Syntax.Def (Syntax.Exp Symbol)
        -- ^ The definition to add.
        -> CollectT m Syntax.DefID
        -- ^ The 'DefID' for the definition that was added.
 addDef def @ Syntax.Def {} =
-  do
-    cstate @ CollectState { collectScopes = scopes } <- get
-    case scopes of
-      -- Append to the list of defs, bump the defid
-      first @ TempScope { tempScopeDefID = defid,
-                          tempScopeDefs = defs } : rest ->
-        let
-          newscope = first { tempScopeDefID = succ defid,
-                             tempScopeDefs = (defid, def) : defs }
-          newstate = cstate { collectScopes = newscope : rest }
-        in do
-          put newstate
-          return defid
-      -- A stack underflow is an internal error
-      _ -> error "Scope stack underflow"
+  let
+    addDef' :: TempSaltScope (Syntax.Exp Symbol) ->
+               (Syntax.DefID, TempSaltScope (Syntax.Exp Symbol))
+    addDef' scope @ TempSaltScope { tempScopeDefID = defid,
+                                    tempScopeDefs = defs } =
+      (defid, scope { tempScopeDefs = (defid, def) : defs,
+                      tempScopeDefID = succ defid })
+  in
+    alterScope addDef'
 
 -- | Add names that refer to a given 'DefID'
-addNames :: (MonadMessages Message m, MonadIO m) =>
+addNames ::  (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
             Visibility
          -- ^ The visibility of the names.
          -> [Symbol]
          -- ^ The names to add.
          -> Syntax.DefID
          -- ^ The 'DefID' to which the names refer.
-         -> Position
-         -- ^ The position at which the names are bound.
          -> CollectT m ()
-addNames vis syms defid pos =
-  do
-    CollectState { collectScopes = scopes } <- get
-    case scopes of
-      -- Append to the list of defs for this visibility
-      TempScope { tempScopeNames = names } : _ ->
-        let
-          foldfun accum sym = HashMap.insertWith (++) sym [defid] accum
-        in do
-          curr <- liftIO $! IOArray.readArray names vis
-          liftIO $! IOArray.writeArray names vis (foldl foldfun curr syms)
-      -- A stack underflow is an internal error
-      _ -> internalError scopeStackUnderflow pos
-
--- | Finish the current scope and return its ID.  This removes the
--- scope from the stack.
-finishScope :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-               CollectT m ScopeID
-            -- ^ The 'ScopeID' for the completed scope.
-finishScope =
+addNames vis syms defid =
   let
-    -- These functions turn lists of definitions into single
-    -- definitions.  If the lists are length 1, then we're good.
-    -- Otherwise, we have a namespace collision.
-    collapseBuilders _ (_, []) = error "Empty builder list!"
-    collapseBuilders accum (sym, [single]) =
-      return $! HashMap.insert sym single accum
-    collapseBuilders accum (sym, (builders @ (first : _))) =
-      do
-        duplicateBuilder sym (map position builders)
-        return $! HashMap.insert sym first accum
+    foldfun accum sym = HashMap.insertWith (++) sym [defid] accum
 
-    collapseTruths _ (_, []) = error "Empty truth list!"
-    collapseTruths accum (sym, [single]) =
-      return $! HashMap.insert sym single accum
-    collapseTruths accum (sym, (truths @ (first : _))) =
+    addNames' :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
+                 TempSaltScope (Syntax.Exp Symbol) -> m ()
+    addNames' TempSaltScope { tempScopeNames = names } =
       do
-        duplicateTruth sym (map position truths)
-        return $! HashMap.insert sym first accum
-
-    collapseSyntax _ (_, []) = error "Empty syntax list!"
-    collapseSyntax accum (sym, [single]) =
-      return $! HashMap.insert sym single accum
-    collapseSyntax accum (sym, (syntax @ (first : _))) =
-      do
-        duplicateSyntax sym (map position syntax)
-        return $! HashMap.insert sym first accum
+        curr <- liftIO $! IOArray.readArray names vis
+        liftIO $! IOArray.writeArray names vis (foldl foldfun curr syms)
   in do
-    CollectState { collectNextScope = scopeid, collectScopes = scopes,
-                   collectFinishedScopes = finished } <- get
-    case scopes of
-      [] -> error "Scope stack underflow!"
-      TempScope { tempScopeBuilders = builders, tempScopeTruths = truths,
-                  tempScopeProofs = proofs, tempScopeSyntax = syntax,
-                  tempScopeImports = imports, tempScopeNames = names,
-                  tempScopeDefs = defs, tempScopeDefID = defid } :
-        rest ->
-        let
-          defarr = array (toEnum 0, pred defid) defs
-        in do
-          -- Freeze the names array
-          namesarr <- liftIO $! Unsafe.unsafeFreeze names
-          -- Collapse all element types that report errors on
-          -- namespace collisions, and report those errors.
-          collapsedbuilders <- foldM collapseBuilders HashMap.empty
-                                     (HashMap.toList builders)
-          collapsedtruths <- foldM collapseTruths HashMap.empty
-                                   (HashMap.toList truths)
-          collapsedsyntax <- foldM collapseSyntax HashMap.empty
-                                   (HashMap.toList syntax)
-          -- Update the state
-          put CollectState {
-                collectFinishedScopes =
-                   (scopeid,
-                    Syntax.Scope { Syntax.scopeBuilders = collapsedbuilders,
-                                   Syntax.scopeTruths = collapsedtruths,
-                                   Syntax.scopeSyntax = collapsedsyntax,
-                                   Syntax.scopeProofs = proofs,
-                                   Syntax.scopeImports = imports,
-                                   Syntax.scopeDefs = defarr,
-                                   Syntax.scopeNames = namesarr }) : finished,
-                collectScopes = rest, collectNextScope = succ scopeid
-              }
-          return scopeid
+    currscope <- getScope
+    addNames' currscope
 
 -- | Collect a pattern.  Also collect all the names that it binds.
 collectPattern :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
@@ -615,7 +556,7 @@ collectCompound accum AST.Element {
     defid <- addDef Syntax.Def { Syntax.defPattern = collectedPat,
                                  Syntax.defInit = collectedInit,
                                  Syntax.defPos = pos }
-    addNames Public binds defid pos
+    addNames Public binds defid
     -- Indicate that the definition is initialized here
     return $! Syntax.Init { Syntax.initId = defid } : accum
 -- Builders have initializers, so add the marker
@@ -654,9 +595,7 @@ collectExp :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
 -- For a compound statement, construct a sub-scope
 collectExp AST.Compound { AST.compoundBody = body, AST.compoundPos = pos } =
   do
-    beginScope
-    collectedBody <- foldM collectCompound [] body
-    scopeid <- finishScope
+    (collectedBody, scopeid) <- makeScope pos (foldM collectCompound [] body)
     return Syntax.Compound { Syntax.compoundScope = scopeid,
                              Syntax.compoundBody = reverse collectedBody,
                              Syntax.compoundPos = pos }
@@ -665,7 +604,7 @@ collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
                         AST.recordPos = pos } =
   let
     collapseField :: (MonadMessages Message m, MonadSymbols m) =>
-                     (HashMap FieldName (Syntax.Exp Symbol)) ->
+                     HashMap FieldName (Syntax.Exp Symbol) ->
                      (FieldName, [Syntax.Exp Symbol]) ->
                      CollectT m (HashMap FieldName (Syntax.Exp Symbol))
     collapseField accum (_, []) =
@@ -767,7 +706,7 @@ collectExp AST.Anon { AST.anonKind = kind, AST.anonSuperTypes = supers,
   do
     collectedSupers <- mapM collectExp supers
     collectedParams <- collectFields params pos
-    collectedContent <- collectScope content
+    collectedContent <- collectScope pos content
     return Syntax.Anon { Syntax.anonKind = kind,
                          Syntax.anonParams = collectedParams,
                          Syntax.anonSuperTypes = collectedSupers,
@@ -868,7 +807,7 @@ collectElement vis AST.Builder { AST.builderName = sym,
     case content of
         AST.Body body ->
           do
-            collectedBody <- collectScope body
+            collectedBody <- collectScope pos body
             addBuilder sym Syntax.Builder {
                              Syntax.builderKind = kind,
                              Syntax.builderVisibility = vis,
@@ -906,7 +845,7 @@ collectElement vis AST.Def { AST.defPattern = pat, AST.defInit = init,
     defid <- addDef Syntax.Def { Syntax.defPattern = collectedPat,
                                  Syntax.defInit = collectedInit,
                                  Syntax.defPos = pos }
-    addNames vis binds defid pos
+    addNames vis binds defid
 collectElement vis AST.Import { AST.importExp = exp,
                                 AST.importPos = pos } =
   do
@@ -983,9 +922,10 @@ collectElement _ AST.Proof { AST.proofName = pname, AST.proofBody = body,
 -- HashMaps, and saves the imports and proofs.  Syntax directives then get
 -- parsed and used to update definitions.
 collectScope :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                AST.Scope
+                Position
+             -> AST.Scope
              -> CollectT m ScopeID
-collectScope groups =
+collectScope pos groups =
   let
     -- | Collect a group.  This rolls all elements of the group into the
     -- temporary scope, with the group's visibility.
@@ -997,9 +937,8 @@ collectScope groups =
                              AST.groupElements = elems } =
       mapM_ (collectElement vis) elems
   in do
-    beginScope
-    mapM_ collectGroup groups
-    finishScope
+    (_, scopeid) <- makeScope pos (mapM_ collectGroup groups)
+    return scopeid
 
 -- | The Collect phase of the compiler.  Collect consumes an AST and
 -- produces a Surface structure.
@@ -1051,9 +990,7 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
         defname = last expected'
       in do
         unless (expected == actual) (badComponentName expected' actual filepos)
-        beginScope
-        mapM_ (collectElement Public) scope
-        scopeid <- finishScope
+        (_, scopeid) <- makeScope filepos (mapM_ (collectElement Public) scope)
         addComponent expected' Syntax.Component {
                                  Syntax.compScope = scopeid,
                                  Syntax.compExpected = Just defname
@@ -1064,9 +1001,7 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
       let
         defname = last actual'
       in do
-        beginScope
-        mapM_ (collectElement Public) scope
-        scopeid <- finishScope
+        (_, scopeid) <- makeScope filepos (mapM_ (collectElement Public) scope)
         addComponent actual' Syntax.Component {
                                Syntax.compScope = scopeid,
                                Syntax.compExpected = Just defname
@@ -1075,9 +1010,7 @@ collectAST filepos expected AST.AST { AST.astComponent = component,
       -- We don't have anything.  There is no expected definition
       -- name, and everything at the top level is public.
       do
-        beginScope
-        mapM_ (collectElement Public) scope
-        _ <- finishScope
+        _ <- makeScope filepos (mapM_ (collectElement Public) scope)
         return ()
 
 -- | Get the file name for a component.
@@ -1166,10 +1099,6 @@ collectComponent parseFunc pos cname =
     unless done loadAndCollect
     return ()
 
-collectEndPos :: Position
-collectEndPos =
-  Synthetic { synthDesc = Strict.fromString "End of collect phase" }
-
 collectComponents :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                       MonadMessages Message m, MonadGenpos m,
                       MonadSymbols m, MonadIO m) =>
@@ -1186,19 +1115,11 @@ collectComponents parsefunc files =
     foldfun comps (_, Just comp) = return $! comp : comps
   in do
     tab <- liftIO HashTable.new
-    ((), CollectState { collectNextScope = scopeid,
-                        collectFinishedScopes = scopes,
-                        collectScopes = stack }) <-
-      runReaderT (runStateT (mapM_ collectOne files) emptyState) tab
+    ((), scopes) <- runScopeBuilderT (runReaderT (mapM_ collectOne files) tab)
     -- Check that the scope stack is empty
-    case stack of
-      [] -> return ()
-      _ -> internalError "Non-empty scope stack at end of collect" collectEndPos
     comps <- liftIO $! HashTable.foldM foldfun [] tab
-    return $! Syntax.Surface {
-                Syntax.surfScopes = array (toEnum 0, pred scopeid) scopes,
-                Syntax.surfComponents = comps
-              }
+    return $! Syntax.Surface { Syntax.surfScopes = scopes,
+                               Syntax.surfComponents = comps }
 
 -- | Load a file containing a component
 loadFile :: (MonadIO m, MonadLoader Strict.ByteString Lazy.ByteString m,
@@ -1276,16 +1197,8 @@ collectFiles parsefunc files =
     foldfun comps (_, Just comp) = return $! comp : comps
   in do
     tab <- liftIO HashTable.new
-    ((), CollectState { collectNextScope = scopeid,
-                        collectFinishedScopes = scopes,
-                        collectScopes = stack }) <-
-      runReaderT (runStateT (mapM_ collectOne files) emptyState) tab
+    ((), scopes) <- runScopeBuilderT (runReaderT (mapM_ collectOne files) tab)
     -- Check that the scope stack is empty
-    case stack of
-      [] -> return ()
-      _ -> internalError "Non-empty scope stack at end of collect" collectEndPos
     comps <- liftIO $! HashTable.foldM foldfun [] tab
-    return $! Syntax.Surface {
-                Syntax.surfScopes = array (toEnum 0, pred scopeid) scopes,
-                Syntax.surfComponents = comps
-              }
+    return $! Syntax.Surface { Syntax.surfScopes = scopes,
+                               Syntax.surfComponents = comps }

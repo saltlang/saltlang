@@ -30,7 +30,8 @@
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 
--- | Defines the type of tokens produced by the lexer.  These
+-- | Defines the type of tokens produced by the lexer.  A new entry
+-- will need to be added here if a new token is defined.
 module Language.Salt.Surface.Token(
        Token(..),
        keywords,
@@ -53,7 +54,7 @@ type Position = BasicPosition
 
 -- | A token produced by the lexer.
 data Token =
-  -- | An identifier
+  -- | An identifier (i.e. a name)
     Id Symbol !Position
   -- | A number literal
   | Num !Rational !Position
@@ -88,9 +89,9 @@ data Token =
   -- | The text '}'
   | RBrace !Position
   | Lambda !Position
-  -- | The text 'forall'
+  -- | The text 'forall', or the unicode symbol
   | Forall !Position
-  -- | The text 'exists'
+  -- | The text 'exists', or the unicode symbol
   | Exists !Position
   -- | The text 'module'
   | Module !Position
@@ -114,7 +115,7 @@ data Token =
   | With !Position
   -- | The text 'where'
   | Where !Position
-  -- | The text 'at'
+  -- | The text 'as'
   | As !Position
   -- | The text 'private'
   | Private !Position
@@ -209,6 +210,9 @@ instance PositionElement Token where
   position (Greater pos) = pos
   position EOF = error "Can't take position of EOF"
 
+-- | Keyword table.  This acts as input to the 'KeywordsT' monad.
+-- This defines the text of all keywords, and which token constructors
+-- they represent.
 keywords :: [(Strict.ByteString, Position -> Token)]
 keywords = [
     (Strict.fromString "=", Equal),
@@ -837,6 +841,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                     postfixPickler, infixPickler, leftPickler, rightPickler,
                     nonAssocPickler, precPickler, lessPickler, greaterPickler ]
 
+-- | Add a position on to the formatted token.
 addPosition :: MonadPositions m => Position -> Doc -> m Doc
 addPosition pos @ File {} doc =
   do

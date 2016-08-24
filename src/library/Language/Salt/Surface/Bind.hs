@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -38,6 +38,7 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Trans
 import Data.Array.IO(IOArray)
+import Data.Semigroup
 import Language.Salt.Message
 import Language.Salt.Surface.Common
 
@@ -46,6 +47,33 @@ import qualified Data.Array.BitArray.IO as BitArray
 import qualified Data.Array.IO as Array
 import qualified Language.Salt.Surface.Bindings as Bindings
 import qualified Language.Salt.Surface.Syntax as Syntax
+
+-- | The dependence relationship between two scopes.  Used as an edge
+-- type in the graph.
+data Dependence =
+    -- | An imported scope.
+    Imported {
+      -- | Specific symbols imported.
+      importedSyms :: ![Symbol],
+      -- | Whether or not the scope is also inherited.  This can
+      -- happen if we import a parent scope.
+      importedInherit :: !Bool
+    }
+    -- | A dependency arising from inheritance.
+  | Inherited
+    -- | A dependency arising from an enclosing scope.
+  | Enclosing
+
+instance Semigroup Dependence where
+  Imported { importedSyms = symsa, importedInherit = inherita } <>
+  Imported { importedSyms = symsb, importedInherit = inheritb } =
+    Imported { importedSyms = symsa <> symsb,
+               importedInherit = inherita || inheritb }
+  i @ Imported {} <> Inherited = i { importedInherit = True }
+  Inherited <> i @ Imported {} = i { importedInherit = True }
+  Inherited <> Inherited = Inherited
+  En
+
 
 -- | State of elaboration of scopes.
 data ElaborationState =
@@ -177,7 +205,7 @@ instance Monoid (Resolve a) where
 localValueSym :: Symbol
               -- ^ The symbol to lookup.
               -> Visibility
-              -- ^ The expected visibility level of the lookup.  If there are are
+              -- ^ The expected visibility level of the lookup.
               -> ScopeRef
               -- ^ The 'ScopeRef' in which to do the lookup.
               -> Resolve [Bindings.Bind]

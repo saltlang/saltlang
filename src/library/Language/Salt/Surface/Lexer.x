@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -28,7 +28,7 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {
-{-# OPTIONS_GHC -funbox-strict-fields #-}
+{-# OPTIONS_GHC -funbox-strict-fields -fno-warn-tabs #-}
 {-# LANGUAGE FlexibleContexts #-}
 
 module Language.Salt.Surface.Lexer(
@@ -67,8 +67,13 @@ import Text.AlexWrapper
 
 }
 
+-- Operator characters
 @opchars = [\!\#\%\^\&\+\?\<\>\:\|\~\-\=\:]
+
+-- Valid escape sequences
 @escape_chars = [abfnrtv\\'\"\?]
+
+--
 @comment_ignore = ((\**|\/*)[^\t\n\/\*]+(\**|\/*))
 
 tokens :-
@@ -89,11 +94,12 @@ tokens :-
 <0>       [\ ]+
         { skip }
 
--- Text, beginning with an alphabetic character, possibly ending with a quote
+-- Text, beginning with an alphabetic character, possibly ending with
+-- a quote.  This is an idenitfier or a keyword.
 <0>       [_a-zA-Z][_a-zA-Z0-9]*[']*
         { report bufferedComments `andThen` produce keywordOrToken }
 
--- Operators, cannot contain a /* or a */ anywhere, otherwise all
+-- Operators, cannot contain a /*, a //, or a */ anywhere, otherwise all
 -- sequences are valid
 <0>       @opchars*(\/|\*+|@opchars)(@opchars+(\/|\*+)?)*
         { report bufferedComments `andThen` produce keywordOrToken }

@@ -43,10 +43,8 @@ module Language.Salt.Surface.Common(
        Literal(..),
        BasicPosition(..),
        Position,
-       ScopeID,
        literalDot,
        getNodeID,
-       firstScopeID
        ) where
 
 import Control.Monad.Positions
@@ -71,9 +69,6 @@ type Position = BasicPosition
 -- | A newtype to discriminate field names from symbols.
 newtype FieldName = FieldName { fieldSym :: Symbol }
   deriving (Ord, Eq)
-
-newtype ScopeID = ScopeID { scopeID :: Word }
-  deriving (Eq, Ord, Ix)
 
 -- | Associativity for syntax directives.
 data Assoc = LeftAssoc | RightAssoc | NonAssoc
@@ -209,9 +204,6 @@ data Literal =
       unitPos :: !Position
     }
 
-firstScopeID :: ScopeID
-firstScopeID = ScopeID { scopeID = 0 }
-
 getNodeID :: Monad m => StateT Word m String
 getNodeID =
   do
@@ -270,27 +262,11 @@ instance Hashable Fixity where
 instance Hashable FieldName where
   hashWithSalt s FieldName { fieldSym = sym } = s `hashWithSalt` sym
 
-instance Hashable ScopeID where
-  hashWithSalt s ScopeID { scopeID = n } = s `hashWithSalt` n
-
-instance Enum ScopeID where
-  succ = ScopeID . succ . scopeID
-  pred = ScopeID . pred . scopeID
-  toEnum = ScopeID . toEnum
-  fromEnum = fromEnum . scopeID
-  enumFromThen ScopeID { scopeID = n } = map ScopeID . enumFromThen n . scopeID
-  enumFromTo ScopeID { scopeID = n } = map ScopeID . enumFromTo n . scopeID
-  enumFromThenTo ScopeID { scopeID = n } ScopeID { scopeID = m } =
-    map ScopeID . enumFromThenTo n m . scopeID
-
 instance MonadSymbols m => FormatM m FieldName where
   formatM = formatM . fieldSym
 
 instance Format Assoc where format = string . show
 instance Format Fixity where format = string . show
-
-instance Format ScopeID where
-  format = format . scopeID
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] FieldName where
@@ -299,14 +275,6 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [(tag, text)] FieldName where
   xpickle = xpWrap (FieldName, fieldSym) xpickle
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text) =>
-         XmlPickler [NodeG [] tag text] ScopeID where
-  xpickle = xpWrap (ScopeID, scopeID) (xpContent xpPrim)
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text) =>
-         XmlPickler [(tag, text)] ScopeID where
-  xpickle = xpWrap (ScopeID, scopeID) (xpAttr (gxFromString "scope-id") xpPrim)
 
 instance Eq Literal where
   Num { numVal = num1 } == Num { numVal = num2 } = num1 == num2

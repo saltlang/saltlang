@@ -68,6 +68,7 @@ import Data.Hashable
 import Data.HashMap.Strict(HashMap)
 import Data.List(sort)
 import Data.PositionElement
+import Data.ScopeID
 import Data.Symbol
 import Data.Word
 import Language.Salt.Format
