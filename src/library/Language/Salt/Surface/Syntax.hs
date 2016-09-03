@@ -130,7 +130,9 @@ data Scope expty =
     -- | Proofs given in this scope.
     scopeProofs :: ![Proof expty],
     -- | Imports in this scope.
-    scopeImports :: ![Import expty]
+    scopeImports :: ![Import expty],
+    -- | The enclosing scope, if one exists.
+    scopeEnclosing :: !(Maybe ScopeID)
   }
   deriving (Eq, Functor, Foldable, Traversable)
 
@@ -677,11 +679,11 @@ instance Ord expty => Ord (Scope expty) where
   compare Scope { scopeBuilders = builders1, scopeSyntax = syntax1,
                   scopeTruths = truths1, scopeDefs = defs1,
                   scopeProofs = proofs1, scopeImports = imports1,
-                  scopeNames = names1 }
+                  scopeNames = names1, scopeEnclosing = enclosing1 }
           Scope { scopeBuilders = builders2, scopeSyntax = syntax2,
                   scopeTruths = truths2, scopeDefs = defs2,
                   scopeProofs = proofs2, scopeImports = imports2,
-                  scopeNames = names2 } =
+                  scopeNames = names2, scopeEnclosing = enclosing2 } =
     let
       mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
 
@@ -694,13 +696,15 @@ instance Ord expty => Ord (Scope expty) where
       namelist1 = map mapfun (assocs names1)
       namelist2 = map mapfun (assocs names2)
     in
-      case compare builderlist1 builderlist2 of
-        EQ -> case compare syntaxlist1 syntaxlist2 of
-          EQ -> case compare truthlist1 truthlist2 of
-            EQ -> case compare defs1 defs2 of
-              EQ -> case compare proofs1 proofs2 of
-                EQ -> case compare imports1 imports2 of
-                  EQ -> compare namelist1 namelist2
+      case compare enclosing1 enclosing2 of
+        EQ -> case compare builderlist1 builderlist2 of
+          EQ -> case compare syntaxlist1 syntaxlist2 of
+            EQ -> case compare truthlist1 truthlist2 of
+              EQ -> case compare defs1 defs2 of
+                EQ -> case compare proofs1 proofs2 of
+                  EQ -> case compare imports1 imports2 of
+                    EQ -> compare namelist1 namelist2
+                    out -> out
                   out -> out
                 out -> out
               out -> out
@@ -947,7 +951,7 @@ instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
   hashWithSalt s Scope { scopeBuilders = builders, scopeSyntax = syntax,
                          scopeTruths = truths, scopeDefs = defs,
                          scopeProofs = proofs, scopeImports = imports,
-                         scopeNames = names } =
+                         scopeNames = names, scopeEnclosing = enclosing } =
     let
       mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
       builderlist = sort (HashMap.toList builders)
@@ -958,7 +962,7 @@ instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
       s `hashWithSalt` builderlist `hashWithSalt`
       syntaxlist `hashWithSalt` truthlist `hashWithSalt`
       elems defs `hashWithSalt` proofs `hashWithSalt`
-      imports `hashWithSalt` namelist
+      imports `hashWithSalt` namelist `hashWithSalt` enclosing
 
 instance (Hashable expty, Ord expty) => Hashable (Builder expty) where
   hashWithSalt s Builder { builderKind = kind, builderVisibility = vis,
@@ -1219,7 +1223,8 @@ instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
          FormatM m (Scope expty) where
   formatM Scope { scopeBuilders = builders, scopeSyntax = syntax,
                   scopeTruths = truths, scopeDefs = defs,
-                  scopeProofs = proofs, scopeNames = names } =
+                  scopeProofs = proofs, scopeNames = names,
+                  scopeEnclosing = enclosing } =
     let
       mapfun (idx, def) =
         do
@@ -1232,13 +1237,24 @@ instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
       namesdoc <- formatNames names
       defsdoc <- mapM mapfun (assocs defs)
       proofsdoc <- mapM formatM proofs
-      return $! compoundApplyDoc (string "Scope")
-                               [(string "builders", buildersdoc),
-                                (string "syntax", syntaxdoc),
-                                (string "truths", truthsdoc),
-                                (string "defs", listDoc defsdoc),
-                                (string "names", namesdoc),
-                                (string "proofs", listDoc proofsdoc)]
+      case enclosing of
+        Just enclosing' ->
+          return $! compoundApplyDoc (string "Scope")
+                                     [(string "builders", buildersdoc),
+                                      (string "syntax", syntaxdoc),
+                                      (string "truths", truthsdoc),
+                                      (string "defs", listDoc defsdoc),
+                                      (string "names", namesdoc),
+                                      (string "proofs", listDoc proofsdoc),
+                                      (string "enclosing", format enclosing')]
+        Nothing ->
+          return $! compoundApplyDoc (string "Scope")
+                                     [(string "builders", buildersdoc),
+                                      (string "syntax", syntaxdoc),
+                                      (string "truths", truthsdoc),
+                                      (string "defs", listDoc defsdoc),
+                                      (string "names", namesdoc),
+                                      (string "proofs", listDoc proofsdoc)]
 
 instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
          FormatM m (Builder expty) where
@@ -1651,23 +1667,28 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Scope expty) where
   xpickle =
-    xpWrap (\((builders, syntax, truths), (defs, names, proofs, imports)) ->
+    xpWrap (\((builders, syntax, truths, enclosing),
+              (defs, names, proofs, imports)) ->
              Scope { scopeBuilders = builders, scopeSyntax = syntax,
                      scopeTruths = truths, scopeNames = names,
                      scopeProofs = proofs, scopeImports = imports,
-                     scopeDefs = defs },
+                     scopeDefs = defs, scopeEnclosing = enclosing },
             \Scope { scopeBuilders = builders, scopeSyntax = syntax,
                      scopeTruths = truths, scopeNames = names,
                      scopeProofs = proofs, scopeImports = imports,
-                     scopeDefs = defs } ->
-            ((builders, syntax, truths), (defs, names, proofs, imports)))
+                     scopeDefs = defs, scopeEnclosing = enclosing } ->
+            ((builders, syntax, truths, enclosing),
+             (defs, names, proofs, imports)))
            (xpElemNodes (gxFromString "Scope")
-                        (xpPair (xpTriple (xpElemNodes (gxFromString "builders")
+                        (xpPair (xp4Tuple (xpElemNodes (gxFromString "builders")
                                                        mapPickler)
                                           (xpElemNodes (gxFromString "syntax")
                                                        mapPickler)
                                           (xpElemNodes (gxFromString "truths")
-                                                       mapPickler))
+                                                       mapPickler)
+                                          (xpOption (xpElemAttrs
+                                                      (gxFromString "enclosing")
+                                                      xpickle)))
                                 (xp4Tuple (xpElemNodes (gxFromString "defs")
                                                        defsPickler)
                                           (xpElemNodes (gxFromString "names")

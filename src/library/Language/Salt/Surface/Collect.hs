@@ -98,26 +98,40 @@ data TempSaltScope expty =
     tempScopeNames :: !(IOArray Visibility (HashMap Symbol [Syntax.DefID])),
     -- | Definitions.  We turn this into an array when completing the scope.
     tempScopeDefs :: ![(Syntax.DefID, Syntax.Def expty)],
+    tempScopeID :: !ScopeID,
+    tempScopeEnclosing :: !(Maybe ScopeID),
     tempScopePos :: !Position
   }
 
 instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
          TempScope (TempSaltScope expty) (Syntax.Scope expty) m where
-  createSubscope pos _ =
+  createSubscope pos scopeid [] =
     do
       namesarr <- liftIO $! IOArray.newArray (Hidden, Public) HashMap.empty
       return TempSaltScope {
                tempScopeDefID = toEnum 0, tempScopeBuilders = HashMap.empty,
                tempScopeTruths = HashMap.empty, tempScopeSyntax = HashMap.empty,
                tempScopeDefs = [], tempScopeProofs = [], tempScopePos = pos,
-               tempScopeImports = [], tempScopeNames = namesarr
+               tempScopeImports = [], tempScopeNames = namesarr,
+               tempScopeID = scopeid, tempScopeEnclosing = Nothing
+             }
+  createSubscope pos scopeid (TempSaltScope { tempScopeID = enclosing } : _) =
+    do
+      namesarr <- liftIO $! IOArray.newArray (Hidden, Public) HashMap.empty
+      return TempSaltScope {
+               tempScopeDefID = toEnum 0, tempScopeBuilders = HashMap.empty,
+               tempScopeTruths = HashMap.empty, tempScopeSyntax = HashMap.empty,
+               tempScopeDefs = [], tempScopeProofs = [], tempScopePos = pos,
+               tempScopeImports = [], tempScopeNames = namesarr,
+               tempScopeID = scopeid, tempScopeEnclosing = Just enclosing
              }
 
   finalizeScope TempSaltScope {
                   tempScopeBuilders = builders, tempScopeTruths = truths,
                   tempScopeProofs = proofs, tempScopeSyntax = syntax,
                   tempScopeImports = imports, tempScopeNames = names,
-                  tempScopeDefs = defs, tempScopeDefID = defid
+                  tempScopeDefs = defs, tempScopeDefID = defid,
+                  tempScopeID = scopeid, tempScopeEnclosing = enclosing
                 } =
     let
       -- These functions turn lists of definitions into single
@@ -159,13 +173,14 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                                (HashMap.toList truths)
       collapsedsyntax <- foldM collapseSyntax HashMap.empty
                                (HashMap.toList syntax)
-      return Syntax.Scope { Syntax.scopeBuilders = collapsedbuilders,
-                            Syntax.scopeTruths = collapsedtruths,
-                            Syntax.scopeSyntax = collapsedsyntax,
-                            Syntax.scopeProofs = proofs,
-                            Syntax.scopeImports = imports,
-                            Syntax.scopeDefs = defarr,
-                            Syntax.scopeNames = namesarr }
+      return (scopeid, Syntax.Scope { Syntax.scopeBuilders = collapsedbuilders,
+                                      Syntax.scopeTruths = collapsedtruths,
+                                      Syntax.scopeSyntax = collapsedsyntax,
+                                      Syntax.scopeProofs = proofs,
+                                      Syntax.scopeImports = imports,
+                                      Syntax.scopeDefs = defarr,
+                                      Syntax.scopeNames = namesarr,
+                                      Syntax.scopeEnclosing = enclosing })
 
 type CollectT m =
   ReaderT Table (ScopeBuilderT (TempSaltScope (Syntax.Exp Symbol))
@@ -1149,16 +1164,16 @@ loadFile fstr pos =
       Right (fname, content) -> return (Just (fname, content))
 
 collectFile :: (MonadLoader Strict.ByteString Lazy.ByteString m,
-                  MonadMessages Message m, MonadGenpos m,
-                  MonadSymbols m, MonadIO m) =>
-                 (Filename -> Lazy.ByteString -> m (Maybe AST.AST))
-              -- ^ The parsing function to use.
-              -> Position
-              -- ^ The position at which the reference to this
-              -- component occurred.
-              -> Strict.ByteString
-              -- ^ The name of the file to collect.
-              -> CollectT m ()
+                MonadMessages Message m, MonadGenpos m,
+                MonadSymbols m, MonadIO m) =>
+               (Filename -> Lazy.ByteString -> m (Maybe AST.AST))
+            -- ^ The parsing function to use.
+            -> Position
+            -- ^ The position at which the reference to this
+            -- component occurred.
+            -> Strict.ByteString
+            -- ^ The name of the file to collect.
+            -> CollectT m ()
 collectFile parseFunc pos fstr =
   let
     collectUse AST.Use { AST.useName = uname, AST.usePos = upos } =
