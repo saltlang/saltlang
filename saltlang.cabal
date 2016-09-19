@@ -131,7 +131,7 @@ Library
                         hashtables, filepath, semigroups, dynamic-pprint, data-default,
                         monad-journal, bitwise
   build-tools:          alex, happy
-  hs-source-dirs:       src/library
+  hs-source-dirs:       src/salt
   exposed-modules:      
 --                        Control.Monad.ProofChecker,
 --                        Control.Monad.ProofErrors.Class,

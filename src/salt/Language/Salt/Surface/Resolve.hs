@@ -29,10 +29,100 @@
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 
-module Language.Salt.Surface.Bind(
-       bind
+module Language.Salt.Surface.Resolve(
+       resolve
        ) where
 
+import Data.Array
+import Data.Array.IO(IOArray)
+import Data.HashSet(HashSet)
+import Data.HashMap.Strict(HashMap)
+import Data.Position.BasicPosition
+import Data.ScopeID
+import Data.Symbol
+import Language.Salt.Surface.Syntax
+
+import qualified Data.Array.IO as IOArray
+import qualified Data.HashSet as HashSet
+import qualified Data.HashMap.Strict as HashMap
+
+-- | State of a resolved symbol.
+data Resolution =
+    -- | A valid resolution result.
+    Valid {
+      -- | The ID of the scope in which the result is defined.
+      validScope :: !ScopeID
+    }
+    -- | An illegal access result.
+  | Illegal {
+      -- | True for private access, false for protected.
+      illegalPrivate :: !Bool,
+      -- | The scope in which the result is defined.
+      illegalScope :: !ScopeID
+    }
+    -- | Access to an out-of-context element.
+  | Context {
+      -- | True for object context, false for local.
+      contextObject :: !Bool,
+      -- | The scope in which the result is defined.
+      contextScope :: !ScopeID
+    }
+    -- | Undefined symbol result.
+  | Undef
+
+data ResolveState =
+  ResoveState {
+    rstateUnresolved :: !(IOArray ScopeID (HashMap Symbol [BasicPosition])),
+    rstateResolved :: !(IOArray ScopeID (HashMap Symbol Resolution))
+  }
+
+builderInitialState :: ([BasicPosition], Resolution)
+                  -> (ScopeID, Scope (Exp Symbol))
+                  -> ([(Symbol, [BasicPosition])], [(Symbol, Resolution)])
+
+
+-- | Foldable function, build up the initial state for a scope
+scopeInitialState :: ([(Symbol, [BasicPosition])], [(Symbol, Resolution)])
+                  -> (ScopeID, Scope (Exp Symbol))
+                  -> ([(Symbol, [BasicPosition])], [(Symbol, Resolution)])
+scopeInitialState (resolvedarr, unresolvedarr)
+                  (idx, Scope { scopeImports = imports, scopeTruths = truths,
+                                scopeBuilders = builders, scopeSyntax = syntax,
+                                scopeDefs = defs, scopeProofs = proofs }) =
+  _
+
+
+
+initialState :: Surface (Exp Symbol) -> ResolveState
+initialState Surface { surfScopes = scopes } =
+  let
+    arrbounds = bounds scopes
+
+    mapfun resolvedarr unresolvedarr
+           (idx, Scope { scopeDefs = defs, scopeTruths = truths,
+                         scopeBuilders = builders }) =
+      let
+        foldfun (resolved, unresolved) sym
+          | HashMap.member sym defs || HashMap.member sym truths ||
+            HashMap.member sym builders =
+            ((sym, Valid { validScope = idx }) : resolved, unresolved)
+          | otherwise =
+            (resolved, HashMap.insertWith (++) sym [])
+
+      in do
+
+  in do
+    resolved <- IOArray.newArray_ arrbounds
+    unresolved <- IOArray.newArray_ arrbounds
+
+resolve :: (Monad m) =>
+           Surface (Exp Symbol)
+        -> Surface (Exp Ref)
+resolve Surface { surfScopes = scopes } =
+  do
+    init <- initialState scopes
+    _
+{-
 import Control.Monad.Messages
 import Control.Monad.Reader
 import Control.Monad.State
@@ -45,24 +135,6 @@ import Language.Salt.Surface.Common
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.Array.BitArray.IO as BitArray
 import qualified Data.Array.IO as Array
-import qualified Language.Salt.Surface.Bindings as Bindings
-import qualified Language.Salt.Surface.Syntax as Syntax
-
--- | The dependence relationship between two scopes.  Used as an edge
--- type in the graph.
-data Dependence =
-    -- | An imported scope.
-    Imported {
-      -- | Specific symbols imported.
-      importedSyms :: ![Symbol],
-      -- | Whether or not the scope is also inherited.  This can
-      -- happen if we import a parent scope.
-      importedInherit :: !Bool
-    }
-    -- | A dependency arising from inheritance.
-  | Inherited
-    -- | A dependency arising from an enclosing scope.
-  | Enclosing
 
 instance Semigroup Dependence where
   Imported { importedSyms = symsa, importedInherit = inherita } <>
@@ -149,32 +221,6 @@ scope scopeid create cycle =
             Array.writeArray scopesarr out
             -- Finally return it.
             return out
-
--- | Resolution results.
-data Resolve a =
-    -- | A valid resolution result.
-    Valid {
-      -- | The ID of the scope in which the result is defined.
-      validScope :: !ScopeID,
-      -- | The actual result.
-      validContent :: !a
-    }
-    -- | An illegal access result.
-  | Illegal {
-      -- | True for private access, false for protected.
-      illegalPrivate :: !Bool
-      -- | The scope in which the result is defined.
-      illegalScope :: !ScopeID
-    }
-    -- | Access to an out-of-context element.
-  | Context {
-      -- | True for object context, false for local.
-      contextObject :: !Bool,
-      -- | The scope in which the result is defined.
-      contextScope :: !ScopeID
-    }
-    -- | Undefined symbol result.
-  | Undef
 
 -- Resolution results are a monoid, so that we can combine results
 -- from resolution in multiple scopes.
@@ -435,3 +481,4 @@ bind components =
 -- Now, run a fixed-point computation to resolve all references
 -- Last, convert the tree to its final form
 -- Check that all the expected definitions are present
+-}
