@@ -30,8 +30,8 @@
 {
 
 module Language.Salt.Surface.Parser(
-       parser,
-       parserNoTokens
+       parserWithTokens,
+       parser
        ) where
 
 import Control.Monad.Except
@@ -1018,11 +1018,32 @@ str (Token.String str _) = str
 str _ = error "Cannot get str of token"
 
 -- | Run the parser, include tokens with the result.
+parserWithTokens :: Position.Filename
+                 -- ^ Name of the file being parsed.
+                 -> Lazy.ByteString
+                 -- ^ Content of the file being parsed
+                 -> Frontend (Maybe AST, [Token])
+parserWithTokens name input =
+  let
+    run :: Lexer (Maybe AST)
+    run =
+      do
+        res <- runExceptT parse
+        case res of
+          Left () ->
+            do
+              lexRemaining
+              return Nothing
+          Right ast -> return $! Just ast
+  in
+    runLexerWithTokens run name input
+
+-- | Run the parser
 parser :: Position.Filename
        -- ^ Name of the file being parsed.
        -> Lazy.ByteString
        -- ^ Content of the file being parsed
-       -> Frontend (Maybe AST, [Token])
+       -> Frontend (Maybe AST)
 parser name input =
   let
     run :: Lexer (Maybe AST)
@@ -1037,26 +1058,5 @@ parser name input =
           Right ast -> return $! Just ast
   in
     runLexer run name input
-
--- | Run the parser
-parserNoTokens :: Position.Filename
-               -- ^ Name of the file being parsed.
-               -> Lazy.ByteString
-               -- ^ Content of the file being parsed
-               -> Frontend (Maybe AST)
-parserNoTokens name input =
-  let
-    run :: Lexer (Maybe AST)
-    run =
-      do
-        res <- runExceptT parse
-        case res of
-          Left () ->
-            do
-              lexRemaining
-              return Nothing
-          Right ast -> return $! Just ast
-  in
-    runLexerNoTokens run name input
 
 }

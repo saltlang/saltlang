@@ -29,17 +29,20 @@
 -- SUCH DAMAGE.
 {
 {-# OPTIONS_GHC -funbox-strict-fields -fno-warn-tabs #-}
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances, UndecidableInstances #-}
 
 module Language.Salt.Surface.Lexer(
        Lexer,
+       runLexerWithTokens,
        runLexer,
-       runLexerNoTokens,
        lex,
        lexRemaining,
        ) where
 
+import Control.Monad.CommentBuffer(MonadCommentBuffer)
 import Control.Monad.Genpos
+import Control.Monad.Gensym
+import Control.Monad.Keywords(MonadKeywords)
 import Control.Monad.Messages
 import Control.Monad.SourceBuffer hiding (linebreak)
 import Control.Monad.Symbols
@@ -49,6 +52,7 @@ import Data.Maybe
 import Data.Position.BasicPosition
 import Data.Symbol
 import Language.Salt.Frontend
+import Language.Salt.Message(Message)
 import Language.Salt.Surface.Token
 import Prelude hiding (log, span, lex)
 import System.IO
@@ -66,6 +70,9 @@ import qualified Text.Numbers.ByteString.Lazy as Numbers
 import Text.AlexWrapper
 
 }
+
+%typeclass "MonadLexer m"
+%action "AlexMonadAction m Token"
 
 -- Operator characters
 @opchars = [\!\#\%\^\&\+\?\<\>\:\|\~\-\=\:]
@@ -260,32 +267,38 @@ tokens :-
 
 type Position = BasicPosition
 
-hexLiteral :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-              Position.Point -> Lexer Token
+hexLiteral :: Monad m =>
+              Lazy.ByteString -> Position.Filename -> Position.Point ->
+              Position.Point -> m Token
 hexLiteral bstr _ startpos endpos =
   return $! Num (Numbers.hexLiteral (Lazy.drop 2 bstr)) (span startpos endpos)
 
-decLiteral :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-              Position.Point -> Lexer Token
+decLiteral :: Monad m =>
+              Lazy.ByteString -> Position.Filename -> Position.Point ->
+              Position.Point -> m Token
 decLiteral bstr _ startpos endpos =
   return $! Num (Numbers.decLiteral bstr) (span startpos endpos)
 
-octLiteral :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-              Position.Point -> Lexer Token
+octLiteral :: Monad m =>
+              Lazy.ByteString -> Position.Filename -> Position.Point ->
+              Position.Point -> m Token
 octLiteral bstr _ startpos endpos =
   return $! Num (Numbers.octLiteral (Lazy.drop 1 bstr)) (span startpos endpos)
 
-binLiteral :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-              Position.Point -> Lexer Token
+binLiteral :: Monad m =>
+              Lazy.ByteString -> Position.Filename -> Position.Point ->
+              Position.Point -> m Token
 binLiteral bstr _ startpos endpos =
   return $! Num (Numbers.binLiteral (Lazy.drop 2 bstr)) (span startpos endpos)
 
-ellipsis :: Position.Filename -> Position.Point -> Position.Point -> Lexer Token
+ellipsis :: Monad m =>
+            Position.Filename -> Position.Point -> Position.Point -> m Token
 ellipsis _ startpos endpos =
   return $! Ellipsis (span startpos endpos)
 
-singleChar :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-              Position.Point -> Lexer Token
+singleChar :: Monad m =>
+              Lazy.ByteString -> Position.Filename -> Position.Point ->
+              Position.Point -> m Token
 singleChar bstr _ startpos endpos =
   let
     pos = span startpos endpos
@@ -304,14 +317,16 @@ singleChar bstr _ startpos endpos =
     "\2203" -> return $! Exists pos
     str -> error $! "Unexpected single character " ++ str
 
-keywordOrToken :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-                  Position.Point -> Lexer Token
+keywordOrToken :: (MonadKeywords BasicPosition Token m, MonadGensym m) =>
+                  Lazy.ByteString -> Position.Filename -> Position.Point ->
+                  Position.Point -> m Token
 keywordOrToken str _ startpos endpos =
   Keywords.keywordOrToken Id str (span startpos endpos)
 
 -- | Produce a character literal from an unescaped character
-unescapedChar :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-                 Position.Point -> Lexer Token
+unescapedChar :: Monad m =>
+                 Lazy.ByteString -> Position.Filename -> Position.Point ->
+                 Position.Point -> m Token
 unescapedChar bstr _ startpos endpos =
   let
     pos = span startpos endpos
@@ -320,8 +335,9 @@ unescapedChar bstr _ startpos endpos =
     _ -> error $! "Extra content in character literal " ++ show bstr
 
 -- | Produce a character literal from an escaped character
-escapedChar :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-               Position.Point -> Lexer Token
+escapedChar :: Monad m =>
+               Lazy.ByteString -> Position.Filename -> Position.Point ->
+               Position.Point -> m Token
 escapedChar bstr _ startpos endpos =
   let
     pos = span startpos endpos
@@ -329,7 +345,8 @@ escapedChar bstr _ startpos endpos =
     return $! Character (fromEscape (Lazy.tail (Lazy.init bstr))) pos
 
 -- | Start a string literal
-startString :: Position.Filename -> Position.Point -> Position.Point -> Lexer ()
+startString :: MonadState AlexState m =>
+               Position.Filename -> Position.Point -> Position.Point -> m ()
 startString _ pos _ =
   do
     us <- alexGetUserState
@@ -337,14 +354,16 @@ startString _ pos _ =
                           userStartPos = pos }
 
 -- | Add to the string literal buffer
-stringContent :: Lazy.ByteString -> Lexer ()
+stringContent :: MonadState AlexState m =>
+                 Lazy.ByteString -> m ()
 stringContent str =
   do
     us @ UserState { userStringBuf = buf } <- alexGetUserState
     alexSetUserState us { userStringBuf = str : buf }
 
 -- | Add an escaped character to the string literal buffer
-escapedStringContent :: Lazy.ByteString -> Lexer ()
+escapedStringContent :: MonadState AlexState m =>
+                        Lazy.ByteString -> m ()
 escapedStringContent str =
   do
     us @ UserState { userStringBuf = buf } <- alexGetUserState
@@ -352,65 +371,76 @@ escapedStringContent str =
                             Lazy.fromString [fromEscape str] : buf }
 
 -- | Report trailing whitespace.
-trailingWhitespace :: Position.Filename -> Position.Point ->
-                      Position.Point -> Lexer ()
+trailingWhitespace :: MonadMessages Message m =>
+                      Position.Filename -> Position.Point ->
+                      Position.Point -> m ()
 trailingWhitespace _ startpos endpos =
   Message.trailingWhitespace (span startpos endpos)
 
 -- | Report bad characters.
-badChars :: Lazy.ByteString -> Position.Filename ->
-            Position.Point -> Position.Point -> Lexer ()
+badChars :: MonadMessages Message m =>
+            Lazy.ByteString -> Position.Filename ->
+            Position.Point -> Position.Point -> m ()
 badChars chars _ startpos endpos =
   Message.badChars chars (span startpos endpos)
 
 -- | Report hard tabs.
-hardTabs :: Position.Filename -> Position.Point -> Position.Point -> Lexer ()
+hardTabs :: MonadMessages Message m =>
+            Position.Filename -> Position.Point -> Position.Point -> m ()
 hardTabs _ startpos endpos = Message.hardTabs (span startpos endpos)
 
 -- | Report an empty character literal.
-emptyCharLiteral :: Position.Filename -> Position.Point ->
-                    Position.Point -> Lexer ()
+emptyCharLiteral :: MonadMessages Message m =>
+                    Position.Filename -> Position.Point ->
+                    Position.Point -> m ()
 emptyCharLiteral _ startpos endpos =
   Message.emptyCharLiteral (span startpos endpos)
 
 -- | Report bad escape sequence.
-badEscape :: Lazy.ByteString -> Position.Filename ->
-             Position.Point -> Position.Point -> Lexer ()
+badEscape :: MonadMessages Message m =>
+             Lazy.ByteString -> Position.Filename ->
+             Position.Point -> Position.Point -> m ()
 badEscape chars _ startpos endpos =
   Message.badEscape chars (span startpos endpos)
 
 -- | Report a newline in a character literal.
-newlineCharLiteral :: Position.Filename -> Position.Point ->
-                      Position.Point -> Lexer ()
+newlineCharLiteral :: MonadMessages Message m =>
+                      Position.Filename -> Position.Point ->
+                      Position.Point -> m ()
 newlineCharLiteral _ startpos endpos =
   Message.newlineCharLiteral (span startpos endpos)
 
 -- | Report a tab in a character literal.
-tabCharLiteral :: Position.Filename -> Position.Point ->
-                  Position.Point -> Lexer ()
+tabCharLiteral :: MonadMessages Message m =>
+                  Position.Filename -> Position.Point ->
+                  Position.Point -> m ()
 tabCharLiteral _ startpos endpos = Message.tabCharLiteral (span startpos endpos)
 
 -- | Report a long character literal.
-longCharLiteral :: Lazy.ByteString -> Position.Filename ->
-                   Position.Point -> Position.Point -> Lexer ()
+longCharLiteral :: MonadMessages Message m =>
+                   Lazy.ByteString -> Position.Filename ->
+                   Position.Point -> Position.Point -> m ()
 longCharLiteral chars _ startpos endpos =
   Message.longCharLiteral chars (span startpos endpos)
 
 -- | Report a tab in a string literal.
-tabInStringLiteral :: Position.Filename -> Position.Point ->
-                      Position.Point -> Lexer ()
+tabInStringLiteral :: MonadMessages Message m =>
+                      Position.Filename -> Position.Point ->
+                      Position.Point -> m ()
 tabInStringLiteral _ startpos endpos =
   Message.tabInStringLiteral (span startpos endpos)
 
 -- | Report a newline in a string literal.
-newlineInString :: Position.Filename -> Position.Point ->
-                   Position.Point -> Lexer ()
+newlineInString :: MonadMessages Message m =>
+                   Position.Filename -> Position.Point ->
+                   Position.Point -> m ()
 newlineInString _ startpos endpos =
   Message.newlineInString (span startpos endpos)
 
 -- | Terminate a string literal and return a token.
-bufferedString :: Position.Filename -> Position.Point ->
-                  Position.Point -> Lexer Token
+bufferedString :: MonadState AlexState m =>
+                  Position.Filename -> Position.Point ->
+                  Position.Point -> m Token
 bufferedString _ _ endpos =
   do
     UserState { userStartPos = startpos,
@@ -419,8 +449,9 @@ bufferedString _ _ endpos =
                    (span startpos endpos))
 
 -- | Start a new comment
-startComment :: Lazy.ByteString -> Position.Filename -> Position.Point ->
-                Position.Point -> Lexer ()
+startComment :: (MonadCommentBuffer m, MonadState AlexState m) =>
+                Lazy.ByteString -> Position.Filename -> Position.Point ->
+                Position.Point -> m ()
 startComment bstr _ pos _ =
   do
     us <- alexGetUserState
@@ -429,11 +460,13 @@ startComment bstr _ pos _ =
     CommentBuffer.appendComment bstr
 
 -- | Append comment text to the current comment
-commentText :: Lazy.ByteString -> Lexer ()
+commentText :: (MonadCommentBuffer m, MonadState AlexState m) =>
+                Lazy.ByteString -> m ()
 commentText = CommentBuffer.appendComment
 
 -- | Record an nested opening comment
-enterComment :: Lazy.ByteString -> Lexer ()
+enterComment :: (MonadCommentBuffer m, MonadState AlexState m) =>
+                Lazy.ByteString -> m ()
 enterComment bstr =
   do
     us @ UserState { userCommentDepth = depth } <- alexGetUserState
@@ -441,7 +474,8 @@ enterComment bstr =
     CommentBuffer.appendComment bstr
 
 -- | Record a possibly nested close comment
-leaveComment :: Lazy.ByteString -> Lexer ()
+leaveComment :: (MonadCommentBuffer m, MonadState AlexState m) =>
+                Lazy.ByteString -> m ()
 leaveComment bstr =
   do
     CommentBuffer.appendComment bstr
@@ -454,14 +488,16 @@ leaveComment bstr =
         alexSetUserState us { userCommentDepth = depth - 1 }
 
 -- | Add a full comment to the previous comments buffer
-fullComment :: Lazy.ByteString -> Lexer ()
+fullComment :: (MonadCommentBuffer m, MonadState AlexState m) =>
+               Lazy.ByteString -> m ()
 fullComment = CommentBuffer.addComment
 
 -- | Save previous comments at the given position and clear the
 -- comment buffer (this is used in conjuction with @report@,
 -- ie. @report bufferedComments@)
-bufferedComments :: Position.Filename -> Position.Point ->
-                    Position.Point -> Lexer ()
+bufferedComments :: (MonadCommentBuffer m, MonadState AlexState m) =>
+                    Position.Filename -> Position.Point ->
+                    Position.Point -> m ()
 bufferedComments _ pos _ = CommentBuffer.saveCommentsAsPreceeding pos >>
                            CommentBuffer.clearComments
 
@@ -487,12 +523,24 @@ initUserState saveTokens =
   UserState { userStringBuf = [], userStartPos = undefined, userTokenBuf = [],
               userCommentDepth = 0, userSaveTokens = saveTokens }
 
-type AlexAction = AlexMonadAction Lexer Token
+class (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+       MonadCommentBuffer m, MonadSourceBuffer m,
+       MonadKeywords BasicPosition Token m,
+       MonadState AlexState m) => MonadLexer m
+
+instance (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+          MonadCommentBuffer m, MonadSourceBuffer m,
+          MonadKeywords BasicPosition Token m,
+          MonadState AlexState m) => MonadLexer m
 
 type AlexState = AlexInternalState UserState
 
-scanWrapper :: AlexResultHandlers Lexer Token ->
-               AlexInput -> Int -> Lexer Token
+scanWrapper :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+                MonadCommentBuffer m, MonadSourceBuffer m,
+                MonadKeywords BasicPosition Token m,
+                MonadState AlexState m) =>
+               AlexResultHandlers m Token ->
+               AlexInput -> Int -> m Token
 scanWrapper handlers inp sc =
   case alexScan inp sc of
     AlexEOF -> handleEOF handlers
@@ -500,7 +548,7 @@ scanWrapper handlers inp sc =
     AlexSkip inp' len -> handleSkip handlers inp' len
     AlexToken inp' len action -> handleToken handlers inp' len action
 
-alexEOF :: Lexer Token
+alexEOF :: (MonadMessages Message m, MonadState AlexState m) => m Token
 alexEOF =
   do
     startcode <- alexGetStartCode
@@ -515,18 +563,40 @@ alexEOF =
       else return ()
     return EOF
 
-alexMonadScan :: Lexer Token
+actions :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+            MonadCommentBuffer m, MonadSourceBuffer m,
+            MonadKeywords BasicPosition Token m,
+            MonadState AlexState m) =>
+           AlexActions m Token
+actions = mkAlexActions scanWrapper badChars alexEOF
 
-skip :: AlexAction
+alexMonadScan :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+                  MonadCommentBuffer m, MonadSourceBuffer m,
+                  MonadKeywords BasicPosition Token m,
+                  MonadState AlexState m) =>
+                 m Token
+alexMonadScan = actAlexMonadScan actions
 
-begin :: Int -> AlexAction
+skip :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+         MonadCommentBuffer m, MonadSourceBuffer m,
+         MonadKeywords BasicPosition Token m,
+         MonadState AlexState m) =>
+        AlexMonadAction m Token
+skip = actSkip actions
 
-AlexActions { actAlexMonadScan = alexMonadScan, actSkip = skip,
-              actBegin = begin } =
-  mkAlexActions scanWrapper badChars alexEOF
+begin :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+          MonadCommentBuffer m, MonadSourceBuffer m,
+          MonadKeywords BasicPosition Token m,
+          MonadState AlexState m) =>
+         Int -> AlexMonadAction m Token
+begin = actBegin actions
 
 -- | Lexer function required by Happy threaded lexers.
-lex :: Lexer Token
+lex :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+        MonadCommentBuffer m, MonadSourceBuffer m,
+        MonadKeywords BasicPosition Token m,
+        MonadState AlexState m) =>
+       m Token
 lex =
   do
     us @ UserState { userSaveTokens = saveToks,
@@ -540,7 +610,11 @@ lex =
         return tok
 
 -- | Lex all remaining tokens
-lexRemaining :: Lexer ()
+lexRemaining :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
+                 MonadCommentBuffer m, MonadSourceBuffer m,
+                 MonadKeywords BasicPosition Token m,
+                 MonadState AlexState m) =>
+                m ()
 lexRemaining =
   do
     tok <- lex
@@ -548,14 +622,15 @@ lexRemaining =
       EOF -> return ()
       _ -> lexRemaining
 
-runLexer :: Lexer a
-         -- ^ The lexer monad to run.
-         -> Position.Filename
-         -- ^ The name of the file.
-         -> Lazy.ByteString
-         -- ^ The contents of the file.
-         -> Frontend (a, [Token])
-runLexer l name input =
+runLexerWithTokens :: (MonadSourceBuffer m) =>
+                      AlexT UserState m a
+                   -- ^ The lexer monad to run.
+                   -> Position.Filename
+                   -- ^ The name of the file.
+                   -> Lazy.ByteString
+                   -- ^ The contents of the file.
+                   -> m (a, [Token])
+runLexerWithTokens l name input =
   let
     initState = initUserState True
 
@@ -569,14 +644,15 @@ runLexer l name input =
   in do
     runAlexT run input name initState
 
-runLexerNoTokens :: Lexer a
-                 -- ^ The lexer monad to run.
-                 -> Position.Filename
-                 -- ^ The name of the file.
-                 -> Lazy.ByteString
-                 -- ^ The contents of the file.
-                 -> Frontend a
-runLexerNoTokens l name input =
+runLexer :: (MonadSourceBuffer m) =>
+            AlexT UserState m a
+         -- ^ The lexer monad to run.
+         -> Position.Filename
+         -- ^ The name of the file.
+         -> Lazy.ByteString
+         -- ^ The contents of the file.
+         -> m a
+runLexer l name input =
   let
     initState = initUserState False
 

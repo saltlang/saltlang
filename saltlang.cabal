@@ -130,7 +130,7 @@ Library
                         hexpat, hexpat-pickle, array, unordered-containers,
                         hashtables, filepath, semigroups, dynamic-pprint, data-default,
                         monad-journal, bitwise
-  build-tools:          alex, happy
+  build-tools:          alex >= 3.2, happy
   hs-source-dirs:       src/salt
   exposed-modules:      
 --                        Control.Monad.ProofChecker,
