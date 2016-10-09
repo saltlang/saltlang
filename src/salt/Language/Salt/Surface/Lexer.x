@@ -32,6 +32,7 @@
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, UndecidableInstances #-}
 
 module Language.Salt.Surface.Lexer(
+       MonadFrontend,
        Lexer,
        runLexerWithTokens,
        runLexer,
@@ -71,8 +72,8 @@ import Text.AlexWrapper
 
 }
 
-%typeclass "MonadLexer m"
-%action "AlexMonadAction m Token"
+%typeclass "MonadFrontend m"
+%action "AlexMonadAction (Lexer m) Token"
 
 -- Operator characters
 @opchars = [\!\#\%\^\&\+\?\<\>\:\|\~\-\=\:]
@@ -501,7 +502,7 @@ bufferedComments :: (MonadCommentBuffer m, MonadState AlexState m) =>
 bufferedComments _ pos _ = CommentBuffer.saveCommentsAsPreceeding pos >>
                            CommentBuffer.clearComments
 
-type Lexer = AlexT UserState Frontend
+type Lexer m = AlexT UserState m
 
 data UserState =
   UserState {
@@ -526,12 +527,12 @@ initUserState saveTokens =
 class (MonadMessages Message m, MonadGensym m, MonadGenpos m,
        MonadCommentBuffer m, MonadSourceBuffer m,
        MonadKeywords BasicPosition Token m,
-       MonadState AlexState m) => MonadLexer m
+       MonadState AlexState m) => MonadFrontend m
 
 instance (MonadMessages Message m, MonadGensym m, MonadGenpos m,
           MonadCommentBuffer m, MonadSourceBuffer m,
           MonadKeywords BasicPosition Token m,
-          MonadState AlexState m) => MonadLexer m
+          MonadState AlexState m) => MonadFrontend m
 
 type AlexState = AlexInternalState UserState
 
@@ -539,8 +540,8 @@ scanWrapper :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
                 MonadCommentBuffer m, MonadSourceBuffer m,
                 MonadKeywords BasicPosition Token m,
                 MonadState AlexState m) =>
-               AlexResultHandlers m Token ->
-               AlexInput -> Int -> m Token
+               AlexResultHandlers (Lexer m) Token ->
+               AlexInput -> Int -> Lexer m Token
 scanWrapper handlers inp sc =
   case alexScan inp sc of
     AlexEOF -> handleEOF handlers
@@ -563,40 +564,25 @@ alexEOF =
       else return ()
     return EOF
 
-actions :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
-            MonadCommentBuffer m, MonadSourceBuffer m,
-            MonadKeywords BasicPosition Token m,
-            MonadState AlexState m) =>
-           AlexActions m Token
+actions :: MonadFrontend m =>
+           AlexActions (Lexer m) Token
 actions = mkAlexActions scanWrapper badChars alexEOF
 
-alexMonadScan :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
-                  MonadCommentBuffer m, MonadSourceBuffer m,
-                  MonadKeywords BasicPosition Token m,
-                  MonadState AlexState m) =>
-                 m Token
+alexMonadScan :: MonadFrontend m =>
+                 Lexer m Token
 alexMonadScan = actAlexMonadScan actions
 
-skip :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
-         MonadCommentBuffer m, MonadSourceBuffer m,
-         MonadKeywords BasicPosition Token m,
-         MonadState AlexState m) =>
-        AlexMonadAction m Token
+skip :: MonadFrontend m =>
+        AlexMonadAction (Lexer m) Token
 skip = actSkip actions
 
-begin :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
-          MonadCommentBuffer m, MonadSourceBuffer m,
-          MonadKeywords BasicPosition Token m,
-          MonadState AlexState m) =>
-         Int -> AlexMonadAction m Token
+begin :: MonadFrontend m =>
+         Int -> AlexMonadAction (Lexer m) Token
 begin = actBegin actions
 
 -- | Lexer function required by Happy threaded lexers.
-lex :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
-        MonadCommentBuffer m, MonadSourceBuffer m,
-        MonadKeywords BasicPosition Token m,
-        MonadState AlexState m) =>
-       m Token
+lex :: MonadFrontend m =>
+       Lexer m Token
 lex =
   do
     us @ UserState { userSaveTokens = saveToks,
@@ -614,7 +600,7 @@ lexRemaining :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
                  MonadCommentBuffer m, MonadSourceBuffer m,
                  MonadKeywords BasicPosition Token m,
                  MonadState AlexState m) =>
-                m ()
+                Lexer m ()
 lexRemaining =
   do
     tok <- lex
@@ -623,7 +609,7 @@ lexRemaining =
       _ -> lexRemaining
 
 runLexerWithTokens :: (MonadSourceBuffer m) =>
-                      AlexT UserState m a
+                      Lexer m a
                    -- ^ The lexer monad to run.
                    -> Position.Filename
                    -- ^ The name of the file.
@@ -645,7 +631,7 @@ runLexerWithTokens l name input =
     runAlexT run input name initState
 
 runLexer :: (MonadSourceBuffer m) =>
-            AlexT UserState m a
+            Lexer m a
          -- ^ The lexer monad to run.
          -> Position.Filename
          -- ^ The name of the file.
