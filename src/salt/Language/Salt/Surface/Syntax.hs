@@ -37,8 +37,7 @@
 -- amount of processing has been done.  However, symbols have not been
 -- resolved and inherited scopes have not been constructed.
 module Language.Salt.Surface.Syntax(
-       DefID,
-       Ref(..),
+       -- * Syntax Structures
        Surface(..),
        Component(..),
        Assoc(..),
@@ -50,8 +49,6 @@ module Language.Salt.Surface.Syntax(
        Builder(..),
        Def(..),
        Import(..),
-       Seq(..),
-       Apply(..),
        Compound(..),
        Pattern(..),
        Literal(..),
@@ -59,7 +56,19 @@ module Language.Salt.Surface.Syntax(
        Entry(..),
        Fields(..),
        Field(..),
-       Case(..)
+       Case(..),
+
+       -- * Representations
+
+       -- ** Reference Representations
+       Ref(..),
+
+       -- ** Call Representations
+       Seq(..),
+       Apply(..),
+
+       -- * Newtypes
+       DefID,
        ) where
 
 import Control.Monad.Positions
@@ -95,6 +104,7 @@ data Ref =
   }
   deriving (Ord, Eq)
 
+-- | Top-level surface syntax structure.
 data Surface expty =
   Surface {
     -- | Table of all scopes in the program.
@@ -113,8 +123,6 @@ data Component =
     -- | The top-level scope for this component.
     compScope :: !ScopeID
   }
-
-
 
 -- | A static scope.  Elements are split up by kind, into builder definitions,
 -- syntax directives, truths, proofs, and regular definitions.
