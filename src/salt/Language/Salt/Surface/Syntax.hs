@@ -50,6 +50,8 @@ module Language.Salt.Surface.Syntax(
        Builder(..),
        Def(..),
        Import(..),
+       Seq(..),
+       Apply(..),
        Compound(..),
        Pattern(..),
        Literal(..),
@@ -111,6 +113,8 @@ data Component =
     -- | The top-level scope for this component.
     compScope :: !ScopeID
   }
+
+
 
 -- | A static scope.  Elements are split up by kind, into builder definitions,
 -- syntax directives, truths, proofs, and regular definitions.
@@ -225,6 +229,30 @@ data Import expty =
   }
   deriving (Functor, Foldable, Traversable)
 
+-- | A sequence of expressions.  The entire sequence represents a
+-- function call, possibly with inorder symbols.  This is
+-- re-parsed once the inorder symbols are known.
+data Seq refty =
+  Seq {
+    -- | The first expression.
+    seqExps :: ![Exp Seq refty],
+    -- | The position in source from which this arises.
+    seqPos :: !Position
+  }
+  deriving (Eq, Ord)
+
+-- | An apply, decomposed into the called function and its arguments.
+data Apply refty =
+  Apply {
+    -- | The function being called.
+    applyFunc :: !(Exp Apply refty),
+    -- | The arguments.
+    applyArgs :: !(HashMap Symbol (Exp Apply refty)),
+    -- | The position in source from which this arises.
+    applyPos :: !Position
+  }
+  deriving (Eq)
+
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
 data Compound expty =
@@ -295,7 +323,7 @@ data Pattern expty =
     deriving (Functor, Foldable, Traversable)
 
 -- | Expressions.  These represent computed values of any type.
-data Exp refty =
+data Exp callty refty =
     -- | An expression that may contain declarations as well as
     -- expressions.  This structure defines a dynamic scope.  Syntax
     -- directives and proofs are moved out-of-line, while truths,
@@ -304,7 +332,7 @@ data Exp refty =
       -- | Scope containing definitions in this compound block.
       compoundScope :: !ScopeID,
       -- | The body of the compound block.
-      compoundBody :: ![Compound (Exp refty)],
+      compoundBody :: ![Compound (Exp callty refty)],
       -- | The position in source from which this arises.
       compoundPos :: !Position
     }
@@ -315,7 +343,7 @@ data Exp refty =
       -- | The kind of the abstraction.
       absKind :: !AbstractionKind,
       -- | The cases for the abstraction.
-      absCases :: ![Case (Exp refty)],
+      absCases :: ![Case (Exp callty refty)],
       -- | The position in source from which this arises.
       absPos :: !Position
     }
@@ -325,50 +353,39 @@ data Exp refty =
     -- matches the argument.
   | Match {
       -- | The argument to the match statement.
-      matchVal :: (Exp refty),
+      matchVal :: (Exp callty refty),
       -- | The cases, in order.
-      matchCases :: ![Case (Exp refty)],
+      matchCases :: ![Case (Exp callty refty)],
       -- | The position in source from which this arises.
       matchPos :: !Position
     }
     -- | Ascribe expression.  Fixes the type of a given expression.
   | Ascribe {
       -- | The expression whose type is being set.
-      ascribeVal :: (Exp refty),
+      ascribeVal :: (Exp callty refty),
       -- | The type.
-      ascribeType :: (Exp refty),
+      ascribeType :: (Exp callty refty),
       -- | The position in source from which this arises.
       ascribePos :: !Position
     }
-    -- | A sequence of expressions.  The entire sequence represents a
-    -- function call, possibly with inorder symbols.  This is
-    -- re-parsed once the inorder symbols are known.
-  | Seq {
-      -- | The first expression.
-      seqExps :: ![Exp refty],
-      -- | The position in source from which this arises.
-      seqPos :: !Position
-    }
   | Call {
-      callFunc :: !(Exp refty),
-      callArgs :: !(HashMap Symbol (Exp refty)),
-      callPos :: !Position
+      callInfo :: !(callty refty)
     }
   | RecordType {
-      recordTypeFields :: !(Fields (Exp refty)),
+      recordTypeFields :: !(Fields (Exp callty refty)),
       recordTypePos :: !Position
     }
     -- | A record literal.  Can represent a record type, or a record value.
   | Record {
       -- | The fields in this record expression.
-      recordFields :: !(HashMap FieldName (Exp refty)),
+      recordFields :: !(HashMap FieldName (Exp callty refty)),
       -- | The position in source from which this arises.
       recordPos :: !Position
     }
     -- | A tuple literal.
   | Tuple {
       -- | The fields in this tuple expression.
-      tupleFields :: ![Exp refty],
+      tupleFields :: ![Exp callty refty],
       -- | The position in source from which this arises.
       tuplePos :: !Position
     }
@@ -377,7 +394,7 @@ data Exp refty =
     -- argument.
   | Project {
       -- | The inner expression
-      projectVal :: (Exp refty),
+      projectVal :: (Exp callty refty),
       -- | The name of the field being accessed.
       projectFields :: ![FieldName],
       -- | The position in source from which this arises.
@@ -394,18 +411,18 @@ data Exp refty =
     -- | A with expression.  Represents currying.
   | With {
       -- | The value to which some arguments are being applied.
-      withVal :: (Exp refty),
+      withVal :: (Exp callty refty),
       -- | The argument(s) to apply
-      withArgs :: (Exp refty),
+      withArgs :: (Exp callty refty),
       -- | The position in source from which this arises.
       withPos :: !Position
     }
     -- | Where expression.  Constructs refinement types.
   | Where {
       -- | The value to which some arguments are being applied.
-      whereVal :: (Exp refty),
+      whereVal :: (Exp callty refty),
       -- | The argument(s) to apply
-      whereProp :: (Exp refty),
+      whereProp :: (Exp callty refty),
       -- | The position in source from which this arises.
       wherePos :: !Position
     }
@@ -414,9 +431,9 @@ data Exp refty =
       -- | The type of entity the builder represents.
       anonKind :: !BuilderKind,
       -- | The declared supertypes for this builder entity.
-      anonSuperTypes :: ![Exp refty],
+      anonSuperTypes :: ![Exp callty refty],
       -- | The parameters of the builder entity.
-      anonParams :: !(Fields (Exp refty)),
+      anonParams :: !(Fields (Exp callty refty)),
       -- | The entities declared by the builder.
       anonContent :: !ScopeID,
       -- | The position in source from which this arises.
@@ -499,6 +516,12 @@ instance PositionElement (Import expty) where
 instance PositionElement (Syntax expty) where
   position Syntax { syntaxPos = pos } = pos
 
+instance PositionElement (Seq refty) where
+  position Seq { seqPos = pos } = pos
+
+instance PositionElement (Apply refty) where
+  position Apply { applyPos = pos } = pos
+
 instance PositionElement (Pattern expty) where
   position Option { optionPos = pos } = pos
   position Deconstruct { deconstructPos = pos } = pos
@@ -508,13 +531,13 @@ instance PositionElement (Pattern expty) where
   position Name { namePos = pos } = pos
   position Exact { exactLit = l } = position l
 
-instance PositionElement (Exp refty) where
+instance (PositionElement (callty refty)) =>
+         PositionElement (Exp callty refty) where
   position Compound { compoundPos = pos } = pos
   position Abs { absPos = pos } = pos
   position Match { matchPos = pos } = pos
   position Ascribe { ascribePos = pos } = pos
-  position Seq { seqPos = pos } = pos
-  position Call { callPos = pos } = pos
+  position Call { callInfo = info } = position info
   position RecordType { recordTypePos = pos } = pos
   position Record { recordPos = pos } = pos
   position Tuple { tuplePos = pos } = pos
@@ -596,7 +619,7 @@ instance Eq expty => Eq (Pattern expty) where
   Exact { exactLit = lit1 } == Exact { exactLit = lit2 } = lit1 == lit2
   _ == _ = False
 
-instance Eq refty => Eq (Exp refty) where
+instance (Eq (callty refty), Eq refty) => Eq (Exp callty refty) where
   Compound { compoundBody = body1, compoundScope = scope1 } ==
     Compound { compoundBody = body2, compoundScope = scope2 } =
       scope1 == scope2 && body1 == body2
@@ -609,10 +632,7 @@ instance Eq refty => Eq (Exp refty) where
   Ascribe { ascribeVal = val1, ascribeType = ty1 } ==
     Ascribe { ascribeVal = val2, ascribeType = ty2 } =
       val1 == val2 && ty1 == ty2
-  Call { callFunc = func1, callArgs = args1 } ==
-    Call { callFunc = func2, callArgs = args2 } =
-      func1 == func2 && args1 == args2
-  Seq { seqExps = exps1 } == Seq { seqExps = exps2 } = exps1 == exps2
+  Call { callInfo = info1 } == Call { callInfo = info2 } = info1 == info2
   RecordType { recordTypeFields = fields1 } ==
     RecordType { recordTypeFields = fields2 } =
       fields1 == fields2
@@ -750,6 +770,17 @@ instance Ord expty => Ord (Import expty) where
       EQ -> compare exp1 exp2
       out -> out
 
+instance Ord expty => Ord (Apply expty) where
+  compare Apply { applyFunc = func1, applyArgs = args1 }
+          Apply { applyFunc = func2, applyArgs = args2 } =
+    let
+      arglist1 = sort (HashMap.toList args1)
+      arglist2 = sort (HashMap.toList args2)
+    in
+      case compare func1 func2 of
+        EQ -> compare arglist1 arglist2
+        out -> out
+
 instance Ord expty => Ord (Compound expty) where
   compare Exp { expVal = exp1 } Exp { expVal = exp2 } = compare exp1 exp2
   compare Exp {} _ = LT
@@ -803,7 +834,7 @@ instance Ord expty => Ord (Pattern expty) where
   compare Exact { exactLit = lit1 } Exact { exactLit = lit2 } =
     compare lit1 lit2
 
-instance Ord expty => Ord (Exp expty) where
+instance (Ord (callty refty), Ord refty) => Ord (Exp callty refty) where
   compare Compound { compoundBody = body1, compoundScope = scope1 }
           Compound { compoundBody = body2, compoundScope = scope2 } =
     case compare scope1 scope2 of
@@ -832,17 +863,8 @@ instance Ord expty => Ord (Exp expty) where
       out -> out
   compare Ascribe {} _ = LT
   compare _ Ascribe {} = GT
-  compare Seq { seqExps = exps1 } Seq { seqExps = exps2 } = compare exps1 exps2
-  compare Seq {} _ = LT
-  compare _ Seq {} = GT
-  compare Call { callFunc = func1, callArgs = args1 }
-          Call { callFunc = func2, callArgs = args2 } =
-    let
-      arglist1 = sort (HashMap.toList args1)
-      arglist2 = sort (HashMap.toList args2)
-    in case compare func1 func2 of
-        EQ -> compare arglist1 arglist2
-        out -> out
+  compare Call { callInfo = info1 } Call { callInfo = info2 } =
+    compare info1 info2
   compare Call {} _ = LT
   compare _ Call {} = GT
   compare RecordType { recordTypeFields = fields1 }
@@ -991,6 +1013,16 @@ instance (Hashable expty, Ord expty) => Hashable (Compound expty) where
   hashWithSalt s Init { initId = defid } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` defid
 
+instance (Ord refty, Hashable refty) => Hashable (Seq refty) where
+  hashWithSalt s Seq { seqExps = exps } = s `hashWithSalt` exps
+
+instance (Ord refty, Hashable refty) => Hashable (Apply refty) where
+  hashWithSalt s Apply { applyFunc = func, applyArgs = args } =
+    let
+      arglist = sort (HashMap.toList args)
+    in
+      s `hashWithSalt` func `hashWithSalt` arglist
+
 instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
   hashWithSalt s Option { optionPats = pats } =
     s `hashWithSalt` (0 :: Int) `hashWithSalt` pats
@@ -1010,7 +1042,9 @@ instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
   hashWithSalt s Exact { exactLit = lit } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt` lit
 
-instance (Hashable refty, Ord refty) => Hashable (Exp refty) where
+instance (Hashable (callty refty), Hashable refty,
+          Ord (callty refty), Ord refty) =>
+         Hashable (Exp callty refty) where
   hashWithSalt s Compound { compoundBody = body, compoundScope = scope } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` scope `hashWithSalt` body
   hashWithSalt s Abs { absKind = kind, absCases = cases } =
@@ -1019,36 +1053,31 @@ instance (Hashable refty, Ord refty) => Hashable (Exp refty) where
     s `hashWithSalt` (3 :: Int) `hashWithSalt` val `hashWithSalt` cases
   hashWithSalt s Ascribe { ascribeVal = val, ascribeType = ty } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt` val `hashWithSalt` ty
-  hashWithSalt s Seq { seqExps = exps } =
-    s `hashWithSalt` (5 :: Int) `hashWithSalt` exps
-  hashWithSalt s Call { callFunc = func, callArgs = args } =
-    let
-      arglist = sort (HashMap.toList args)
-    in
-      s `hashWithSalt` (6 :: Int) `hashWithSalt` func `hashWithSalt` arglist
+  hashWithSalt s Call { callInfo = info } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` info
   hashWithSalt s Record { recordFields = fields } =
     let
       fieldlist = sort (HashMap.toList fields)
     in
-      s `hashWithSalt` (7 :: Int) `hashWithSalt` fieldlist
+      s `hashWithSalt` (6 :: Int) `hashWithSalt` fieldlist
   hashWithSalt s RecordType { recordTypeFields = fields } =
-    s `hashWithSalt` (8 :: Int) `hashWithSalt` fields
+    s `hashWithSalt` (7 :: Int) `hashWithSalt` fields
   hashWithSalt s Tuple { tupleFields = fields } =
-    s `hashWithSalt` (9 :: Int) `hashWithSalt` fields
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` fields
   hashWithSalt s Project { projectVal = val, projectFields = sym } =
-    s `hashWithSalt` (10 :: Int) `hashWithSalt` sym `hashWithSalt` val
+    s `hashWithSalt` (9 :: Int) `hashWithSalt` sym `hashWithSalt` val
   hashWithSalt s Sym { symRef = sym } =
-    s `hashWithSalt` (11 :: Int) `hashWithSalt` sym
+    s `hashWithSalt` (10 :: Int) `hashWithSalt` sym
   hashWithSalt s With { withVal = val, withArgs = args } =
-    s `hashWithSalt` (12 :: Int) `hashWithSalt` val `hashWithSalt` args
+    s `hashWithSalt` (11 :: Int) `hashWithSalt` val `hashWithSalt` args
   hashWithSalt s Where { whereVal = val, whereProp = prop } =
-    s `hashWithSalt` (13 :: Int) `hashWithSalt` val `hashWithSalt` prop
+    s `hashWithSalt` (12 :: Int) `hashWithSalt` val `hashWithSalt` prop
   hashWithSalt s Anon { anonKind = cls, anonParams = params,
                         anonSuperTypes = supers, anonContent = body } =
-    s `hashWithSalt` (14 :: Int) `hashWithSalt` cls `hashWithSalt`
+    s `hashWithSalt` (13 :: Int) `hashWithSalt` cls `hashWithSalt`
     params `hashWithSalt` supers `hashWithSalt` body
   hashWithSalt s (Literal lit) =
-    s `hashWithSalt` (15 :: Int) `hashWithSalt` lit
+    s `hashWithSalt` (14 :: Int) `hashWithSalt` lit
 
 instance (Hashable expty, Ord expty) => Hashable (Entry expty) where
   hashWithSalt s Entry { entryPat = pat } = s `hashWithSalt` pat
@@ -1326,6 +1355,28 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
   formatM Init { initId = defid } =
     return $! string "declaration of" <> format defid
 
+instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
+         FormatM m (Seq refty) where
+  formatM Seq { seqExps = exps, seqPos = pos } =
+    do
+      posdoc <- formatM pos
+      expdocs <- mapM formatM exps
+      return (compoundApplyDoc (string "Seq")
+                             [(string "pos", posdoc),
+                              (string "exps", listDoc expdocs)])
+
+instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
+         FormatM m (Apply refty) where
+  formatM Apply { applyFunc = func, applyArgs = args, applyPos = pos } =
+    do
+      posdoc <- formatM pos
+      funcdoc <- formatM func
+      argdocs <- formatMap args
+      return (compoundApplyDoc (string "Call")
+                               [(string "pos", posdoc),
+                                (string "func", funcdoc),
+                                (string "args", argdocs)])
+
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Pattern expty) where
   formatM Option { optionPats = pats, optionPos = pos } =
@@ -1388,8 +1439,9 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
                               (string "pos", posdoc)])
   formatM (Exact e) = formatM e
 
-instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
-         FormatM m (Exp refty) where
+instance (MonadPositions m, MonadSymbols m, FormatM m refty,
+          FormatM m (callty refty)) =>
+         FormatM m (Exp callty refty) where
   formatM Compound { compoundBody = body, compoundScope = scope,
                      compoundPos = pos } =
     do
@@ -1425,22 +1477,7 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "type", tydoc)])
-  formatM Seq { seqExps = exps, seqPos = pos } =
-    do
-      posdoc <- formatM pos
-      expdocs <- mapM formatM exps
-      return (compoundApplyDoc (string "Seq")
-                             [(string "pos", posdoc),
-                              (string "exps", listDoc expdocs)])
-  formatM Call { callFunc = func, callArgs = args, callPos = pos } =
-    do
-      posdoc <- formatM pos
-      funcdoc <- formatM func
-      argdocs <- formatMap args
-      return (compoundApplyDoc (string "Call")
-                               [(string "pos", posdoc),
-                                (string "func", funcdoc),
-                                (string "args", argdocs)])
+  formatM Call { callInfo = info } = formatM info
   formatM Record { recordFields = fields, recordPos = pos } =
     do
       posdoc <- formatM pos
@@ -1757,6 +1794,30 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                    (xpPair (xpElemNodes (gxFromString "name") xpickle)
                            (xpElemNodes (gxFromString "pos") xpickle)))
 
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] refty) =>
+         XmlPickler [NodeG [] tag text] (Seq refty) where
+  xpickle =
+    xpWrap (\(exps, pos) -> Seq { seqExps = exps, seqPos = pos },
+            \Seq { seqExps = exps, seqPos = pos } -> (exps, pos))
+           (xpElemNodes (gxFromString "Seq")
+                        (xpPair (xpElemNodes (gxFromString "exps") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] refty) =>
+         XmlPickler [NodeG [] tag text] (Apply refty) where
+  xpickle =
+    xpWrap (\(func, args, pos) ->
+             Apply { applyFunc = func, applyArgs = args, applyPos = pos },
+            \Apply { applyFunc = func, applyArgs = args, applyPos = pos } ->
+            (func, args, pos))
+           (xpElemNodes (gxFromString "Apply")
+                        (xpTriple (xpElemNodes (gxFromString "func") xpickle)
+                                  (xpElemNodes (gxFromString "args")
+                                               mapPickler)
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
+
 expPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
                XmlPickler [NodeG [] tag text] expty) =>
@@ -1928,8 +1989,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
 
 compoundPickler :: (GenericXMLString tag, Show tag,
                     GenericXMLString text, Show text,
-                    XmlPickler [NodeG [] tag text] resty) =>
-                   PU [NodeG [] tag text] (Exp resty)
+                    XmlPickler [NodeG [] tag text] (callty refty),
+                    XmlPickler [NodeG [] tag text] refty) =>
+                   PU [NodeG [] tag text] (Exp callty refty)
 compoundPickler =
   let
     revfunc Compound { compoundBody = body, compoundScope = scope,
@@ -1946,8 +2008,9 @@ compoundPickler =
 
 absPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
-               XmlPickler [NodeG [] tag text] resty) =>
-              PU [NodeG [] tag text] (Exp resty)
+               XmlPickler [NodeG [] tag text] (callty refty),
+               XmlPickler [NodeG [] tag text] refty) =>
+              PU [NodeG [] tag text] (Exp callty refty)
 absPickler =
   let
     revfunc Abs { absKind = kind, absCases = cases, absPos = pos } =
@@ -1962,8 +2025,9 @@ absPickler =
 
 matchPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text,
-                 XmlPickler [NodeG [] tag text] resty) =>
-                PU [NodeG [] tag text] (Exp resty)
+                 XmlPickler [NodeG [] tag text] (callty refty),
+                 XmlPickler [NodeG [] tag text] refty) =>
+                PU [NodeG [] tag text] (Exp callty refty)
 matchPickler =
   let
     revfunc Match { matchVal = val, matchCases = cases, matchPos = pos } =
@@ -1979,8 +2043,9 @@ matchPickler =
 
 ascribePickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text,
-                   XmlPickler [NodeG [] tag text] resty) =>
-                  PU [NodeG [] tag text] (Exp resty)
+                   XmlPickler [NodeG [] tag text] (callty refty),
+                   XmlPickler [NodeG [] tag text] refty) =>
+                  PU [NodeG [] tag text] (Exp callty refty)
 ascribePickler =
   let
     revfunc Ascribe { ascribeVal = val, ascribeType = ty, ascribePos = pos } =
@@ -1994,41 +2059,23 @@ ascribePickler =
                                   (xpElemNodes (gxFromString "type") xpickle)
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
-seqPickler :: (GenericXMLString tag, Show tag,
-               GenericXMLString text, Show text,
-               XmlPickler [NodeG [] tag text] resty) =>
-              PU [NodeG [] tag text] (Exp resty)
-seqPickler =
-  let
-    revfunc Seq { seqExps = exps, seqPos = pos } = (exps, pos)
-    revfunc _ = error $! "Can't convert"
-  in
-    xpWrap (\(exps, pos) -> Seq { seqExps = exps, seqPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Seq")
-                        (xpPair (xpElemNodes (gxFromString "exps") xpickle)
-                                (xpElemNodes (gxFromString "pos") xpickle)))
-
 callPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
-                XmlPickler [NodeG [] tag text] resty) =>
-              PU [NodeG [] tag text] (Exp resty)
+                XmlPickler [NodeG [] tag text] (callty refty),
+                XmlPickler [NodeG [] tag text] refty) =>
+              PU [NodeG [] tag text] (Exp callty refty)
 callPickler =
   let
-    revfunc Call { callFunc = func, callArgs = args, callPos = pos } =
-      (func, args, pos)
+    revfunc Call { callInfo = info } = info
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(func, args, pos) ->
-             Call { callFunc = func, callArgs = args, callPos = pos }, revfunc)
-           (xpElemNodes (gxFromString "Call")
-                        (xpTriple (xpElemNodes (gxFromString "func") xpickle)
-                                  (xpElemNodes (gxFromString "args") mapPickler)
-                                  (xpElemNodes (gxFromString "pos") xpickle)))
+    xpWrap (\info -> Call { callInfo = info }, revfunc) xpickle
 
 recordPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text,
-                 XmlPickler [NodeG [] tag text] resty) =>
-                PU [NodeG [] tag text] (Exp resty)
+                 XmlPickler [NodeG [] tag text] (callty refty),
+                 XmlPickler [NodeG [] tag text] refty) =>
+                PU [NodeG [] tag text] (Exp callty refty)
 recordPickler =
   let
     revfunc Record { recordFields = fields, recordPos = pos } = (fields, pos)
@@ -2042,8 +2089,9 @@ recordPickler =
 
 recordTypePickler :: (GenericXMLString tag, Show tag,
                       GenericXMLString text, Show text,
-                      XmlPickler [NodeG [] tag text] resty) =>
-                     PU [NodeG [] tag text] (Exp resty)
+                      XmlPickler [NodeG [] tag text] (callty refty),
+                      XmlPickler [NodeG [] tag text] refty) =>
+                     PU [NodeG [] tag text] (Exp callty refty)
 recordTypePickler =
   let
     revfunc RecordType { recordTypeFields = fields,
@@ -2058,8 +2106,9 @@ recordTypePickler =
 
 tuplePickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text,
-                 XmlPickler [NodeG [] tag text] resty) =>
-                PU [NodeG [] tag text] (Exp resty)
+                 XmlPickler [NodeG [] tag text] (callty refty),
+                 XmlPickler [NodeG [] tag text] refty) =>
+                PU [NodeG [] tag text] (Exp callty refty)
 tuplePickler =
   let
     revfunc Tuple { tupleFields = fields, tuplePos = pos } = (fields, pos)
@@ -2073,8 +2122,9 @@ tuplePickler =
 
 projectPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text,
-                   XmlPickler [NodeG [] tag text] resty) =>
-                  PU [NodeG [] tag text] (Exp resty)
+                   XmlPickler [NodeG [] tag text] (callty refty),
+                   XmlPickler [NodeG [] tag text] refty) =>
+                  PU [NodeG [] tag text] (Exp callty refty)
 projectPickler =
   let
     revfunc Project { projectFields = fields, projectVal = val,
@@ -2091,8 +2141,8 @@ projectPickler =
 
 symPickler :: (GenericXMLString tag, Show tag,
               GenericXMLString text, Show text,
-              XmlPickler [NodeG [] tag text] resty) =>
-             PU [NodeG [] tag text] (Exp resty)
+              XmlPickler [NodeG [] tag text] refty) =>
+             PU [NodeG [] tag text] (Exp callty refty)
 symPickler =
   let
     revfunc Sym { symRef = sym, symPos = pos } = (sym, pos)
@@ -2105,8 +2155,9 @@ symPickler =
 
 withPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
-                XmlPickler [NodeG [] tag text] resty) =>
-               PU [NodeG [] tag text] (Exp resty)
+                XmlPickler [NodeG [] tag text] (callty refty),
+                XmlPickler [NodeG [] tag text] refty) =>
+               PU [NodeG [] tag text] (Exp callty refty)
 withPickler =
   let
     revfunc With { withVal = val, withArgs = args, withPos = pos } =
@@ -2122,8 +2173,9 @@ withPickler =
 
 wherePickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text,
-                 XmlPickler [NodeG [] tag text] resty) =>
-                PU [NodeG [] tag text] (Exp resty)
+                 XmlPickler [NodeG [] tag text] (callty refty),
+                 XmlPickler [NodeG [] tag text] refty) =>
+                PU [NodeG [] tag text] (Exp callty refty)
 wherePickler =
   let
     revfunc Where { whereVal = val, whereProp = prop, wherePos = pos } =
@@ -2139,8 +2191,9 @@ wherePickler =
 
 anonPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text,
-                XmlPickler [NodeG [] tag text] resty) =>
-               PU [NodeG [] tag text] (Exp resty)
+                XmlPickler [NodeG [] tag text] (callty refty),
+                XmlPickler [NodeG [] tag text] refty) =>
+               PU [NodeG [] tag text] (Exp callty refty)
 anonPickler =
   let
     revfunc Anon { anonKind = kind, anonParams = params, anonContent = body,
@@ -2159,8 +2212,9 @@ anonPickler =
 
 literalPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text,
-                   XmlPickler [NodeG [] tag text] resty) =>
-                  PU [NodeG [] tag text] (Exp resty)
+                   XmlPickler [NodeG [] tag text] (callty refty),
+                   XmlPickler [NodeG [] tag text] refty) =>
+                  PU [NodeG [] tag text] (Exp callty refty)
 literalPickler =
   let
     revfunc Literal { literalVal = v } = v
@@ -2169,30 +2223,30 @@ literalPickler =
     xpWrap (Literal, revfunc) (xpElemNodes (gxFromString "Literal") xpickle)
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
-          XmlPickler [NodeG [] tag text] resty) =>
-         XmlPickler [NodeG [] tag text] (Exp resty) where
+          XmlPickler [NodeG [] tag text] (callty refty),
+          XmlPickler [NodeG [] tag text] refty) =>
+         XmlPickler [NodeG [] tag text] (Exp callty refty) where
   xpickle =
     let
       picker Compound {} = 0
       picker Abs {} = 1
       picker Match {} = 2
       picker Ascribe {} = 3
-      picker Seq {} = 4
-      picker Call {} = 5
-      picker Record {} = 6
-      picker RecordType {} = 7
-      picker Tuple {} = 8
-      picker Project {} = 9
-      picker Sym {} = 10
-      picker With {} = 11
-      picker Where {} = 12
-      picker Anon {} = 13
-      picker Literal {} = 14
+      picker Call {} = 4
+      picker Record {} = 5
+      picker RecordType {} = 6
+      picker Tuple {} = 7
+      picker Project {} = 8
+      picker Sym {} = 9
+      picker With {} = 10
+      picker Where {} = 11
+      picker Anon {} = 12
+      picker Literal {} = 13
     in
       xpAlt picker [compoundPickler, absPickler, matchPickler, ascribePickler,
-                    seqPickler, callPickler, recordPickler, recordTypePickler,
-                    tuplePickler, projectPickler, symPickler, withPickler,
-                    wherePickler, anonPickler, literalPickler]
+                    callPickler, recordPickler, recordTypePickler, tuplePickler,
+                    projectPickler, symPickler, withPickler, wherePickler,
+                    anonPickler, literalPickler]
 
 makeArray :: [a] -> Array Word a
 makeArray l = listArray (1, fromIntegral (length l)) l
