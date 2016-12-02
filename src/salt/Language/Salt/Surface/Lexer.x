@@ -526,20 +526,17 @@ initUserState saveTokens =
 
 class (MonadMessages Message m, MonadGensym m, MonadGenpos m,
        MonadCommentBuffer m, MonadSourceBuffer m,
-       MonadKeywords BasicPosition Token m,
-       MonadState AlexState m) => MonadFrontend m
+       MonadKeywords BasicPosition Token m) => MonadFrontend m
 
 instance (MonadMessages Message m, MonadGensym m, MonadGenpos m,
           MonadCommentBuffer m, MonadSourceBuffer m,
-          MonadKeywords BasicPosition Token m,
-          MonadState AlexState m) => MonadFrontend m
+          MonadKeywords BasicPosition Token m) => MonadFrontend m
 
 type AlexState = AlexInternalState UserState
 
 scanWrapper :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
                 MonadCommentBuffer m, MonadSourceBuffer m,
-                MonadKeywords BasicPosition Token m,
-                MonadState AlexState m) =>
+                MonadKeywords BasicPosition Token m) =>
                AlexResultHandlers (Lexer m) Token ->
                AlexInput -> Int -> Lexer m Token
 scanWrapper handlers inp sc =
@@ -598,8 +595,7 @@ lex =
 -- | Lex all remaining tokens
 lexRemaining :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
                  MonadCommentBuffer m, MonadSourceBuffer m,
-                 MonadKeywords BasicPosition Token m,
-                 MonadState AlexState m) =>
+                 MonadKeywords BasicPosition Token m) =>
                 Lexer m ()
 lexRemaining =
   do

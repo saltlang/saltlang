@@ -980,7 +980,7 @@ match_list :: { [Entry] }
 
 {
 
-type Parser = ExceptT () Lexer
+  type Parser = ExceptT () (Lexer Frontend)
 
 buildExp :: [Exp] -> Exp
 buildExp [] = error "Empty expression sequence, shouldn't happen"
@@ -1025,7 +1025,7 @@ parserWithTokens :: Position.Filename
                  -> Frontend (Maybe AST, [Token])
 parserWithTokens name input =
   let
-    run :: Lexer (Maybe AST)
+    run :: Lexer Frontend (Maybe AST)
     run =
       do
         res <- runExceptT parse
@@ -1046,7 +1046,7 @@ parser :: Position.Filename
        -> Frontend (Maybe AST)
 parser name input =
   let
-    run :: Lexer (Maybe AST)
+    run :: Lexer Frontend (Maybe AST)
     run =
       do
         res <- runExceptT parse
