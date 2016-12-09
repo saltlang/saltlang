@@ -108,9 +108,9 @@ data Ref =
 data Surface expty =
   Surface {
     -- | Table of all scopes in the program.
-    surfScopes :: !(Array ScopeID (Scope expty)),
+    surfaceScopes :: !(Array ScopeID (Scope expty)),
     -- | List of all components in the program.
-    surfComponents :: ![Component]
+    surfaceComponents :: ![Component]
   }
   deriving (Functor, Foldable, Traversable)
 
