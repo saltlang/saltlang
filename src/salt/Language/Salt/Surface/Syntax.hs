@@ -449,6 +449,7 @@ data Exp callty refty =
     }
     -- | Number literal.
   | Literal { literalVal :: !Literal }
+  | Bad { badPos :: !Position }
     deriving (Functor, Foldable, Traversable)
 
 -- | An entry in a record field or call argument list.
@@ -555,6 +556,7 @@ instance (PositionElement (callty refty)) =>
   position Where { wherePos = pos } = pos
   position Anon { anonPos = pos } = pos
   position Literal { literalVal = l } = position l
+  position Bad { badPos = pos } = pos
 
 instance PositionElement (Entry expty) where
   position Entry { entryPos = pos } = pos
@@ -927,6 +929,9 @@ instance (Ord (callty refty), Ord refty) => Ord (Exp callty refty) where
   compare _ Anon {} = GT
   compare Literal { literalVal = lit1 } Literal { literalVal = lit2 } =
     compare lit1 lit2
+  compare Literal {} _ = LT
+  compare _ Literal {} = GT
+  compare Bad {} Bad {} = EQ
 
 instance Ord expty => Ord (Entry expty) where
   compare Entry { entryPat = pat1 } Entry { entryPat = pat2 } =
@@ -1079,6 +1084,7 @@ instance (Hashable (callty refty), Hashable refty,
     params `hashWithSalt` supers `hashWithSalt` body
   hashWithSalt s (Literal lit) =
     s `hashWithSalt` (14 :: Int) `hashWithSalt` lit
+  hashWithSalt s Bad {} = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable expty, Ord expty) => Hashable (Entry expty) where
   hashWithSalt s Entry { entryPat = pat } = s `hashWithSalt` pat
@@ -1550,6 +1556,7 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty,
                               (string "supers", listDoc superdocs),
                               (string "body", format body)])
   formatM Literal { literalVal = l } = formatM l
+  formatM Bad {} = return (string "<bad>")
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Entry expty) where
@@ -2222,6 +2229,20 @@ literalPickler =
   in
     xpWrap (Literal, revfunc) (xpElemNodes (gxFromString "Literal") xpickle)
 
+badPickler :: (GenericXMLString tag, Show tag,
+               GenericXMLString text, Show text,
+               XmlPickler [NodeG [] tag text] (callty refty),
+               XmlPickler [NodeG [] tag text] refty) =>
+              PU [NodeG [] tag text] (Exp callty refty)
+badPickler =
+  let
+    revfunc Bad { badPos = pos } = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\pos -> Bad { badPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Bad")
+                        (xpElemNodes (gxFromString "pos") xpickle))
+
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] (callty refty),
           XmlPickler [NodeG [] tag text] refty) =>
@@ -2242,11 +2263,12 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
       picker Where {} = 11
       picker Anon {} = 12
       picker Literal {} = 13
+      picker Bad {} = 14
     in
       xpAlt picker [compoundPickler, absPickler, matchPickler, ascribePickler,
                     callPickler, recordPickler, recordTypePickler, tuplePickler,
                     projectPickler, symPickler, withPickler, wherePickler,
-                    anonPickler, literalPickler]
+                    anonPickler, literalPickler, badPickler]
 
 makeArray :: [a] -> Array Word a
 makeArray l = listArray (1, fromIntegral (length l)) l
