@@ -131,13 +131,17 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                   tempScopeProofs = proofs, tempScopeSyntax = syntax,
                   tempScopeImports = imports, tempScopeNames = names,
                   tempScopeDefs = defs, tempScopeDefID = defid,
-                  tempScopeID = scopeid, tempScopeEnclosing = enclosing
+                  tempScopeID = scopeid, tempScopeEnclosing = enclosing,
+                  tempScopePos = pos
                 } =
     let
       -- These functions turn lists of definitions into single
       -- definitions.  If the lists are length 1, then we're good.
       -- Otherwise, we have a namespace collision.
-      collapseBuilders _ (_, []) = error "Empty builder list!"
+      collapseBuilders accum (_, []) =
+        do
+          internalError "Empty builder list!" pos
+          return accum
       collapseBuilders accum (sym, [single]) =
         return $! HashMap.insert sym single accum
       collapseBuilders accum (sym, builderlist @ (first : _)) =
@@ -145,7 +149,10 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
           duplicateBuilder sym (map position builderlist)
           return $! HashMap.insert sym first accum
 
-      collapseTruths _ (_, []) = error "Empty truth list!"
+      collapseTruths accum (_, []) =
+        do
+          internalError "Empty truth list!" pos
+          return accum
       collapseTruths accum (sym, [single]) =
         return $! HashMap.insert sym single accum
       collapseTruths accum (sym, truthlist @ (first : _)) =
@@ -153,7 +160,10 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
           duplicateTruth sym (map position truthlist)
           return $! HashMap.insert sym first accum
 
-      collapseSyntax _ (_, []) = error "Empty syntax list!"
+      collapseSyntax accum (_, []) =
+        do
+          internalError "Empty syntax list!" pos
+          return accum
       collapseSyntax accum (sym, [single]) =
         return $! HashMap.insert sym single accum
       collapseSyntax accum (sym, syntaxlist @ (first : _)) =
@@ -664,16 +674,32 @@ collectExp AST.Record { AST.recordType = True, AST.recordFields = fields,
     collectedFields <- collectFields fields pos
     return Syntax.RecordType { Syntax.recordTypeFields = collectedFields,
                                Syntax.recordTypePos = pos }
--- For 'Seq's, walk down the right spine and gather up all 'Seq's into a list.
+-- For sequences and tuples, we should never see empty lists, and we
+-- turn singleton lists into standalone expressions.
+collectExp AST.Seq { AST.seqExps = [], AST.seqPos = pos } =
+  do
+    internalError "Should not see empty list in AST.Seq" pos
+    return Syntax.Bad { Syntax.badPos = pos }
+collectExp AST.Seq { AST.seqExps = [ single ] } = collectExp single
 collectExp AST.Seq { AST.seqExps = exps, AST.seqPos = pos } =
   do
     collectedExps <- mapM collectExp exps
     return Syntax.Call { Syntax.callInfo =
                            Syntax.Seq { Syntax.seqExps = collectedExps,
                                         Syntax.seqPos = pos } }
+collectExp AST.Tuple { AST.tupleFields = [], AST.tuplePos = pos } =
+  do
+    internalError "Should not see empty list in AST.Tuple" pos
+    return Syntax.Bad { Syntax.badPos = pos }
+collectExp AST.Tuple { AST.tupleFields = [ single ] } = collectExp single
+collectExp AST.Tuple { AST.tupleFields = fields, AST.tuplePos = pos } =
+  do
+    collectedFields <- mapM collectExp fields
+    return Syntax.Tuple { Syntax.tupleFields = collectedFields,
+                          Syntax.tuplePos = pos }
+-- The remainder of these are straightforward
 collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =
   return Syntax.Sym { Syntax.symRef = sym, Syntax.symPos = pos }
--- The remainder of these are straightforward
 collectExp AST.Abs { AST.absKind = kind, AST.absCases = cases,
                      AST.absPos = pos } =
   do
@@ -697,11 +723,6 @@ collectExp AST.Ascribe { AST.ascribeVal = val, AST.ascribeType = ty,
     return Syntax.Ascribe { Syntax.ascribeVal = collectedVal,
                             Syntax.ascribeType = collectedType,
                             Syntax.ascribePos = pos }
-collectExp AST.Tuple { AST.tupleFields = fields, AST.tuplePos = pos } =
-  do
-    collectedFields <- mapM collectExp fields
-    return Syntax.Tuple { Syntax.tupleFields = collectedFields,
-                          Syntax.tuplePos = pos }
 collectExp AST.Project { AST.projectVal = val, AST.projectFields = fields,
                          AST.projectPos = pos } =
   do
