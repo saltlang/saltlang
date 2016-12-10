@@ -335,18 +335,20 @@ prec_op :: { Ordering }
         | GREATER
             { GT }
 
-precs :: { [(Ordering, Exp)] }
+precs :: { [Prec Exp] }
       : precs PREC prec_op exp
           { let
               content = buildExp $4
+              pos = position $2 <> position content
             in
-              ($3, content) : $1
+              Prec { precOrd = $3, precExp = content, precPos = pos } : $1
           }
       | PREC prec_op exp
           { let
               content = buildExp $3
+              pos = position $1 <> position content
             in
-              [($2, content)]
+              [Prec { precOrd = $2, precExp = content, precPos = pos }]
           }
 
 open_def :: { Element }
@@ -401,7 +403,7 @@ open_def :: { Element }
              { let
                  (idname, _) = $2
                  (fixity, _) = $3
-                 pos = position $1 <> position (snd (head $4))
+                 pos = position $1 <> position (head $4)
                in
                  Syntax { syntaxSym = idname, syntaxFixity = fixity,
                           syntaxPrecs = $4, syntaxPos = pos }
@@ -418,7 +420,7 @@ open_def :: { Element }
          | SYNTAX ident precs
              { let
                  (idname, _) = $2
-                 pos = position $1 <> position (snd (head $3))
+                 pos = position $1 <> position (head $3)
                in
                  Syntax { syntaxSym = idname, syntaxFixity = Prefix,
                           syntaxPrecs = $3, syntaxPos = pos }

@@ -28,12 +28,14 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
-{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, FlexibleContexts,
+             DeriveTraversable, DeriveFoldable, DeriveFunctor #-}
 
 -- | A module containing common structures for both AST and Syntax.
 module Language.Salt.Surface.Common(
        Assoc(..),
        Fixity(..),
+       Prec(..),
        FieldName(..),
        BuilderKind(..),
        ContextKind(..),
@@ -53,6 +55,7 @@ import Control.Monad.State
 import Data.Array
 import Data.ByteString(ByteString)
 import Data.Hashable
+import Data.Hashable.Extras(Hashable1)
 import Data.Ratio
 import Data.Position.BasicPosition
 import Data.PositionElement
@@ -60,6 +63,7 @@ import Data.Symbol
 import Data.Word
 import Language.Salt.Format
 import Prelude hiding (concat)
+import Prelude.Extras(Eq1, Ord1)
 import Text.Format
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
@@ -83,6 +87,19 @@ data Fixity =
     }
   | Postfix
   deriving (Ord, Eq, Show)
+
+-- | A precedence relationship.
+data Prec expty =
+  Prec {
+    -- | The kind of precedence relationship.
+    precOrd :: !Ordering,
+    -- | An expression denoting the symbol to which this relationship
+    -- refers.
+    precExp :: !expty,
+    -- | The position in source from which this arises.
+    precPos :: !Position
+  }
+  deriving (Functor, Foldable, Traversable)
 
 -- | Scope classes.  These define the exact semantics of a scoped
 -- entity declaration.
@@ -211,11 +228,30 @@ getNodeID =
     put $! nodeid + 1
     return ("node" ++ show nodeid)
 
+instance PositionElement (Prec expty) where
+  position Prec { precPos = pos } = pos
+
 instance PositionElement Literal where
   position Num { numPos = pos } = pos
   position Str { strPos = pos } = pos
   position Char { charPos = pos } = pos
   position Unit { unitPos = pos } = pos
+
+instance Eq expty => Eq (Prec expty) where
+  Prec { precOrd = ord1, precExp = exp1 } ==
+    Prec { precOrd = ord2, precExp = exp2 } =
+      ord1 == ord2 && exp1 == exp2
+
+instance Eq1 Prec
+
+instance Ord expty => Ord (Prec expty) where
+  compare Prec { precOrd = ord1, precExp = exp1 }
+          Prec { precOrd = ord2, precExp = exp2 } =
+    case compare ord1 ord2 of
+      EQ -> compare exp1 exp2
+      out -> out
+
+instance Ord1 Prec
 
 literalDot :: Monad m => Literal -> StateT Word m (Doc, String)
 literalDot Num { numVal = num } =
@@ -258,6 +294,12 @@ instance Hashable Fixity where
   hashWithSalt s (Infix assoc) =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` assoc
   hashWithSalt s Postfix = hashWithSalt s (2 :: Int)
+
+instance Hashable expty => Hashable (Prec expty) where
+  hashWithSalt s Prec { precOrd = ord, precExp = ex } =
+    s `hashWithSalt` ord `hashWithSalt` ex
+
+instance Hashable1 Prec
 
 instance Hashable FieldName where
   hashWithSalt s FieldName { fieldSym = sym } = s `hashWithSalt` sym
@@ -328,6 +370,22 @@ instance MonadPositions m => FormatM m Literal where
       posdoc <- formatM pos
       return (compoundApplyDoc (string "Unit") [(string "pos", posdoc)])
 
+instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
+         FormatM m (Prec expty) where
+  formatM Prec { precOrd = ord, precExp = ex, precPos = pos } =
+    let
+      orddoc = case ord of
+        LT -> string "<"
+        EQ -> string "=="
+        GT -> string ">"
+    in do
+      expdoc <- formatM ex
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "Prec")
+                               [(string "pos", posdoc),
+                                (string "ord", orddoc),
+                                (string "exp", expdoc)])
+
 numPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
               PU [NodeG [] tag text] Literal
@@ -389,6 +447,18 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker Unit {} = 3
     in
       xpAlt picker [numPickler, strPickler, charPickler, unitPickler]
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] expty) =>
+         XmlPickler [NodeG [] tag text] (Prec expty) where
+  xpickle = xpWrap (\(ord, (ex, pos)) ->
+                     Prec { precOrd = ord, precExp = ex, precPos = pos },
+                    \Prec { precOrd = ord, precExp = ex, precPos = pos } ->
+                    (ord, (ex, pos)))
+                   (xpElem (gxFromString "Prec")
+                           (xpAttr (gxFromString "order") xpPrim)
+                           (xpPair (xpElemNodes (gxFromString "exp") xpickle)
+                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance Hashable BuilderKind where
   hashWithSalt s = hashWithSalt s . fromEnum

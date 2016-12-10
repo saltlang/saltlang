@@ -208,7 +208,7 @@ data Element =
       -- | Fixity (and associativity).
       syntaxFixity :: !Fixity,
       -- | Precedence relations.
-      syntaxPrecs :: ![(Ordering, Exp)],
+      syntaxPrecs :: ![Prec Exp],
       -- | The position in source from which this arises.
       syntaxPos :: !Position
     }
@@ -1759,21 +1759,10 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
                               (string "pos", posdoc)])
   formatM Syntax { syntaxSym = sym, syntaxFixity = fixity,
                    syntaxPrecs = precs, syntaxPos = pos } =
-    let
-      formatPrec (ord, exp) =
-        let
-          orddoc = case ord of
-            LT -> string "<"
-            EQ -> string "=="
-            GT -> string ">"
-        in do
-          expdoc <- formatM exp
-          return $! compoundApplyDoc (string "Prec") [(string "ord", orddoc),
-                                                      (string "name", expdoc)]
-    in do
+    do
       symdoc <- formatM sym
       posdoc <- formatM pos
-      precdocs <- mapM formatPrec precs
+      precdocs <- mapM formatM precs
       return (compoundApplyDoc (string "Syntax")
                              [(string "sym", symdoc),
                               (string "fixity", format fixity),
@@ -2179,13 +2168,6 @@ importPickler =
                         (xpPair (xpElemNodes (gxFromString "name") xpickle)
                                 (xpElemNodes (gxFromString "pos") xpickle)))
 
-precPickler :: (GenericXMLString tag, Show tag,
-                GenericXMLString text, Show text,
-                XmlPickler [NodeG [] tag text] expty) =>
-              PU [NodeG [] tag text] (Ordering, expty)
-precPickler = xpElem (gxFromString "prec")
-                     (xpAttr (gxFromString "order") xpPrim) xpickle
-
 syntaxPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
                 PU [NodeG [] tag text] Element
@@ -2200,8 +2182,7 @@ syntaxPickler =
              Syntax { syntaxSym = sym, syntaxFixity = fixity,
                       syntaxPrecs = precs, syntaxPos = pos }, revfunc)
            (xpElem (gxFromString "Syntax") (xpPair xpickle xpickle)
-                   (xpPair (xpElemNodes (gxFromString "precs")
-                                        (xpList precPickler))
+                   (xpPair (xpElemNodes (gxFromString "precs") (xpList xpickle))
                            (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>

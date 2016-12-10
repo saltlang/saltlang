@@ -945,13 +945,8 @@ collectElement vis AST.Truth { AST.truthName = sym,
                                 Syntax.truthPos = pos }
 collectElement _ AST.Syntax { AST.syntaxSym = sym, AST.syntaxFixity = fixity,
                               AST.syntaxPrecs = precs, AST.syntaxPos = pos } =
-  let
-    collectPrecs (ordering, exp) =
-      do
-        collectedExp <- collectExp exp
-        return (ordering, collectedExp)
-  in do
-    collectedPrecs <- mapM collectPrecs precs
+  do
+    collectedPrecs <- mapM (mapM collectExp) precs
     addSyntax sym Syntax.Syntax { Syntax.syntaxFixity = fixity,
                                   Syntax.syntaxPrecs = collectedPrecs,
                                   Syntax.syntaxPos = pos }
