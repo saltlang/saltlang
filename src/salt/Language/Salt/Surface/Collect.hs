@@ -1145,8 +1145,8 @@ collectComponents parsefunc files =
     ((), scopes) <- runScopeBuilderT (runReaderT (mapM_ collectOne files) tab)
     -- Check that the scope stack is empty
     comps <- liftIO $! HashTable.foldM foldfun [] tab
-    return $! Syntax.Surface { Syntax.surfScopes = scopes,
-                               Syntax.surfComponents = comps }
+    return $! Syntax.Surface { Syntax.surfaceScopes = scopes,
+                               Syntax.surfaceComponents = comps }
 
 -- | Load a file containing a component
 loadFile :: (MonadIO m, MonadLoader Strict.ByteString Lazy.ByteString m,
@@ -1227,5 +1227,5 @@ collectFiles parsefunc files =
     ((), scopes) <- runScopeBuilderT (runReaderT (mapM_ collectOne files) tab)
     -- Check that the scope stack is empty
     comps <- liftIO $! HashTable.foldM foldfun [] tab
-    return $! Syntax.Surface { Syntax.surfScopes = scopes,
-                               Syntax.surfComponents = comps }
+    return $! Syntax.Surface { Syntax.surfaceScopes = scopes,
+                               Syntax.surfaceComponents = comps }

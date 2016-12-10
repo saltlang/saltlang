@@ -254,8 +254,8 @@ data Apply refty =
   Apply {
     -- | The function being called.
     applyFunc :: !(Exp Apply refty),
-    -- | The arguments.
-    applyArgs :: !(HashMap Symbol (Exp Apply refty)),
+    -- | The argument (this will usually be a record or a tuple).
+    applyArg :: !(Exp Apply refty),
     -- | The position in source from which this arises.
     applyPos :: !Position
   }
@@ -779,15 +779,11 @@ instance Ord expty => Ord (Import expty) where
       out -> out
 
 instance Ord expty => Ord (Apply expty) where
-  compare Apply { applyFunc = func1, applyArgs = args1 }
-          Apply { applyFunc = func2, applyArgs = args2 } =
-    let
-      arglist1 = sort (HashMap.toList args1)
-      arglist2 = sort (HashMap.toList args2)
-    in
-      case compare func1 func2 of
-        EQ -> compare arglist1 arglist2
-        out -> out
+  compare Apply { applyFunc = func1, applyArg = arg1 }
+          Apply { applyFunc = func2, applyArg = arg2 } =
+    case compare func1 func2 of
+      EQ -> compare arg1 arg2
+      out -> out
 
 instance Ord expty => Ord (Compound expty) where
   compare Exp { expVal = exp1 } Exp { expVal = exp2 } = compare exp1 exp2
@@ -1025,11 +1021,8 @@ instance (Ord refty, Hashable refty) => Hashable (Seq refty) where
   hashWithSalt s Seq { seqExps = exps } = s `hashWithSalt` exps
 
 instance (Ord refty, Hashable refty) => Hashable (Apply refty) where
-  hashWithSalt s Apply { applyFunc = func, applyArgs = args } =
-    let
-      arglist = sort (HashMap.toList args)
-    in
-      s `hashWithSalt` func `hashWithSalt` arglist
+  hashWithSalt s Apply { applyFunc = func, applyArg = arg } =
+    s `hashWithSalt` func `hashWithSalt` arg
 
 instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
   hashWithSalt s Option { optionPats = pats } =
@@ -1375,11 +1368,11 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
 
 instance (MonadPositions m, MonadSymbols m, FormatM m refty) =>
          FormatM m (Apply refty) where
-  formatM Apply { applyFunc = func, applyArgs = args, applyPos = pos } =
+  formatM Apply { applyFunc = func, applyArg = args, applyPos = pos } =
     do
       posdoc <- formatM pos
       funcdoc <- formatM func
-      argdocs <- formatMap args
+      argdocs <- formatM args
       return (compoundApplyDoc (string "Call")
                                [(string "pos", posdoc),
                                 (string "func", funcdoc),
@@ -1817,13 +1810,12 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
          XmlPickler [NodeG [] tag text] (Apply refty) where
   xpickle =
     xpWrap (\(func, args, pos) ->
-             Apply { applyFunc = func, applyArgs = args, applyPos = pos },
-            \Apply { applyFunc = func, applyArgs = args, applyPos = pos } ->
+             Apply { applyFunc = func, applyArg = args, applyPos = pos },
+            \Apply { applyFunc = func, applyArg = args, applyPos = pos } ->
             (func, args, pos))
            (xpElemNodes (gxFromString "Apply")
                         (xpTriple (xpElemNodes (gxFromString "func") xpickle)
-                                  (xpElemNodes (gxFromString "args")
-                                               mapPickler)
+                                  (xpElemNodes (gxFromString "args") xpickle)
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
 expPickler :: (GenericXMLString tag, Show tag,
