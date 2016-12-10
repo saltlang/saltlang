@@ -449,6 +449,7 @@ data Exp callty refty =
     }
     -- | Number literal.
   | Literal { literalVal :: !Literal }
+    -- | Placeholder for invalid expressions.
   | Bad { badPos :: !Position }
     deriving (Functor, Foldable, Traversable)
 
