@@ -60,28 +60,15 @@ module Language.Salt.Message(
        -- ** Parser Messages
        parseError,
 
-       noTopLevelDef,
        duplicateField,
        namelessField,
        duplicateTruth,
        duplicateSyntax,
-       badSyntax,
-       badSyntaxKind,
-       badSyntaxName,
-       badSyntaxAssoc,
-       badSyntaxPrec,
-       badSyntaxRef,
-       multipleFixity,
        undefSymbol,
+       noTopLevelDef,
        namelessUninitDef,
        duplicateBuilder,
-       cannotFindFile,
-       cannotFindComponent,
-       cannotAccessFile,
-       cannotAccessComponent,
        badComponentName,
-       cannotCreateFile,
-       cannotCreateArtifact,
        importNestedScope,
        internalError,
        callNonFunc,
@@ -93,8 +80,19 @@ module Language.Salt.Message(
        protectedAccess,
        localAccess,
        objectAccess,
-       patternBindMismatch
-       ) where
+       patternBindMismatch,
+
+       -- ** Precedence Parsing Messages
+       cyclicPrecedence,
+
+       -- ** File Access Messages
+       cannotFindFile,
+       cannotFindComponent,
+       cannotAccessFile,
+       cannotAccessComponent,
+       cannotCreateFile,
+       cannotCreateArtifact,
+) where
 
 import Control.Monad.Messages
 import Control.Monad.Positions
@@ -207,33 +205,6 @@ data Message =
       duplicateTruthName :: !Strict.ByteString,
       duplicateTruthPosList :: ![Position]
     }
-    -- | A bad syntax directive kind.
-  | BadSyntax {
-      badSyntaxPos :: !Position
-    }
-    -- | A bad syntax directive kind.
-  | BadSyntaxKind {
-      badSyntaxKindPos :: !Position
-    }
-    -- | An invalid name in a syntax directive.
-  | BadSyntaxName {
-      badSyntaxNamePos :: !Position
-    }
-    -- | An invalid associativity in a syntax directive.
-  | BadSyntaxAssoc {
-      badSyntaxAssocPos :: !Position
-    }
-    -- | An invalid precedence relation in a syntax directive.
-  | BadSyntaxPrec {
-      badSyntaxPrecPos :: !Position
-    }
-    -- | An invalid reference in a syntax directive
-  | BadSyntaxRef {
-      badSyntaxRefPos :: !Position
-    }
-  | MultipleFixity {
-      multipleFixityPos :: !Position
-    }
     -- | Reference to undefined symbol
   | UndefSymbol {
       undefSymbolSym :: !Strict.ByteString,
@@ -331,6 +302,9 @@ data Message =
   | PatternBindMismatch {
       patternBindMismatchPos :: ![Position],
       patternBindMismatchSym :: !Strict.ByteString
+    }
+  | CyclicPrecedence {
+      cyclicPrecedencePos :: ![Position]
     }
 {-
   -- | An error message representing an undefined proposition in the
@@ -435,116 +409,69 @@ instance Hashable Message where
   hashWithSalt s DuplicateTruth { duplicateTruthName = sym,
                                   duplicateTruthPosList = pos } =
     s `hashWithSalt` (16 :: Int) `hashWithSalt` sym `hashWithSalt` pos
-  hashWithSalt s BadSyntax { badSyntaxPos = pos } =
-    s `hashWithSalt` (17 :: Int) `hashWithSalt` pos
-  hashWithSalt s BadSyntaxKind { badSyntaxKindPos = pos } =
-    s `hashWithSalt` (18 :: Int) `hashWithSalt` pos
-  hashWithSalt s BadSyntaxName { badSyntaxNamePos = pos } =
-    s `hashWithSalt` (19 :: Int) `hashWithSalt` pos
-  hashWithSalt s BadSyntaxAssoc { badSyntaxAssocPos = pos } =
-    s `hashWithSalt` (20 :: Int) `hashWithSalt` pos
-  hashWithSalt s BadSyntaxPrec { badSyntaxPrecPos = pos } =
-    s `hashWithSalt` (21 :: Int) `hashWithSalt` pos
-  hashWithSalt s BadSyntaxRef { badSyntaxRefPos = pos } =
-    s `hashWithSalt` (22 :: Int) `hashWithSalt` pos
-  hashWithSalt s MultipleFixity { multipleFixityPos = pos } =
-    s `hashWithSalt` (23 :: Int) `hashWithSalt` pos
   hashWithSalt s UndefSymbol { undefSymbolSym = sym, undefSymbolPos = pos } =
-    s `hashWithSalt` (24 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+    s `hashWithSalt` (17 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s NamelessUninitDef { namelessUninitDefPos = pos } =
-    s `hashWithSalt` (25 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (18 :: Int) `hashWithSalt` pos
   hashWithSalt s DuplicateBuilder { duplicateBuilderName = sym,
                                     duplicateBuilderPosList = pos } =
-    s `hashWithSalt` (26 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+    s `hashWithSalt` (19 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s CannotFind { cannotFindName = cname,
                               cannotFindIsFileName = isfile,
                               cannotFindPos = pos } =
-    s `hashWithSalt` (27 :: Int) `hashWithSalt`
+    s `hashWithSalt` (20 :: Int) `hashWithSalt`
     cname `hashWithSalt` isfile `hashWithSalt` pos
   hashWithSalt s CannotAccess { cannotAccessName = cname,
                                 cannotAccessFileName = filename,
                                 cannotAccessMsg = msg,
                                 cannotAccessPos = pos } =
-    s `hashWithSalt` (28 :: Int) `hashWithSalt` cname `hashWithSalt`
+    s `hashWithSalt` (21 :: Int) `hashWithSalt` cname `hashWithSalt`
     filename `hashWithSalt` msg `hashWithSalt` pos
   hashWithSalt s BadComponentName { badComponentNameExpected = expected,
                                     badComponentNameActual = actual,
                                     badComponentNamePos = pos } =
-    s `hashWithSalt` (29 :: Int) `hashWithSalt`
+    s `hashWithSalt` (22 :: Int) `hashWithSalt`
     expected `hashWithSalt` actual `hashWithSalt` pos
   hashWithSalt s CannotCreate { cannotCreateName = cname,
                                 cannotCreateFileName = filename,
                                 cannotCreateMsg = msg } =
-    s `hashWithSalt` (30 :: Int) `hashWithSalt`
+    s `hashWithSalt` (23 :: Int) `hashWithSalt`
     cname `hashWithSalt` filename `hashWithSalt` msg
   hashWithSalt s ImportNestedScope { importNestedScopePos = pos } =
-    s `hashWithSalt` (31 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (24 :: Int) `hashWithSalt` pos
   hashWithSalt s InternalError { internalErrorPos = pos } =
-    s `hashWithSalt` (32 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (25 :: Int) `hashWithSalt` pos
   hashWithSalt s CallNonFunc { callNonFuncPos = pos } =
-    s `hashWithSalt` (33 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (26 :: Int) `hashWithSalt` pos
   hashWithSalt s NoMatch { noMatchPos = pos } =
-    s `hashWithSalt` (34 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (27 :: Int) `hashWithSalt` pos
   hashWithSalt s ExpectedFunc { expectedFuncPos = pos } =
-    s `hashWithSalt` (35 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (28 :: Int) `hashWithSalt` pos
   hashWithSalt s CyclicImport { cyclicImportPos = pos } =
-    s `hashWithSalt` (36 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (29 :: Int) `hashWithSalt` pos
   hashWithSalt s CyclicInherit { cyclicInheritPos = pos } =
-    s `hashWithSalt` (37 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (30 :: Int) `hashWithSalt` pos
   hashWithSalt s IllegalAccess { illegalAccessPos = pos } =
-    s `hashWithSalt` (38 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (31 :: Int) `hashWithSalt` pos
   hashWithSalt s OutOfContext { outOfContextPos = pos } =
-    s `hashWithSalt` (39 :: Int) `hashWithSalt` pos
+    s `hashWithSalt` (32 :: Int) `hashWithSalt` pos
   hashWithSalt s DuplicateSyntax { duplicateSyntaxName = sym,
                                    duplicateSyntaxPosList = pos } =
-    s `hashWithSalt` (40 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+    s `hashWithSalt` (33 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s PatternBindMismatch { patternBindMismatchPos = pos,
                                        patternBindMismatchSym = sym } =
-    s `hashWithSalt` (41 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+    s `hashWithSalt` (34 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+  hashWithSalt s CyclicPrecedence { cyclicPrecedencePos = pos } =
+    s `hashWithSalt` (35 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
-  severity BadChars {} = Msg.Error
-  severity BadEscape {} = Msg.Error
-  severity LongCharLiteral {} = Msg.Error
-  severity NewlineCharLiteral {} = Msg.Error
-  severity TabCharLiteral {} = Msg.Error
-  severity EmptyCharLiteral {} = Msg.Error
-  severity UntermComment {} = Msg.Error
-  severity TabStringLiteral {} = Msg.Error
-  severity UntermString {} = Msg.Error
   severity HardTabs {} = Msg.Warning
   severity TrailingWhitespace {} = Msg.Warning
-  severity NewlineInString {} = Msg.Error
-  severity ParseError {} = Msg.Error
-  severity NoTopLevelDef {} = Msg.Error
-  severity DuplicateField {} = Msg.Error
-  severity NamelessField {} = Msg.Error
-  severity DuplicateTruth {} = Msg.Error
-  severity BadSyntax {} = Msg.Error
-  severity BadSyntaxKind {} = Msg.Error
-  severity BadSyntaxName {} = Msg.Error
-  severity BadSyntaxAssoc {} = Msg.Error
-  severity BadSyntaxPrec {} = Msg.Error
-  severity BadSyntaxRef {} = Msg.Error
-  severity MultipleFixity {} = Msg.Error
-  severity UndefSymbol {} = Msg.Error
   severity NamelessUninitDef {} = Msg.Warning
-  severity DuplicateBuilder {} = Msg.Error
-  severity CannotFind {} = Msg.Error
-  severity CannotAccess {} = Msg.Error
-  severity BadComponentName {} = Msg.Error
-  severity CannotCreate {} = Msg.Error
-  severity ImportNestedScope {} = Msg.Error
   severity InternalError {} = Msg.Internal
   severity CallNonFunc {} = Msg.Internal
   severity NoMatch {} = Msg.Internal
-  severity ExpectedFunc {} = Msg.Error
-  severity CyclicImport {} = Msg.Error
-  severity CyclicInherit {} = Msg.Error
-  severity IllegalAccess {} = Msg.Error
-  severity OutOfContext {} = Msg.Error
-  severity DuplicateSyntax {} = Msg.Error
-  severity PatternBindMismatch {} = Msg.Error
+  severity _ = Msg.Error
 
   brief BadChars { badCharsContent = chrs }
     | Lazy.length chrs == 1 = string "Invalid character" <+>
@@ -572,13 +499,6 @@ instance Msg.Message Message where
   brief NamelessField {} = string "Field binding has no name"
   brief DuplicateTruth { duplicateTruthName = namestr } =
     string "Duplicate truth definition" <+> bytestring namestr
-  brief BadSyntax {} = string "Invalid syntax directive"
-  brief BadSyntaxKind {} = string "Invalid syntax directive"
-  brief BadSyntaxName {} = string "Invalid syntax directive"
-  brief BadSyntaxAssoc {} = string "Invalid syntax directive"
-  brief BadSyntaxPrec {} = string "Invalid syntax directive"
-  brief BadSyntaxRef {} = string "Invalid syntax directive"
-  brief MultipleFixity {} = string "Multiple fixity directives"
   brief UndefSymbol { undefSymbolSym = namestr } =
     string "Undefined symbol" <+> bytestring namestr
   brief NamelessUninitDef {} =
@@ -620,6 +540,7 @@ instance Msg.Message Message where
   brief PatternBindMismatch { patternBindMismatchSym = sym } =
     string "Symbol " <+> bytestring sym <+>
     string " is not defined by other options in the pattern"
+  brief CyclicPrecedence {} = string "Conflicting precedence directives"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -627,14 +548,6 @@ instance Msg.Message Message where
     Just $! string "Use of hard tabs is discouraged; use spaces instead."
   details LongCharLiteral {} =
     Just $! string "Use a string literal to represent multiple characters"
-  details BadSyntaxKind {} =
-    Just $! string "Expected \"infix\", \"postfix\", or \"prec\""
-  details BadSyntaxName {} = Just $! string "Expected a name here"
-  details BadSyntaxAssoc {} =
-    Just $! string "Expected \"left\", \"right\", or \"nonassoc\""
-  details BadSyntaxPrec {} =
-    Just $! string "Expected \">\", \"<\", or \"==\""
-  details BadSyntaxRef {} = Just $! string "Expected a name here"
   details CannotAccess { cannotAccessName = Nothing,
                          cannotAccessMsg = msg } =
     Just $! string "Error while accessing file:" </> bytestring msg
@@ -668,6 +581,8 @@ instance Msg.Message Message where
     Just $! fillSep [string "value", term, string "is not a function"]
   details NoMatch { noMatchTerm = term } =
     Just $! fillSep [string "value", term, string "could not be matched"]
+  details CyclicPrecedence {} =
+    Just $! string "These precedence directives form one or more cycles"
   details _ = Nothing
 
   highlighting HardTabs {} = Msg.Background
@@ -693,13 +608,6 @@ instance Msg.MessagePosition BasicPosition Message where
   positions DuplicateField { duplicateFieldPosList = poslist } = poslist
   positions NamelessField { namelessFieldPos = pos } = [pos]
   positions DuplicateTruth { duplicateTruthPosList = poslist } = poslist
-  positions BadSyntax { badSyntaxPos = pos } = [pos]
-  positions BadSyntaxKind { badSyntaxKindPos = pos } = [pos]
-  positions BadSyntaxName { badSyntaxNamePos = pos } = [pos]
-  positions BadSyntaxAssoc { badSyntaxAssocPos = pos } = [pos]
-  positions BadSyntaxPrec { badSyntaxPrecPos = pos } = [pos]
-  positions BadSyntaxRef { badSyntaxRefPos = pos } = [pos]
-  positions MultipleFixity { multipleFixityPos = pos } = [pos]
   positions UndefSymbol { undefSymbolPos = pos } = [pos]
   positions NamelessUninitDef { namelessUninitDefPos = pos } = [pos]
   positions DuplicateBuilder { duplicateBuilderPosList = poslist } = poslist
@@ -708,7 +616,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions BadComponentName { badComponentNamePos = pos } = [pos]
   positions CannotCreate {} = []
   positions ImportNestedScope { importNestedScopePos = pos } = [pos]
-  positions InternalError { internalErrorPos = pos } = pos
+  positions InternalError { internalErrorPos = poslist } = poslist
   positions CallNonFunc { callNonFuncPos = pos } = [pos]
   positions NoMatch { noMatchPos = pos } = [pos]
   positions ExpectedFunc { expectedFuncPos = pos } = [pos]
@@ -718,6 +626,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions OutOfContext { outOfContextPos = pos } = [pos]
   positions DuplicateSyntax { duplicateSyntaxPosList = poslist } = poslist
   positions PatternBindMismatch { patternBindMismatchPos = poslist } = poslist
+  positions CyclicPrecedence { cyclicPrecedencePos = poslist } = poslist
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -867,55 +776,6 @@ duplicateTruth sym poslist =
     str <- name sym
     message DuplicateTruth { duplicateTruthName = str,
                              duplicateTruthPosList = poslist }
-
--- | Report a bad syntax directive.
-badSyntax :: MonadMessages Message m =>
-             Position
-          -- ^ The position at which the bad syntax kind occurs.
-          -> m ()
-badSyntax pos = message BadSyntax { badSyntaxPos = pos }
-
--- | Report a bad syntax directive.
-badSyntaxKind :: MonadMessages Message m =>
-                 Position
-              -- ^ The position at which the bad syntax kind occurs.
-              -> m ()
-badSyntaxKind pos = message BadSyntaxKind { badSyntaxKindPos = pos }
-
--- | Report a bad syntax directive.
-badSyntaxName :: MonadMessages Message m =>
-                 Position
-              -- ^ The position at which the bad syntax name occurs.
-              -> m ()
-badSyntaxName pos = message BadSyntaxName { badSyntaxNamePos = pos }
-
--- | Report a bad associativity syntax directive.
-badSyntaxAssoc :: MonadMessages Message m =>
-                 Position
-              -- ^ The position at which the bad syntax associativity occurs.
-              -> m ()
-badSyntaxAssoc pos = message BadSyntaxAssoc { badSyntaxAssocPos = pos }
-
--- | Report a bad precedence in a syntax directive.
-badSyntaxPrec :: MonadMessages Message m =>
-                 Position
-              -- ^ The position at which the bad syntax precedence occurs.
-              -> m ()
-badSyntaxPrec pos = message BadSyntaxPrec { badSyntaxPrecPos = pos }
-
--- | Report a bad reference syntax directive.
-badSyntaxRef :: MonadMessages Message m =>
-                Position
-             -- ^ The position at which the bad syntax name occurs.
-             -> m ()
-badSyntaxRef pos = message BadSyntaxRef { badSyntaxRefPos = pos }
-
--- | Report a bad reference syntax directive.
-multipleFixity :: MonadMessages Message m =>
-                  Position
-               -- ^ The position at which the bad syntax name occurs.
-               -> m ()
-multipleFixity pos = message MultipleFixity { multipleFixityPos = pos }
 
 -- | Report an undefined symbol.
 undefSymbol :: (MonadMessages Message m, MonadSymbols m) =>
@@ -1231,3 +1091,9 @@ patternBindMismatch sym poslist =
     str <- name sym
     message PatternBindMismatch { patternBindMismatchSym = str,
                                   patternBindMismatchPos = poslist }
+
+cyclicPrecedence :: (MonadMessages Message m, MonadSymbols m) =>
+                    [Position]
+                 -- ^ The position at which the inheritance occurs.
+                 -> m ()
+cyclicPrecedence pos = message CyclicPrecedence { cyclicPrecedencePos = pos }
