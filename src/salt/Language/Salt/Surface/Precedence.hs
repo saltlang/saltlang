@@ -99,11 +99,11 @@ parse :: MonadMessages Message m =>
 -- Report errors for empty and singleton lists
 parse Seq { seqExps = [], seqPos = seqpos } =
   do
-    internalError "Should not see empty list in Seq" seqpos
+    internalError "Should not see empty list in Seq" [seqpos]
     return Bad { badPos = seqpos }
 parse Seq { seqExps = [_], seqPos = seqpos } =
   do
-    internalError "Should not see singeton list in Seq" seqpos
+    internalError "Should not see singeton list in Seq" [seqpos]
     return Bad { badPos = seqpos }
 parse Seq { seqExps = exps, seqPos = seqpos } =
   let
@@ -113,7 +113,7 @@ parse Seq { seqExps = exps, seqPos = seqpos } =
     -- Report errors for invalid cases
     parseFirst [] =
       do
-        internalError "Should not see empty list here" seqpos
+        internalError "Should not see empty list here" [seqpos]
         return Bad { badPos = seqpos }
     -- Check the fixity and decide what to do
     parseFirst l @ (first : rest) =
