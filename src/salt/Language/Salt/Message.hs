@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -42,6 +42,8 @@
 -- of message output in a robust fashion.
 module Language.Salt.Message(
        Message,
+
+       -- ** Lexer Messages
        badChars,
        badEscape,
        newlineCharLiteral,
@@ -54,7 +56,10 @@ module Language.Salt.Message(
        hardTabs,
        trailingWhitespace,
        newlineInString,
+
+       -- ** Parser Messages
        parseError,
+
        noTopLevelDef,
        duplicateField,
        namelessField,
@@ -294,7 +299,7 @@ data Message =
     -- ession.
   | InternalError {
       internalErrorStr :: !Strict.ByteString,
-      internalErrorPos :: !Position
+      internalErrorPos :: ![Position]
     }
   | CallNonFunc {
       callNonFuncTerm :: !Doc,
@@ -703,7 +708,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions BadComponentName { badComponentNamePos = pos } = [pos]
   positions CannotCreate {} = []
   positions ImportNestedScope { importNestedScopePos = pos } = [pos]
-  positions InternalError { internalErrorPos = pos } = [pos]
+  positions InternalError { internalErrorPos = pos } = pos
   positions CallNonFunc { callNonFuncPos = pos } = [pos]
   positions NoMatch { noMatchPos = pos } = [pos]
   positions ExpectedFunc { expectedFuncPos = pos } = [pos]
@@ -1068,7 +1073,7 @@ importNestedScope pos = message ImportNestedScope { importNestedScopePos = pos }
 internalError :: MonadMessages Message m =>
                  Strict.ByteString
               -- ^ An explanation of the problem
-              -> Position
+              -> [Position]
               -- ^ The position at which the nameless field occurs.
               -> m ()
 internalError str pos = message InternalError { internalErrorStr = str,

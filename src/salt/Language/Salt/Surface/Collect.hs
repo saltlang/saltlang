@@ -140,7 +140,7 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
       -- Otherwise, we have a namespace collision.
       collapseBuilders accum (_, []) =
         do
-          internalError "Empty builder list!" pos
+          internalError "Empty builder list" [pos]
           return accum
       collapseBuilders accum (sym, [single]) =
         return $! HashMap.insert sym single accum
@@ -151,7 +151,7 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
 
       collapseTruths accum (_, []) =
         do
-          internalError "Empty truth list!" pos
+          internalError "Empty truth list" [pos]
           return accum
       collapseTruths accum (sym, [single]) =
         return $! HashMap.insert sym single accum
@@ -162,7 +162,7 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
 
       collapseSyntax accum (_, []) =
         do
-          internalError "Empty syntax list!" pos
+          internalError "Empty syntax list" [pos]
           return accum
       collapseSyntax accum (sym, [single]) =
         return $! HashMap.insert sym single accum
@@ -468,7 +468,7 @@ collectPattern pat =
       let
         collapseField accum (_, []) =
           do
-            internalError "Empty field list!" pos
+            internalError "Empty field list" [pos]
             return accum
         collapseField accum (sym, [single]) =
           return $! HashMap.insert sym single accum
@@ -640,7 +640,7 @@ collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
                                                                Symbol))
     collapseField accum (_, []) =
       do
-        internalError (Strict.fromString "Empty field list") pos
+        internalError (Strict.fromString "Empty field list") [pos]
         return accum
     collapseField accum (fname, [single]) =
       return $! HashMap.insert fname single accum
@@ -678,7 +678,7 @@ collectExp AST.Record { AST.recordType = True, AST.recordFields = fields,
 -- turn singleton lists into standalone expressions.
 collectExp AST.Seq { AST.seqExps = [], AST.seqPos = pos } =
   do
-    internalError "Should not see empty list in AST.Seq" pos
+    internalError "Should not see empty list in AST.Seq" [pos]
     return Syntax.Bad { Syntax.badPos = pos }
 collectExp AST.Seq { AST.seqExps = [ single ] } = collectExp single
 collectExp AST.Seq { AST.seqExps = exps, AST.seqPos = pos } =
@@ -689,7 +689,7 @@ collectExp AST.Seq { AST.seqExps = exps, AST.seqPos = pos } =
                                         Syntax.seqPos = pos } }
 collectExp AST.Tuple { AST.tupleFields = [], AST.tuplePos = pos } =
   do
-    internalError "Should not see empty list in AST.Tuple" pos
+    internalError "Should not see empty list in AST.Tuple" [pos]
     return Syntax.Bad { Syntax.badPos = pos }
 collectExp AST.Tuple { AST.tupleFields = [ single ] } = collectExp single
 collectExp AST.Tuple { AST.tupleFields = fields, AST.tuplePos = pos } =
@@ -775,7 +775,7 @@ collectFields fields fieldspos =
     -- the lists have more than one element.
     collapseField accum (_, []) =
       do
-        internalError (Strict.fromString "Empty field list") fieldspos
+        internalError (Strict.fromString "Empty field list") [fieldspos]
         return accum
     collapseField accum (fname, [single]) =
       return $! HashMap.insert fname single accum
