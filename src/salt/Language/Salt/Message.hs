@@ -84,6 +84,7 @@ module Language.Salt.Message(
 
        -- ** Precedence Parsing Messages
        cyclicPrecedence,
+       precedenceParseError,
 
        -- ** File Access Messages
        cannotFindFile,
@@ -306,6 +307,9 @@ data Message =
   | CyclicPrecedence {
       cyclicPrecedencePos :: ![Position]
     }
+  | PrecedenceParseError {
+      precParseErrorPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -463,6 +467,8 @@ instance Hashable Message where
     s `hashWithSalt` (34 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s CyclicPrecedence { cyclicPrecedencePos = pos } =
     s `hashWithSalt` (35 :: Int) `hashWithSalt` pos
+  hashWithSalt s PrecedenceParseError { precParseErrorPos = pos } =
+    s `hashWithSalt` (36 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity HardTabs {} = Msg.Warning
@@ -541,6 +547,7 @@ instance Msg.Message Message where
     string "Symbol " <+> bytestring sym <+>
     string " is not defined by other options in the pattern"
   brief CyclicPrecedence {} = string "Conflicting precedence directives"
+  brief PrecedenceParseError {} = string "Syntax error"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -627,6 +634,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions DuplicateSyntax { duplicateSyntaxPosList = poslist } = poslist
   positions PatternBindMismatch { patternBindMismatchPos = poslist } = poslist
   positions CyclicPrecedence { cyclicPrecedencePos = poslist } = poslist
+  positions PrecedenceParseError { precParseErrorPos = pos } = [pos]
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1092,8 +1100,17 @@ patternBindMismatch sym poslist =
     message PatternBindMismatch { patternBindMismatchSym = str,
                                   patternBindMismatchPos = poslist }
 
+-- | Report cyclic precedence directives
 cyclicPrecedence :: (MonadMessages Message m, MonadSymbols m) =>
                     [Position]
                  -- ^ The position at which the inheritance occurs.
                  -> m ()
 cyclicPrecedence pos = message CyclicPrecedence { cyclicPrecedencePos = pos }
+
+-- | Report cyclic precedence directives
+precedenceParseError :: (MonadMessages Message m, MonadSymbols m) =>
+                        Position
+                     -- ^ The position at which the inheritance occurs.
+                     -> m ()
+precedenceParseError pos =
+  message PrecedenceParseError { precParseErrorPos = pos }
