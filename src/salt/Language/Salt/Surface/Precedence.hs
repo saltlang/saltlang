@@ -40,6 +40,8 @@ module Language.Salt.Surface.Precedence(
 
 import Control.Monad
 import Control.Monad.Messages.Class
+import Control.Monad.Reader
+import Control.Monad.State
 import Control.Monad.Symbols.Class
 import Control.Monad.Trans
 import Data.Equivs.Monad(Equivs)
@@ -49,7 +51,9 @@ import Data.Graph.Inductive.Query.DFS
 import Data.HashTable.IO(BasicHashTable)
 import Data.HashMap.Strict(HashMap)
 import Data.HashSet(HashSet)
+import Data.PositionElement
 import Data.ScopeID
+import Data.Semigroup((<>))
 import Data.Symbol
 import Language.Salt.Message
 import Language.Salt.Surface.Common
@@ -61,84 +65,232 @@ import qualified Data.HashMap.Strict as HashMap
 import qualified Data.HashSet as HashSet
 import qualified Data.HashTable.IO as HashTable
 
--- XXX Do we want a monad to carry along the scope information with
--- us?  This seems likely to be useful in other places (like
--- transliteration), so it maybe ought to be moved out to
--- Control.Monad
+data ParserData =
+  ParserData {
+    -- | A map of fixities for all 'Ref's.  Any definition rot
+    -- represented has prefix fixity.
+    parserFixities :: !(BasicHashTable Ref Fixity),
+    -- | A map from 'Ref's to 'Node's in the graph.
+    parserNodeMap :: !(BasicHashTable Ref Node),
+    -- | A graph, where an edge from @a@ to @b@ means @a@ has lower
+    -- precedence than @b@.
+    parserPrecs :: !(Gr () ())
+  }
 
 data PDAState =
-    Begin
-
--- | The push-down automaton state for our parser.
-data PDAData =
-  PDAData {
-    -- | The PDA stack
-    pdaStack :: ![Exp Apply Ref],
-    -- | The current precedence level.
-    pdaLevel :: !Ref,
-    -- | The current state (note that this combined with the
-    -- precedence level completely describes the state in a pure PDA
-    -- sense).
-    pdaState :: !PDAState
+  PDAState {
+    pdaStack :: ![(Ordering, Production)]
   }
+
+data Production =
+    -- | A right-partial call (ex. (+ 1)
+    PartialRight {
+      rightArg :: !(Exp Apply Ref),
+      rightOp :: !Ref,
+      rightPos :: !Position
+    }
+    -- | A left-partial call (ex. (+ 1)
+  | PartialLeft {
+      leftArg :: !(Exp Apply Ref),
+      leftOp :: !Ref,
+      leftPos :: !Position
+    }
+  | InfixOp {
+      infixOp :: !Ref,
+      infixPos :: !Position
+    }
+  | PostfixOp {
+      postfixOp :: !Ref,
+      postfixPos :: !Position
+    }
+  | Atom { atomExp :: !(Exp Apply Ref) }
+
+instance PositionElement Production where
+  position PartialRight { rightPos = pos } = pos
+  position PartialLeft { leftPos = pos } = pos
+  position InfixOp { infixPos = pos } = pos
+  position PostfixOp { postfixPos = pos } = pos
+  position Atom { atomExp = ex } = position ex
+
+type ParserDataT m = ReaderT ParserData m
+type ParserT m = StateT PDAState m
+
+runParserDataT :: Monad m =>
+                  ParserDataT m a
+               -> ParserData
+               -> m a
+runParserDataT = runReaderT
 
 -- | Get the fixity of an expression.  All expressions other than
 -- 'Ref's have prefix fixity
-fixity :: Monad m =>
-          Exp Apply Ref
-       -> m Fixity
+production :: (MonadIO m, MonadReader ParserData m) =>
+              Exp Apply Ref
+           -> m Production
 -- For a 'Sym', look up the syntax directive
-fixity Sym {} = _
--- Everything else is assumed to be a function value
-fixity _ = return Prefix
+production ex @ Sym { symRef = ref, symPos = pos } =
+  do
+    ParserData { parserFixities = fixity } <- ask
+    res <- liftIO (HashTable.lookup fixity ref)
+    case res of
+      -- For postfix and infix, make the symbol an operator
+      Just Postfix -> return PostfixOp { postfixOp = ref, postfixPos = pos }
+      Just Infix {} -> return InfixOp { infixOp = ref, infixPos = pos }
+      -- Prefix symbols are just atoms.
+      Just Prefix -> return Atom { atomExp = ex }
+      -- By default, everything is an atom.
+      Nothing -> return Atom { atomExp = ex }
+-- Everything else is an atom.
+production ex = return Atom { atomExp = ex }
+
+comparePrec :: (MonadMessages Message m, MonadSymbols m,
+                MonadReader ParserData m, MonadIO m) =>
+               Production
+            -> Production
+            -> m Ordering
+comparePrec left right = _
+
+reduce :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+          [(Production, Ordering)]
+       -> ParserDataT m [(Production, Ordering)]
+-- Throw an error here; we will loop forever on this
+reduce [] = error "Cannot reduce empty stack"
+reduce stack =
+  let
+    (pivot, rest) = span ((== LT) . snd) stack
+
+    push prod = case rest of
+      [] -> return [(prod, LT)]
+      ((top, _) : _) ->
+        do
+          ord <- comparePrec prod top
+          return ((prod, ord) : rest)
+  in
+    case pivot of
+      -- Throw an error here; we will loop forever on these
+      [] -> error "Empty pivot should not happen"
+      [(Atom {}, _)] -> error "Attempt to reduce a single atom"
+      -- Turn partial calls into atoms
+      [(PartialRight {}, _)] -> _
+      [(PartialLeft {}, _)] -> _
+      -- Postfix call
+      [(PostfixOp { postfixOp = ref, postfixPos = pos }, _),
+       (Atom { atomExp = arg }, _)] ->
+        let
+          func = Sym { symRef = ref, symPos = pos }
+          apply = Apply { applyFunc = func, applyArg = arg,
+                          applyPos = pos <> position arg }
+          call = Call { callInfo = apply }
+        in
+          push Atom { atomExp = call }
+      -- Prefix call
+      [(Atom { atomExp = arg }, _),
+       (Atom { atomExp = func }, _)] ->
+        let
+          apply = Apply { applyFunc = func, applyArg = arg,
+                          applyPos = position func <> position arg }
+          call = Call { callInfo = apply }
+        in
+          push Atom { atomExp = call }
+      -- Right partial call
+      [(Atom { atomExp = right }, _),
+       (InfixOp { infixOp = ref, infixPos = oppos }, _)] ->
+        let
+          pos = oppos <> position right
+        in
+          push PartialRight { rightOp = ref, rightArg = right, rightPos = pos }
+      -- Left partial call
+      [(InfixOp { infixOp = ref, infixPos = oppos }, _),
+       (Atom { atomExp = left }, _)] ->
+        let
+          pos = oppos <> position left
+        in
+          push PartialRight { rightOp = ref, rightArg = left, rightPos = pos }
+      -- Infix call
+      [(Atom { atomExp = right }, _),
+       (InfixOp { infixOp = ref, infixPos = sympos }, _),
+       (Atom { atomExp = left }, _)] ->
+        let
+          pos = position left <> position right
+          func = Sym { symRef = ref, symPos = pos }
+          tuple = Tuple { tupleFields = [left, right], tuplePos = pos }
+          apply = Apply { applyFunc = func, applyArg = tuple, applyPos = pos }
+          call = Call { callInfo = apply }
+        in
+          push Atom { atomExp = call }
+      -- Partial call concatenation
+      [(PartialLeft {}, _),
+       (InfixOp { infixOp = ref, infixPos = sympos }, _),
+       (Atom { atomExp = left }, _)] -> _
+      [(Atom { atomExp = right }, _),
+       (InfixOp { infixOp = ref, infixPos = sympos }, _),
+       (PartialRight {}, _)] -> _
+      -- Anything else is a parse error
+      _ ->
+        let
+          pos = position (fst (last pivot)) <> position (fst (head pivot))
+        in do
+          -- Report the error and push a bad production
+          precedenceParseError pos
+          push Atom { atomExp = Bad { badPos = pos } }
+
+
+-- | Control function for the simple precedence parser.
+parse :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+         [Exp Apply Ref]
+      -- ^ The input stream
+      -> [(Production, Ordering)]
+      -- ^ The parser stack
+      -> ParserDataT m (Exp Apply Ref)
+-- Terminating condition: we have one Atom element on the stack.
+parse [] [(Atom { atomExp = exp }, _)] = return exp
+-- If we run out of inputs, keep reducing the stack until we hit one Atom.
+parse [] stack =
+  do
+    newstack <- reduce stack
+    parse [] newstack
+-- If the stack is empty, we always shift
+parse (first : rest) [] =
+  do
+    prod <- production first
+    parse rest [(prod, LT)]
+-- Otherwise, determine the action by comparing precedence
+parse input @ (first : rest) stack @ ((top, _) : _) =
+  do
+    prod <- production first
+    ord <- comparePrec prod top
+    case ord of
+      GT ->
+        do
+          newstack <- reduce stack
+          parse input newstack
+      -- Otherwise, shift
+      _ -> parse rest ((prod, ord) : stack)
+
 
 -- | Parse a Seq into an Apply-based structure
-parse :: MonadMessages Message m =>
-         Seq Ref
-      -> m (Exp Apply Ref)
+parseExp :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+            Seq Ref
+         -> ParserDataT m (Exp Apply Ref)
 -- Report errors for empty and singleton lists
-parse Seq { seqExps = [], seqPos = seqpos } =
+parseExp Seq { seqExps = [], seqPos = seqpos } =
   do
     internalError "Should not see empty list in Seq" [seqpos]
     return Bad { badPos = seqpos }
-parse Seq { seqExps = [_], seqPos = seqpos } =
+parseExp Seq { seqExps = [_], seqPos = seqpos } =
   do
     internalError "Should not see singeton list in Seq" [seqpos]
     return Bad { badPos = seqpos }
-parse Seq { seqExps = exps, seqPos = seqpos } =
-  let
-    parseFirst :: MonadMessages Message m =>
-                  [Exp Apply Ref]
-               -> m (Exp Apply Ref)
-    -- Report errors for invalid cases
-    parseFirst [] =
-      do
-        internalError "Should not see empty list here" [seqpos]
-        return Bad { badPos = seqpos }
-    -- Check the fixity and decide what to do
-    parseFirst l @ (first : rest) =
-      do
-        fix <- fixity first
-        case fix of
-          Prefix -> _
-          -- For an infix expression, we might be looking at a partial
-          -- application.
-          Infix {} -> _
-          -- Postfix symbols should have been singletons, which would
-          -- have been turned into standalone expressions.  Report a
-          -- parse error.
-          Postfix {} -> _
-
-  in do
+parseExp Seq { seqExps = exps, seqPos = seqpos } =
+  do
     newexps <- mapM doExp exps
-    parseFirst newexps
+    parse newexps []
 
 -- | Convert an 'Exp' based on 'Seq's to one based on 'Apply'.
-doExp :: MonadMessages Message m =>
+doExp :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
          Exp Seq Ref
-      -> m (Exp Apply Ref)
+      -> ParserDataT m (Exp Apply Ref)
 -- Calls invoke the parser
-doExp c @ Call { callInfo = info } = parse info
+doExp c @ Call { callInfo = info } = parseExp info
 -- Everything else is constructive
 doExp c @ Compound { compoundBody = body } =
   do
@@ -274,7 +426,9 @@ scanScope equivs edges fixities (scopeid, Scope { scopeSyntax = syntax }) =
 -- syntax directives in each scope.
 precedence :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
               Surface (Exp Seq Ref)
+           -- ^ Surface syntax structure to transform.
            -> m (Surface (Exp Apply Ref))
+           -- ^ Transformed surface syntax structure.
 precedence s @ Surface { surfaceScopes = scopes } =
   let
     buildGraph :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
@@ -312,40 +466,11 @@ precedence s @ Surface { surfaceScopes = scopes } =
         edgelist <- foldM (foldfun nodemap) [] edges
         return (mkGraph nodes edgelist, nodemap)
 
-    -- | Scan all scopes for equality precedence directives, build
-    -- equivalence classes over all those symbols, map those to 'Node' IDs
-    -- for the graph.
-    buildSyntaxInfo :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                       m (Gr (HashSet Position) (HashSet Position),
-                          BasicHashTable Ref Node,
-                          BasicHashTable Ref Fixity)
-    buildSyntaxInfo =
-      let
-        mapfun ((refs, pos), node) = (zip refs (repeat node), (node, pos))
-        ascending = iterate (+1) 0
-        contents classes =
-          let
-            (maplist, nodes) = unzip (map mapfun (zip classes ascending))
-          in
-            (concat maplist, nodes)
-      in do
-        -- Create tables
-        equivs <- liftIO Equivs.new
-        edges <- liftIO HashTable.new
-        fixities <- liftIO HashTable.new
-        -- Scan all scopes, extracting the syntax information
-        liftIO (mapM_ (scanScope equivs edges fixities) (Array.assocs scopes))
-        -- Get the equivalence classes and edges
-        classes <- liftIO (Equivs.toEquivs equivs)
-        edgelist <- liftIO (HashTable.toList edges)
-        -- Convert information into a graph
-        (graph, nodemap) <- buildGraph edgelist (contents classes)
-        return (graph, nodemap, fixities)
-
-    -- | Check that the graph forms a partial order
+    -- | Check that the graph forms a partial order.  Return the same
+    -- graph with the positions discarded.
     checkGraph :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                   Gr (HashSet Position) (HashSet Position)
-               -> m ()
+               -> m (Gr () ())
     checkGraph graph =
       let
         -- This shouldn't happen
@@ -366,14 +491,47 @@ precedence s @ Surface { surfaceScopes = scopes } =
             posset = mconcat poslist
           in
             cyclicPrecedence (HashSet.toList posset)
-      in
+      in do
         mapM_ mapfun (scc graph)
+        return (mkUGraph (map fst (labNodes graph))
+                         (map (\(s, d, _) -> (s, d)) (labEdges graph)))
+
+    -- | Scan all scopes for equality precedence directives, build
+    -- equivalence classes over all those symbols, map those to 'Node' IDs
+    -- for the graph.
+    buildParserInfo :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+                       m ParserData
+    buildParserInfo =
+      let
+        mapfun ((refs, pos), node) = (zip refs (repeat node), (node, pos))
+        ascending = iterate (+1) 0
+        contents classes =
+          let
+            (maplist, nodes) = unzip (map mapfun (zip classes ascending))
+          in
+            (concat maplist, nodes)
+      in do
+        -- Create tables
+        equivs <- liftIO Equivs.new
+        edges <- liftIO HashTable.new
+        fixities <- liftIO HashTable.new
+        -- Scan all scopes, extracting the syntax information
+        liftIO (mapM_ (scanScope equivs edges fixities) (Array.assocs scopes))
+        -- Get the equivalence classes and edges
+        classes <- liftIO (Equivs.toEquivs equivs)
+        edgelist <- liftIO (HashTable.toList edges)
+        -- Convert information into a graph
+        (graph, nodemap) <- buildGraph edgelist (contents classes)
+        -- Check that the graph forms a partial order.
+        unlabeled <- checkGraph graph
+        return ParserData { parserPrecs = unlabeled,
+                            parserNodeMap = nodemap,
+                            parserFixities = fixities }
+
   in do
     -- First, build equivalence classes for all the equality
     -- precedence directives.
-    (graph, nodemap, fixities) <- buildSyntaxInfo
-    -- Check that the graph forms a partial order.
-    checkGraph graph
+    parserinfo <- buildParserInfo
     -- Once we have the parsing data structure, descend through the
     -- structure and use it to parse all Seq's.
-    mapM doExp s
+    runParserDataT (mapM doExp s) parserinfo
