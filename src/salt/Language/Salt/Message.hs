@@ -85,6 +85,7 @@ module Language.Salt.Message(
        -- ** Precedence Parsing Messages
        cyclicPrecedence,
        precedenceParseError,
+       expectedRef,
 
        -- ** File Access Messages
        cannotFindFile,
@@ -310,6 +311,9 @@ data Message =
   | PrecedenceParseError {
       precParseErrorPos :: !Position
     }
+  | ExpectedRef {
+      expectedRefPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -469,6 +473,8 @@ instance Hashable Message where
     s `hashWithSalt` (35 :: Int) `hashWithSalt` pos
   hashWithSalt s PrecedenceParseError { precParseErrorPos = pos } =
     s `hashWithSalt` (36 :: Int) `hashWithSalt` pos
+  hashWithSalt s ExpectedRef { expectedRefPos = pos } =
+    s `hashWithSalt` (37 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity HardTabs {} = Msg.Warning
@@ -548,6 +554,7 @@ instance Msg.Message Message where
     string " is not defined by other options in the pattern"
   brief CyclicPrecedence {} = string "Conflicting precedence directives"
   brief PrecedenceParseError {} = string "Syntax error"
+  brief ExpectedRef {} = string "Expected a reference to a definition"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -635,6 +642,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions PatternBindMismatch { patternBindMismatchPos = poslist } = poslist
   positions CyclicPrecedence { cyclicPrecedencePos = poslist } = poslist
   positions PrecedenceParseError { precParseErrorPos = pos } = [pos]
+  positions ExpectedRef { expectedRefPos = pos } = [pos]
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1107,10 +1115,17 @@ cyclicPrecedence :: (MonadMessages Message m, MonadSymbols m) =>
                  -> m ()
 cyclicPrecedence pos = message CyclicPrecedence { cyclicPrecedencePos = pos }
 
--- | Report cyclic precedence directives
+-- | Report precedence parse errors
 precedenceParseError :: (MonadMessages Message m, MonadSymbols m) =>
                         Position
                      -- ^ The position at which the inheritance occurs.
                      -> m ()
 precedenceParseError pos =
   message PrecedenceParseError { precParseErrorPos = pos }
+
+-- | Report non-references where a reference was expected
+expectedRef :: (MonadMessages Message m, MonadSymbols m) =>
+               Position
+            -- ^ The position at which the inheritance occurs.
+            -> m ()
+expectedRef pos = message ExpectedRef { expectedRefPos = pos }
