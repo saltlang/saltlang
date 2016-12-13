@@ -375,8 +375,6 @@ default_level :: { Level Exp }
                   { DefaultPrefix { prefixPos = position $1 <> position $2 } }
               | DEFAULT INFIX
                   { DefaultInfix { infixPos = position $1 <> position $2 } }
-              | DEFAULT POSTFIX
-                  { DefaultPostfix { postfixPos = position $1 <> position $2 } }
 
 
 open_def :: { Element }

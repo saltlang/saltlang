@@ -103,10 +103,6 @@ data Level refty =
   | DefaultInfix {
       infixPos :: !Position
     }
-    -- | The default precedence level for postfix symbols.
-  | DefaultPostfix {
-      postfixPos :: !Position
-    }
     deriving (Functor, Foldable, Traversable)
 
 -- | A precedence relationship.
@@ -253,7 +249,6 @@ instance PositionElement refty => PositionElement (Level refty) where
   position Level { levelRef = ref } = position ref
   position DefaultPrefix { prefixPos = pos } = pos
   position DefaultInfix { infixPos = pos } = pos
-  position DefaultPostfix { postfixPos = pos } = pos
 
 instance PositionElement (Prec expty) where
   position Prec { precPos = pos } = pos
@@ -268,7 +263,6 @@ instance Eq expty => Eq (Level expty) where
   Level { levelRef = ref1 } == Level { levelRef = ref2 } = ref1 == ref2
   DefaultPrefix {} == DefaultPrefix {} = True
   DefaultInfix {} == DefaultInfix {} = True
-  DefaultPostfix {} == DefaultPostfix {} = True
   _ == _ = False
 
 instance Eq expty => Eq (Prec expty) where
@@ -288,9 +282,6 @@ instance Ord expty => Ord (Level expty) where
   compare DefaultPrefix {} _ = LT
   compare _ DefaultPrefix {} = GT
   compare DefaultInfix {} DefaultInfix {} = EQ
-  compare DefaultInfix {} _ = LT
-  compare _ DefaultInfix {} = GT
-  compare DefaultPostfix {} DefaultPostfix {} = EQ
 
 instance Ord expty => Ord (Prec expty) where
   compare Prec { precOrd = ord1, precLevel = ref1 }
@@ -349,7 +340,6 @@ instance Hashable refty => Hashable (Level refty) where
     s `hashWithSalt` (0 :: Int) `hashWithSalt` ref
   hashWithSalt s DefaultPrefix {} = s `hashWithSalt` (1 :: Int)
   hashWithSalt s DefaultInfix {} = s `hashWithSalt` (2 :: Int)
-  hashWithSalt s DefaultPostfix {} = s `hashWithSalt` (3 :: Int)
 
 instance Hashable expty => Hashable (Prec expty) where
   hashWithSalt s Prec { precOrd = ord, precLevel = ref } =
@@ -432,7 +422,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
   formatM Level { levelRef = ref } = formatM ref
   formatM DefaultPrefix {} = return $! string "default prefix"
   formatM DefaultInfix {} = return $! string "default infix"
-  formatM DefaultPostfix {} = return $! string "default postfix"
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Prec expty) where
@@ -548,20 +537,6 @@ defaultInfixPickler =
                    (xpAttrFixed (gxFromString "fixity") (gxFromString "infix"))
                    (xpElemNodes (gxFromString "pos") xpickle))
 
-defaultPostfixPickler :: (GenericXMLString tag, Show tag,
-                          GenericXMLString text, Show text,
-                          XmlPickler [NodeG [] tag text] expty) =>
-                        PU [NodeG [] tag text] (Level expty)
-defaultPostfixPickler =
-  let
-    revfunc DefaultPostfix { postfixPos = pos } = ((), pos)
-    revfunc _ = error "Can't convert"
-  in
-    xpWrap (\((), pos) -> DefaultPostfix { postfixPos = pos }, revfunc)
-           (xpElem (gxFromString "Default")
-                   (xpAttrFixed (gxFromString "fixity")
-                                (gxFromString "postfix"))
-                   (xpElemNodes (gxFromString "pos") xpickle))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
@@ -571,10 +546,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
       picker Level {} = 0
       picker DefaultPrefix {} = 1
       picker DefaultInfix {} = 2
-      picker DefaultPostfix {} = 3
     in
-      xpAlt picker [levelPickler, defaultPrefixPickler, defaultInfixPickler,
-                    defaultPostfixPickler]
+      xpAlt picker [levelPickler, defaultPrefixPickler, defaultInfixPickler]
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
