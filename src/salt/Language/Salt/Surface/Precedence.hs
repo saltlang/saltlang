@@ -34,6 +34,21 @@
 -- | Precedence parsing.  This is a simple pass that applies the
 -- syntax directives in each scope to parse 'Seq'-based expressions
 -- into 'Apply'-based forms.
+--
+-- > start : exp
+-- >       | partial_right
+-- >       | partial_left
+-- >
+-- > exp : atom
+-- >     | exp exp
+-- >     | exp postfix
+-- >     | exp infix exp
+-- >
+-- > partial_right : infix exp
+-- >               | partial_right infix exp
+-- >
+-- > partial_left : exp infix
+-- >              | exp infix partial_left
 module Language.Salt.Surface.Precedence(
        precedence
        ) where
@@ -48,6 +63,7 @@ import Data.Equivs.Monad(Equivs)
 import Data.Graph.Inductive.Graph
 import Data.Graph.Inductive.PatriciaTree
 import Data.Graph.Inductive.Query.DFS
+import Data.Graph.Inductive.Query.TransClos
 import Data.HashTable.IO(BasicHashTable)
 import Data.HashMap.Strict(HashMap)
 import Data.HashSet(HashSet)
@@ -65,23 +81,6 @@ import qualified Data.HashMap.Strict as HashMap
 import qualified Data.HashSet as HashSet
 import qualified Data.HashTable.IO as HashTable
 
-data ParserData =
-  ParserData {
-    -- | A map of fixities for all 'Ref's.  Any definition rot
-    -- represented has prefix fixity.
-    parserFixities :: !(BasicHashTable Ref Fixity),
-    -- | A map from 'Ref's to 'Node's in the graph.
-    parserNodeMap :: !(BasicHashTable Ref Node),
-    -- | A graph, where an edge from @a@ to @b@ means @a@ has lower
-    -- precedence than @b@.
-    parserPrecs :: !(Gr () ())
-  }
-
-data PDAState =
-  PDAState {
-    pdaStack :: ![(Ordering, Production)]
-  }
-
 data Production =
     -- | A right-partial call (ex. (+ 1)
     PartialRight {
@@ -97,29 +96,58 @@ data Production =
     }
   | InfixOp {
       infixOp :: !Ref,
-      infixPos :: !Position
+      infixOpPos :: !Position
     }
   | PostfixOp {
       postfixOp :: !Ref,
-      postfixPos :: !Position
+      postfixOpPos :: !Position
     }
-  | Atom { atomExp :: !(Exp Apply Ref) }
+  | Val {
+      valExp :: !(Exp Apply Ref),
+      valPrec :: !(Level Ref)
+    }
+
+data ParserData =
+  ParserData {
+    -- | A map of fixities for all 'Ref's.  Any definition rot
+    -- represented has prefix fixity.
+    parserFixities :: !(BasicHashTable Ref Fixity),
+    -- | A map from 'Ref's to 'Node's in the graph.
+    parserNodeMap :: !(BasicHashTable (Level Ref) Node),
+    -- | A graph, where an edge from @a@ to @b@ means @a@ has lower
+    -- precedence than @b@.
+    parserPrecs :: !(Gr () ())
+  }
 
 instance PositionElement Production where
   position PartialRight { rightPos = pos } = pos
   position PartialLeft { leftPos = pos } = pos
-  position InfixOp { infixPos = pos } = pos
-  position PostfixOp { postfixPos = pos } = pos
-  position Atom { atomExp = ex } = position ex
+  position InfixOp { infixOpPos = pos } = pos
+  position PostfixOp { postfixOpPos = pos } = pos
+  position Val { valExp = ex } = position ex
 
 type ParserDataT m = ReaderT ParserData m
-type ParserT m = StateT PDAState m
 
 runParserDataT :: Monad m =>
                   ParserDataT m a
                -> ParserData
                -> m a
 runParserDataT = runReaderT
+
+precParserPos :: Position
+precParserPos = Synthetic { synthDesc = "default precedence levels" }
+
+defaultPos :: Position
+defaultPos = Synthetic { synthDesc = "default precedence levels" }
+
+defaultPosSet :: HashSet Position
+defaultPosSet = HashSet.singleton defaultPos
+
+defaultPrefix :: Level Ref
+defaultPrefix = DefaultPrefix { prefixPos = defaultPos }
+
+defaultInfix :: Level Ref
+defaultInfix = DefaultInfix { infixPos = defaultPos }
 
 -- | Get the fixity of an expression.  All expressions other than
 -- 'Ref's have prefix fixity
@@ -133,139 +161,86 @@ production ex @ Sym { symRef = ref, symPos = pos } =
     res <- liftIO (HashTable.lookup fixity ref)
     case res of
       -- For postfix and infix, make the symbol an operator
-      Just Postfix -> return PostfixOp { postfixOp = ref, postfixPos = pos }
-      Just Infix {} -> return InfixOp { infixOp = ref, infixPos = pos }
+      Just Postfix -> return PostfixOp { postfixOp = ref, postfixOpPos = pos }
+      Just Infix {} -> return InfixOp { infixOp = ref, infixOpPos = pos }
       -- Prefix symbols are just atoms.
-      Just Prefix -> return Atom { atomExp = ex }
+      Just Prefix -> return Val { valPrec = Level { levelRef =  ref },
+                                  valExp = ex }
       -- By default, everything is an atom.
-      Nothing -> return Atom { atomExp = ex }
--- Everything else is an atom.
-production ex = return Atom { atomExp = ex }
-
-comparePrec :: (MonadMessages Message m, MonadSymbols m,
-                MonadReader ParserData m, MonadIO m) =>
-               Production
-            -> Production
-            -> m Ordering
-comparePrec left right = _
-
-reduce :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-          [(Production, Ordering)]
-       -> ParserDataT m [(Production, Ordering)]
--- Throw an error here; we will loop forever on this
-reduce [] = error "Cannot reduce empty stack"
-reduce stack =
+      Nothing -> return Val { valPrec = Level { levelRef =  ref },
+                              valExp = ex }
+-- Everything else is a val with default prefix precedence.
+production ex =
   let
-    (pivot, rest) = span ((== LT) . snd) stack
-
-    push prod = case rest of
-      [] -> return [(prod, LT)]
-      ((top, _) : _) ->
-        do
-          ord <- comparePrec prod top
-          return ((prod, ord) : rest)
+    pos = position ex
   in
-    case pivot of
-      -- Throw an error here; we will loop forever on these
-      [] -> error "Empty pivot should not happen"
-      [(Atom {}, _)] -> error "Attempt to reduce a single atom"
-      -- Turn partial calls into atoms
-      [(PartialRight {}, _)] -> _
-      [(PartialLeft {}, _)] -> _
-      -- Postfix call
-      [(PostfixOp { postfixOp = ref, postfixPos = pos }, _),
-       (Atom { atomExp = arg }, _)] ->
-        let
-          func = Sym { symRef = ref, symPos = pos }
-          apply = Apply { applyFunc = func, applyArg = arg,
-                          applyPos = pos <> position arg }
-          call = Call { callInfo = apply }
-        in
-          push Atom { atomExp = call }
-      -- Prefix call
-      [(Atom { atomExp = arg }, _),
-       (Atom { atomExp = func }, _)] ->
-        let
-          apply = Apply { applyFunc = func, applyArg = arg,
-                          applyPos = position func <> position arg }
-          call = Call { callInfo = apply }
-        in
-          push Atom { atomExp = call }
-      -- Right partial call
-      [(Atom { atomExp = right }, _),
-       (InfixOp { infixOp = ref, infixPos = oppos }, _)] ->
-        let
-          pos = oppos <> position right
-        in
-          push PartialRight { rightOp = ref, rightArg = right, rightPos = pos }
-      -- Left partial call
-      [(InfixOp { infixOp = ref, infixPos = oppos }, _),
-       (Atom { atomExp = left }, _)] ->
-        let
-          pos = oppos <> position left
-        in
-          push PartialRight { rightOp = ref, rightArg = left, rightPos = pos }
-      -- Infix call
-      [(Atom { atomExp = right }, _),
-       (InfixOp { infixOp = ref, infixPos = sympos }, _),
-       (Atom { atomExp = left }, _)] ->
-        let
-          pos = position left <> position right
-          func = Sym { symRef = ref, symPos = pos }
-          tuple = Tuple { tupleFields = [left, right], tuplePos = pos }
-          apply = Apply { applyFunc = func, applyArg = tuple, applyPos = pos }
-          call = Call { callInfo = apply }
-        in
-          push Atom { atomExp = call }
-      -- Partial call concatenation
-      [(PartialLeft {}, _),
-       (InfixOp { infixOp = ref, infixPos = sympos }, _),
-       (Atom { atomExp = left }, _)] -> _
-      [(Atom { atomExp = right }, _),
-       (InfixOp { infixOp = ref, infixPos = sympos }, _),
-       (PartialRight {}, _)] -> _
-      -- Anything else is a parse error
-      _ ->
-        let
-          pos = position (fst (last pivot)) <> position (fst (head pivot))
-        in do
-          -- Report the error and push a bad production
-          precedenceParseError pos
-          push Atom { atomExp = Bad { badPos = pos } }
+    return Val { valPrec = DefaultPrefix { prefixPos = pos }, valExp = ex }
 
+-- | Get the precedence level for a production.
+level :: Production
+      -- ^ The production for whichh to get the level
+      -> Level Ref
+level PartialRight { rightOp = op } = Level { levelRef = op }
+level PartialLeft { leftOp = op } = Level { levelRef = op }
+level InfixOp { infixOp = op } = Level { levelRef = op }
+level PostfixOp { postfixOp = op } = Level { levelRef = op }
+level Val { valPrec = lvl } = lvl
 
--- | Control function for the simple precedence parser.
-parse :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-         [Exp Apply Ref]
-      -- ^ The input stream
-      -> [(Production, Ordering)]
-      -- ^ The parser stack
-      -> ParserDataT m (Exp Apply Ref)
--- Terminating condition: we have one Atom element on the stack.
-parse [] [(Atom { atomExp = exp }, _)] = return exp
--- If we run out of inputs, keep reducing the stack until we hit one Atom.
-parse [] stack =
+-- | Get the fixity of the Level
+fixity :: (MonadReader ParserData m, MonadIO m) =>
+          Level Ref
+       -> m Fixity
+fixity Level { levelRef = ref } =
   do
-    newstack <- reduce stack
-    parse [] newstack
--- If the stack is empty, we always shift
-parse (first : rest) [] =
+    ParserData { parserFixities = fixities } <- ask
+    fixity <- liftIO (HashTable.lookup fixities ref)
+    case fixity of
+      -- No entry means prefix
+      Nothing -> return Prefix
+      Just out -> return out
+fixity DefaultPrefix {} = return Prefix
+-- Infix symbols are right-associative by default
+fixity DefaultInfix {} = return Infix { infixAssoc = RightAssoc }
+
+-- | Get the precedence graph node for a Level
+node :: (MonadReader ParserData m, MonadIO m) =>
+        Level Ref
+     -> m Node
+node lvl @ Level { levelRef = ref } =
   do
-    prod <- production first
-    parse rest [(prod, LT)]
--- Otherwise, determine the action by comparing precedence
-parse input @ (first : rest) stack @ ((top, _) : _) =
-  do
-    prod <- production first
-    ord <- comparePrec prod top
-    case ord of
-      GT ->
+    ParserData { parserNodeMap = nodemap } <- ask
+    res <- liftIO (HashTable.lookup nodemap lvl)
+    case res of
+      Just out -> return out
+      -- Fall back to the default level for the given fixity
+      Nothing ->
         do
-          newstack <- reduce stack
-          parse input newstack
-      -- Otherwise, shift
-      _ -> parse rest ((prod, ord) : stack)
+          fix <- fixity lvl
+          case fix of
+            Prefix -> node defaultPrefix
+            Infix {} -> node defaultInfix
+            Postfix -> error "Comparing postfix precedence"
+-- Default levels should always have an entry in the node table
+node lvl =
+  do
+    ParserData { parserNodeMap = nodemap } <- ask
+    res <- liftIO (HashTable.lookup nodemap lvl)
+    case res of
+      Just out -> return out
+      Nothing -> error "Default precedence levels should have a node"
 
+-- | Check whether an equivalence class has lower precedence than
+-- another equivalence class.
+compareNodes :: (MonadReader ParserData m, MonadIO m) =>
+                Node
+             -- ^ The source node (the left-side equivalence class)
+             -> Node
+             -- ^ The destination node (the right-side equivalence class)
+             -> m Bool
+compareNodes left right =
+  do
+    ParserData { parserPrecs = precs } <- ask
+    return (hasEdge precs (left, right))
 
 -- | Parse a Seq into an Apply-based structure
 parseExp :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
@@ -281,7 +256,193 @@ parseExp Seq { seqExps = [_], seqPos = seqpos } =
     internalError "Should not see singeton list in Seq" [seqpos]
     return Bad { badPos = seqpos }
 parseExp Seq { seqExps = exps, seqPos = seqpos } =
-  do
+  let
+    -- | Reduce the top of the stack, then contiune parsing
+    reduce :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+              [Exp Apply Ref]
+           -- ^ The input stream
+           -> [(Production, Maybe (Level Ref))]
+           -- ^ The parser stack
+           -> ParserDataT m (Exp Apply Ref)
+    -- Reduce a partial right into a value
+    reduce input ((PartialRight {}, _) :
+                  rest) = _
+    -- Reduce a partial left into a value
+    reduce input ((PartialLeft {}, _) :
+                  rest)= _
+    -- Postfix call
+    reduce input ((PostfixOp { postfixOp = ref, postfixOpPos = pos }, _) :
+                  (Val { valExp = arg }, prev) :
+                  rest) =
+      let
+        func = Sym { symRef = ref, symPos = pos }
+        apply = Apply { applyFunc = func, applyArg = arg,
+                        applyPos = pos <> position arg }
+        call = Call { callInfo = apply }
+        val = Val { valExp = call, valPrec = defaultPrefix }
+      in
+        parse input ((val, prev) : rest)
+    -- Prefix call
+    reduce input ((Val { valExp = arg }, _) :
+                  (Val { valExp = func, valPrec = prec }, prev) :
+                  rest) =
+      let
+        apply = Apply { applyFunc = func, applyArg = arg,
+                        applyPos = position func <> position arg }
+        call = Call { callInfo = apply }
+        val = Val { valExp = call, valPrec = prec }
+      in
+        parse input ((val, prev) : rest)
+    -- Right partial call
+    reduce input ((Val { valExp = right }, _) :
+                  (InfixOp { infixOp = ref, infixOpPos = oppos }, prev) :
+                  rest) =
+      let
+        pos = oppos <> position right
+        val = PartialRight { rightOp = ref, rightArg = right, rightPos = pos }
+      in
+        parse input ((val, prev) : rest)
+    -- Left partial call
+    reduce input ((InfixOp { infixOp = ref, infixOpPos = oppos }, _) :
+                  (Val { valExp = left }, prev) :
+                  rest) =
+      let
+        pos = oppos <> position left
+        val = PartialRight { rightOp = ref, rightArg = left, rightPos = pos }
+      in
+        parse input ((val, prev) : rest)
+    -- Infix call
+    reduce input ((Val { valExp = right }, _) :
+                  (InfixOp { infixOp = ref, infixOpPos = sympos }, _) :
+                  (Val { valExp = left }, prev) :
+                  rest) =
+      let
+        pos = position left <> position right
+        func = Sym { symRef = ref, symPos = pos }
+        tuple = Tuple { tupleFields = [left, right], tuplePos = pos }
+        apply = Apply { applyFunc = func, applyArg = tuple, applyPos = pos }
+        call = Call { callInfo = apply }
+        val = Val { valExp = call, valPrec = Level { levelRef = ref } }
+      in
+        parse input ((val, prev) : rest)
+    -- Left partial call concatenation
+    reduce input ((PartialLeft {}, _) :
+                  (InfixOp { infixOp = ref, infixOpPos = sympos }, _) :
+                  (Val { valExp = left }, prev) :
+                  rest) = _
+    -- Right partial call concatenation
+    reduce input ((Val { valExp = right }, _) :
+                  (InfixOp { infixOp = ref, infixOpPos = sympos }, _) :
+                  (PartialRight {}, prev) :
+                  rest) = _
+    reduce _ _ =
+      do
+        internalError "Invalid parser stack state" [seqpos]
+        return Bad { badPos = seqpos }
+
+    -- | Control function for the precedence parser.
+    parse :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+             [Exp Apply Ref]
+          -- ^ The input stream
+          -> [(Production, Maybe (Level Ref))]
+          -- ^ The parser stack
+          -> ParserDataT m (Exp Apply Ref)
+    -- Terminating condition: we have one Val element on the stack.
+    parse [] [(Val { valExp = exp }, _)] = return exp
+    -- If we run out of inputs, keep reducing the stack until we hit one Val.
+    parse [] stack = reduce [] stack
+    -- If the stack is empty, we always shift
+    parse (first : rest) [] =
+      do
+        prod <- production first
+        case prod of
+          -- We can shift Val's or InfixOp's
+          Val {} -> parse rest [(prod, Nothing)]
+          InfixOp {} -> parse rest [(prod, Nothing)]
+          -- Anything else is a parse error
+          _ ->
+            let
+              pos = position first
+            in do
+              precedenceParseError pos
+              return Bad { badPos = pos }
+    -- Otherwise, determine the action by comparing precedence
+    parse input @ (first : rest) stack @ ((top, curr) : _) =
+      let
+        error =
+          let
+            pos = position first
+          in do
+            precedenceParseError pos
+            return Bad { badPos = pos }
+
+        -- Push a production on to the stack
+        shift prod =
+          let
+            newlvl = level top
+          in
+            parse rest ((prod, Just newlvl) : stack)
+
+        -- | Decide what to do based on the precedence of the input
+        -- vs. the current precedence level.
+        decide prod =
+          case (level prod, curr) of
+            -- Current level of "nothing" means that there is only one
+            -- production on the stack, so shift.
+            (_, Nothing) -> shift prod
+            -- If we have the same reference, then decide what to do based
+            -- on associativity
+            (lvl @ Level { levelRef = prodref },
+             Just Level { levelRef = currref })
+              | prodref == currref ->
+                do
+                  fix <- fixity lvl
+                  case fix of
+                    -- Prefix symbols are left-associative, reduce.
+                    Prefix -> reduce input stack
+                    Infix { infixAssoc = LeftAssoc } -> reduce input stack
+                    Infix { infixAssoc = RightAssoc } -> shift prod
+                    -- Non-associative symbols produce a parse error when
+                    -- compared for associativity
+                    Infix { infixAssoc = NonAssoc } -> error
+                    -- This shouldn't happen
+                    Postfix ->
+                      let
+                        pos = position first
+                      in do
+                        internalError "Comparing postfix precedences" [pos]
+                        return Bad { badPos = pos }
+            -- Otherwise, look up in the precedenece graph
+            (prodlvl, Just currlvl) ->
+              do
+                -- Look up the nodes (equivalence classes) for the input
+                -- and current precedence levels
+                prodnode <- node prodlvl
+                currnode <- node currlvl
+                -- Check the graph to see if the input has lower precedence
+                res <- compareNodes prodnode currnode
+                -- If the input has lower precedence, then reduce,
+                -- otherwise, shift
+                if res
+                  then reduce input stack
+                  else shift prod
+      in do
+        prod <- production first
+        case (top, prod) of
+          -- For these, we might be shifting, or we might be reducing,
+          -- depending on the precedence state.
+          (Val {}, Val {}) -> decide prod
+          (Val {}, PostfixOp {}) -> decide prod
+          (Val {}, InfixOp {}) -> decide prod
+          -- A postfix always gets reduced immediately
+          (PostfixOp {}, _) -> reduce input stack
+          -- We always shift a value after the infix operator
+          (InfixOp {}, Val {}) -> shift prod
+          -- Always shift an infix operator after a partial call
+          (PartialRight {}, InfixOp {}) -> shift prod
+          -- Anything else is a parse error
+          (_, _) -> error
+  in do
     newexps <- mapM doExp exps
     parse newexps []
 
@@ -348,10 +509,10 @@ doExp Literal { literalVal = val } = return Literal { literalVal = val }
 doExp Bad { badPos = pos } = return Bad { badPos = pos }
 
 -- | Build precedence equivalence classes for all symbols.
-scanScope :: Equivs Ref (HashSet Position)
+scanScope :: Equivs (Level Ref) (HashSet Position)
           -- ^ The 'Equivs' structure into which to put all the
           -- equivalences.
-          -> BasicHashTable (Ref, Ref) (HashSet Position)
+          -> BasicHashTable (Level Ref, Level Ref) (HashSet Position)
           -- ^ A hash table into which to gather up all the edges.
           -> BasicHashTable Ref Fixity
           -- ^ A hash table into which to gather up all fixities.
@@ -369,11 +530,12 @@ scanScope equivs edges fixities (scopeid, Scope { scopeSyntax = syntax }) =
                               syntaxPos = pos }) =
       let
         currref = Ref { refSymbol = sym, refScopeID = scopeid }
+        currlvl = Level { levelRef = currref }
 
         -- | Add an edge to the edge table.
-        addEdge :: Ref
+        addEdge :: Level Ref
                 -- ^ The source.
-                -> Ref
+                -> Level Ref
                 -- ^ The destination.
                 -> IO ()
         addEdge src dst =
@@ -391,30 +553,100 @@ scanScope equivs edges fixities (scopeid, Scope { scopeSyntax = syntax }) =
                  -- ^ The syntax directive to scan
                  -> IO ()
         -- Add an equivalence if the precedence relation is equality
-        scanPrec Prec { precExp = Sym { symRef = ref },
+
+        -- We expect to see a reference, or else one of the default
+        -- precedence levels.
+        scanPrec Prec { precLevel = Level { levelRef = Sym { symRef = ref } },
                         precOrd = EQ, precPos = pos } =
-          Equivs.addEquiv equivs currref ref (HashSet.singleton pos)
-        -- Otherwise, we add an edge to the edge set.  Also, add the
-        -- target as a singleton equivalence class.
-        scanPrec Prec { precExp = Sym { symRef = ref },
+          let
+            lvl = Level { levelRef = ref }
+          in
+            Equivs.addEquiv equivs currlvl lvl (HashSet.singleton pos)
+        scanPrec Prec { precLevel = DefaultPrefix { prefixPos = lvlpos },
+                        precOrd = EQ, precPos = pos } =
+          let
+            lvl = DefaultPrefix { prefixPos = lvlpos }
+          in
+            Equivs.addEquiv equivs currlvl lvl (HashSet.singleton pos)
+        scanPrec Prec { precLevel = DefaultInfix { infixPos = lvlpos },
+                        precOrd = EQ, precPos = pos } =
+          let
+            lvl = DefaultInfix { infixPos = lvlpos }
+          in
+            Equivs.addEquiv equivs currlvl lvl (HashSet.singleton pos)
+
+        -- For LT, we add an edge to the edge set.  Also, add
+        -- the target as a singleton equivalence class.
+
+        -- We expect to see a reference, or else one of the default
+        -- precedence levels.
+        scanPrec Prec { precLevel = Level { levelRef = Sym { symRef = ref } },
                         precOrd = LT, precPos = pos } =
-          do
-            addEdge currref ref
+          let
+            lvl = Level { levelRef = ref }
+          in do
+            addEdge currlvl lvl
             -- Make sure the target is present in the equivalence
             -- structure
-            Equivs.addSingle equivs ref HashSet.empty
-        -- For GT, we do the same thing, but flip the
-        scanPrec Prec { precExp = Sym { symRef = ref },
+            Equivs.addSingle equivs lvl HashSet.empty
+        scanPrec Prec { precLevel = DefaultPrefix { prefixPos = lvlpos },
+                        precOrd = LT, precPos = pos } =
+          let
+            lvl = DefaultPrefix { prefixPos = lvlpos }
+          in do
+            addEdge currlvl lvl
+            -- Make sure the target is present in the equivalence
+            -- structure
+            Equivs.addSingle equivs lvl HashSet.empty
+        scanPrec Prec { precLevel = DefaultInfix { infixPos = lvlpos },
+                        precOrd = LT, precPos = pos } =
+          let
+            lvl = DefaultInfix { infixPos = lvlpos }
+          in do
+            addEdge currlvl lvl
+            -- Make sure the target is present in the equivalence
+            -- structure
+            Equivs.addSingle equivs lvl HashSet.empty
+
+        -- For GT, we do the same thing, but flip the edge direction.
+
+        -- We expect to see a reference, or else one of the default
+        -- precedence levels.
+        scanPrec Prec { precLevel = Level { levelRef = Sym { symRef = ref } },
                         precOrd = GT, precPos = pos } =
-          do
-            addEdge ref currref
+          let
+            lvl = Level { levelRef = ref }
+          in do
+            addEdge lvl currlvl
             -- Make sure the target is present in the equivalence
             -- structure
-            Equivs.addSingle equivs ref HashSet.empty
+            Equivs.addSingle equivs lvl HashSet.empty
+        scanPrec Prec { precLevel = DefaultPrefix { prefixPos = lvlpos },
+                        precOrd = GT, precPos = pos } =
+          let
+            lvl = DefaultPrefix { prefixPos = lvlpos }
+          in do
+            addEdge lvl currlvl
+            -- Make sure the target is present in the equivalence
+            -- structure
+            Equivs.addSingle equivs lvl HashSet.empty
+        scanPrec Prec { precLevel = DefaultInfix { infixPos = lvlpos },
+                        precOrd = GT, precPos = pos } =
+          let
+            lvl = DefaultInfix { infixPos = lvlpos }
+          in do
+            addEdge lvl currlvl
+            -- Make sure the target is present in the equivalence
+            -- structure
+            Equivs.addSingle equivs lvl HashSet.empty
+
+        -- For anything else, we expected a reference, but didn't get
+        -- one, so report an error.
+        scanPrec Prec { precLevel = lvl } = expectedRef (position lvl)
       in do
         -- Make sure the current reference is present in the
         -- equivalence structure
-        Equivs.addSingle equivs currref HashSet.empty
+        Equivs.addSingle equivs currlvl HashSet.empty
         -- Add the fixity to the fixity table
         HashTable.insert fixities currref fixity
         -- Scan the precedence directives
@@ -432,19 +664,19 @@ precedence :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
 precedence s @ Surface { surfaceScopes = scopes } =
   let
     buildGraph :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                  [((Ref, Ref), HashSet Position)]
-               -> ([(Ref, Node)], [(Node, HashSet Position)])
+                  [((Level Ref, Level Ref), HashSet Position)]
+               -> ([(Level Ref, Node)], [(Node, HashSet Position)])
                -> m (Gr (HashSet Position) (HashSet Position),
-                     BasicHashTable Ref Node)
+                     BasicHashTable (Level Ref) Node)
     buildGraph edges (entries, nodes) =
       let
         -- | Convert edge table entries into edges for the graph.
         foldfun :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                   BasicHashTable Ref Node
+                   BasicHashTable (Level Ref) Node
                 -- ^ Node mapping table.
                 -> [(Node, Node, HashSet Position)]
                 -- ^ List of edges.
-                -> ((Ref, Ref), HashSet Position)
+                -> ((Level Ref, Level Ref), HashSet Position)
                 -- ^ Edge table entry.
                 -> m [(Node, Node, HashSet Position)]
                 -- ^ New list of edges.
@@ -511,9 +743,17 @@ precedence s @ Surface { surfaceScopes = scopes } =
           in
             (concat maplist, nodes)
       in do
-        -- Create tables
+        -- Create Equivalence structure
         equivs <- liftIO Equivs.new
+        -- Add default prefix and infix entries
+        liftIO (Equivs.addSingle equivs defaultPrefix defaultPosSet)
+        liftIO (Equivs.addSingle equivs defaultInfix defaultPosSet)
+        -- Create edges structure
         edges <- liftIO HashTable.new
+        -- The default prefix level has lower precedence than the
+        -- default infix level
+        liftIO (HashTable.insert edges (defaultPrefix, defaultInfix)
+                                       defaultPosSet)
         fixities <- liftIO HashTable.new
         -- Scan all scopes, extracting the syntax information
         liftIO (mapM_ (scanScope equivs edges fixities) (Array.assocs scopes))
@@ -524,7 +764,9 @@ precedence s @ Surface { surfaceScopes = scopes } =
         (graph, nodemap) <- buildGraph edgelist (contents classes)
         -- Check that the graph forms a partial order.
         unlabeled <- checkGraph graph
-        return ParserData { parserPrecs = unlabeled,
+        -- Finally, compute the reachability graph so we can compare
+        -- just by checking if an edge exists.
+        return ParserData { parserPrecs = tc unlabeled,
                             parserNodeMap = nodemap,
                             parserFixities = fixities }
 

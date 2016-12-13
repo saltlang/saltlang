@@ -11,31 +11,31 @@ Description:
   the syntax of a language is easy to understand and use, but
   difficult to reason about (ie Java), or else easy to reason about
   but difficult and awkward to use (ie Haskell).
-
+  .
   The type system and language is designed such that certain features
   can be enabled or disabled for different compilation modes, allowing
   different "layers" of a system to be built using the same language.
-
+  .
   Salt core has four kinds of objects: values, types, computations,
   and propositions.  They are described more formally in the next
   section.  There are also (pure) functions over objects, as well as
   tuples, and nondetermisitic choice (all of which are themselves
   objects).
-
+  .
   Values consist of primitive data types, and by extension, functions,
   tuples/records thereof.
-
+  .
   Computations are stateful, possibly non-terminating, possibly
   concurrent procedures, which produce a value (note, unit is a value,
   per se), or continuations, which do not.
-
+  .
   Propositions are similar to values except that they model a
   higher-order intuitionistic predicate logic.  The biggest difference
   between propositions and values is that equivalence between values
   is structural equivalence under normalization, which is decidable,
   while equivalence among propositions is full propositional
   equivalence (ie iff), which is not.
-
+  .
   Types consist of dependent product and sum types (representing
   functions and tuples/records respectively), and pattern types
   (representing computations), as well as refinement types and type
@@ -43,28 +43,28 @@ Description:
   Pattern and refinement types are also constructed using
   propositions; as such, equivalence among types is also generally
   undecidable (though for the most part, it is in fact decidable).
-
+  .
   Pattern types describe a computation's behavior in a concurrent
   setting in terms of the possible sequences of state transitions that
   might occur (in a manner similar to, but more powerful than regular
   expressions).  Individual states are described using higher-order
   intuitionistic predicate logic (ie functions producing
   propositions).
-
+  .
   Most such descriptions use a higher-order separation logic, which we
   are able to denote in Salt itself, using the more basic
   higher-order intuitionistic logic.
-
+  .
   Since equivalence among types and propositions is decidable,
   computations and functions are generally not allowed to operate on
   either domain for normal execution modes, and there is no primitive
   construct which produces a value from a type or proposition.
-
+  .
   It may be possible to add constructs based on simple equality (as
   opposed to full equivalence) that would allow computation on types
   or propositions, however.  This opens the door to powerful
   metaprogramming capabilities.
-
+  .
   Type checking is designed to split into two distinct phases.  The
   first phase is a decidable (or mostly decidable) phase, which makes
   guarantees roughly equivalent to those made by Haskell or Standard
@@ -129,7 +129,7 @@ Library
                         mtl >= 2.2, hashable, hashable-extras, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
                         hashtables, filepath, semigroups, dynamic-pprint, data-default,
-                        monad-journal, bitwise
+                        monad-journal, bitwise, fgl >= 5.5.3
   build-tools:          alex >= 3.2, happy
   hs-source-dirs:       src/salt
   exposed-modules:      
