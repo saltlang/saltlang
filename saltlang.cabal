@@ -140,6 +140,7 @@ Library
 --                        Control.Monad.ProofRecorder,
 --                        Control.Monad.TypeErrors.Class,
 --                        Control.Monad.TypeCheck.Class,
+                        Control.Monad.Refs.Class
 --                        Language.Salt.Core,
                         Language.Salt.Core.Patterns,
                         Language.Salt.Core.Syntax,
