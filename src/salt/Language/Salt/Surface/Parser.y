@@ -115,15 +115,17 @@ import qualified Language.Salt.Message as Message
        COMPONENT { Token.Component _ }
        POSTFIX { Token.Postfix _ }
        INFIX { Token.Infix _ }
+       PREFIX { Token.Prefix _ }
        LEFT { Token.Left _ }
        RIGHT { Token.Right _ }
        NONASSOC { Token.NonAssoc _ }
        PREC { Token.Prec _ }
        LESS { Token.Less _ }
        GREATER { Token.Greater _ }
+       DEFAULT { Token.Default _ }
 
 %right ID NUM STRING CHAR LPAREN LBRACE LBRACK MODULE SIGNATURE CLASS TYPECLASS
-       INSTANCE LESS GREATER LEFT RIGHT NONASSOC PREC POSTFIX INFIX
+       INSTANCE LESS GREATER LEFT RIGHT NONASSOC PREC POSTFIX INFIX PREFIX
 %right LAMBDA FORALL EXISTS MATCH
 %right COLON
 %right BAR
@@ -187,6 +189,11 @@ ident :: { (Symbol, Position) }
       | INFIX
           {% do
                idname <- symbol (Strict.fromString "infix")
+               return (idname, position $1)
+          }
+      | PREFIX
+          {% do
+               idname <- symbol (Strict.fromString "prefix")
                return (idname, position $1)
           }
       | LEFT
@@ -338,18 +345,39 @@ prec_op :: { Ordering }
 precs :: { [Prec Exp] }
       : precs PREC prec_op exp
           { let
-              content = buildExp $4
+              content = Level { levelRef = buildExp $4 }
               pos = position $2 <> position content
             in
-              Prec { precOrd = $3, precExp = content, precPos = pos } : $1
+              Prec { precOrd = $3, precLevel = content, precPos = pos } : $1
+          }
+      | precs PREC prec_op default_level
+          { let
+              pos = position $2 <> position $4
+            in
+              Prec { precOrd = $3, precLevel = $4, precPos = pos } : $1
           }
       | PREC prec_op exp
           { let
-              content = buildExp $3
+              content = Level { levelRef = buildExp $3 }
               pos = position $1 <> position content
             in
-              [Prec { precOrd = $2, precExp = content, precPos = pos }]
+              [Prec { precOrd = $2, precLevel = content, precPos = pos }]
           }
+      | PREC prec_op default_level
+          { let
+              pos = position $1 <> position $3
+            in
+              [Prec { precOrd = $2, precLevel = $3, precPos = pos }]
+          }
+
+default_level :: { Level Exp }
+              : DEFAULT PREFIX
+                  { DefaultPrefix { prefixPos = position $1 <> position $2 } }
+              | DEFAULT INFIX
+                  { DefaultInfix { infixPos = position $1 <> position $2 } }
+              | DEFAULT POSTFIX
+                  { DefaultPostfix { postfixPos = position $1 <> position $2 } }
+
 
 open_def :: { Element }
          : type_builder_kind ident args_opt extends EQUAL exp

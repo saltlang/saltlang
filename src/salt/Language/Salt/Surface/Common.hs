@@ -35,6 +35,7 @@
 module Language.Salt.Surface.Common(
        Assoc(..),
        Fixity(..),
+       Level(..),
        Prec(..),
        FieldName(..),
        BuilderKind(..),
@@ -88,14 +89,34 @@ data Fixity =
   | Postfix
   deriving (Ord, Eq, Show)
 
+-- | A precedence level
+data Level refty =
+    -- | The precedence level of another symbol.
+    Level {
+      levelRef :: !refty
+    }
+    -- | The default precedence level for prefix symbols.
+  | DefaultPrefix {
+      prefixPos :: !Position
+    }
+    -- | The default precedence level for infix symbols.
+  | DefaultInfix {
+      infixPos :: !Position
+    }
+    -- | The default precedence level for postfix symbols.
+  | DefaultPostfix {
+      postfixPos :: !Position
+    }
+    deriving (Functor, Foldable, Traversable)
+
 -- | A precedence relationship.
-data Prec expty =
+data Prec refty =
   Prec {
     -- | The kind of precedence relationship.
     precOrd :: !Ordering,
     -- | An expression denoting the symbol to which this relationship
     -- refers.
-    precExp :: !expty,
+    precLevel :: !(Level refty),
     -- | The position in source from which this arises.
     precPos :: !Position
   }
@@ -228,6 +249,12 @@ getNodeID =
     put $! nodeid + 1
     return ("node" ++ show nodeid)
 
+instance PositionElement refty => PositionElement (Level refty) where
+  position Level { levelRef = ref } = position ref
+  position DefaultPrefix { prefixPos = pos } = pos
+  position DefaultInfix { infixPos = pos } = pos
+  position DefaultPostfix { postfixPos = pos } = pos
+
 instance PositionElement (Prec expty) where
   position Prec { precPos = pos } = pos
 
@@ -237,20 +264,42 @@ instance PositionElement Literal where
   position Char { charPos = pos } = pos
   position Unit { unitPos = pos } = pos
 
-instance Eq expty => Eq (Prec expty) where
-  Prec { precOrd = ord1, precExp = exp1 } ==
-    Prec { precOrd = ord2, precExp = exp2 } =
-      ord1 == ord2 && exp1 == exp2
+instance Eq expty => Eq (Level expty) where
+  Level { levelRef = ref1 } == Level { levelRef = ref2 } = ref1 == ref2
+  DefaultPrefix {} == DefaultPrefix {} = True
+  DefaultInfix {} == DefaultInfix {} = True
+  DefaultPostfix {} == DefaultPostfix {} = True
+  _ == _ = False
 
+instance Eq expty => Eq (Prec expty) where
+  Prec { precOrd = ord1, precLevel = ref1 } ==
+    Prec { precOrd = ord2, precLevel = ref2 } =
+      ord1 == ord2 && ref1 == ref2
+
+instance Eq1 Level
 instance Eq1 Prec
 
+instance Ord expty => Ord (Level expty) where
+  compare Level { levelRef = ref1 } Level { levelRef = ref2 } =
+    compare ref1 ref2
+  compare Level {} _ = LT
+  compare _ Level {} = GT
+  compare DefaultPrefix {} DefaultPrefix {} = EQ
+  compare DefaultPrefix {} _ = LT
+  compare _ DefaultPrefix {} = GT
+  compare DefaultInfix {} DefaultInfix {} = EQ
+  compare DefaultInfix {} _ = LT
+  compare _ DefaultInfix {} = GT
+  compare DefaultPostfix {} DefaultPostfix {} = EQ
+
 instance Ord expty => Ord (Prec expty) where
-  compare Prec { precOrd = ord1, precExp = exp1 }
-          Prec { precOrd = ord2, precExp = exp2 } =
+  compare Prec { precOrd = ord1, precLevel = ref1 }
+          Prec { precOrd = ord2, precLevel = ref2 } =
     case compare ord1 ord2 of
-      EQ -> compare exp1 exp2
+      EQ -> compare ref1 ref2
       out -> out
 
+instance Ord1 Level
 instance Ord1 Prec
 
 literalDot :: Monad m => Literal -> StateT Word m (Doc, String)
@@ -295,10 +344,18 @@ instance Hashable Fixity where
     s `hashWithSalt` (1 :: Int) `hashWithSalt` assoc
   hashWithSalt s Postfix = hashWithSalt s (2 :: Int)
 
-instance Hashable expty => Hashable (Prec expty) where
-  hashWithSalt s Prec { precOrd = ord, precExp = ex } =
-    s `hashWithSalt` ord `hashWithSalt` ex
+instance Hashable refty => Hashable (Level refty) where
+  hashWithSalt s Level { levelRef = ref } =
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` ref
+  hashWithSalt s DefaultPrefix {} = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s DefaultInfix {} = s `hashWithSalt` (2 :: Int)
+  hashWithSalt s DefaultPostfix {} = s `hashWithSalt` (3 :: Int)
 
+instance Hashable expty => Hashable (Prec expty) where
+  hashWithSalt s Prec { precOrd = ord, precLevel = ref } =
+    s `hashWithSalt` ord `hashWithSalt` ref
+
+instance Hashable1 Level
 instance Hashable1 Prec
 
 instance Hashable FieldName where
@@ -371,15 +428,22 @@ instance MonadPositions m => FormatM m Literal where
       return (compoundApplyDoc (string "Unit") [(string "pos", posdoc)])
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
+         FormatM m (Level expty) where
+  formatM Level { levelRef = ref } = formatM ref
+  formatM DefaultPrefix {} = return $! string "default prefix"
+  formatM DefaultInfix {} = return $! string "default infix"
+  formatM DefaultPostfix {} = return $! string "default postfix"
+
+instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Prec expty) where
-  formatM Prec { precOrd = ord, precExp = ex, precPos = pos } =
+  formatM Prec { precOrd = ord, precLevel = ref, precPos = pos } =
     let
       orddoc = case ord of
         LT -> string "<"
-        EQ -> string "=="
+        EQ -> string "="
         GT -> string ">"
     in do
-      expdoc <- formatM ex
+      expdoc <- formatM ref
       posdoc <- formatM pos
       return (compoundApplyDoc (string "Prec")
                                [(string "pos", posdoc),
@@ -448,16 +512,80 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
     in
       xpAlt picker [numPickler, strPickler, charPickler, unitPickler]
 
+levelPickler :: (GenericXMLString tag, Show tag,
+                 GenericXMLString text, Show text,
+                 XmlPickler [NodeG [] tag text] expty) =>
+                PU [NodeG [] tag text] (Level expty)
+levelPickler = xpWrap (Level, levelRef)
+                      (xpElemNodes (gxFromString "Level")
+                                   (xpElemNodes (gxFromString "ref") xpickle))
+
+defaultPrefixPickler :: (GenericXMLString tag, Show tag,
+                         GenericXMLString text, Show text,
+                         XmlPickler [NodeG [] tag text] expty) =>
+                        PU [NodeG [] tag text] (Level expty)
+defaultPrefixPickler =
+  let
+    revfunc DefaultPrefix { prefixPos = pos } = ((), pos)
+    revfunc _ = error "Can't convert"
+  in
+    xpWrap (\((), pos) -> DefaultPrefix { prefixPos = pos }, revfunc)
+           (xpElem (gxFromString "Default")
+                   (xpAttrFixed (gxFromString "fixity") (gxFromString "prefix"))
+                   (xpElemNodes (gxFromString "pos") xpickle))
+
+defaultInfixPickler :: (GenericXMLString tag, Show tag,
+                        GenericXMLString text, Show text,
+                        XmlPickler [NodeG [] tag text] expty) =>
+                       PU [NodeG [] tag text] (Level expty)
+defaultInfixPickler =
+  let
+    revfunc DefaultInfix { infixPos = pos } = ((), pos)
+    revfunc _ = error "Can't convert"
+  in
+    xpWrap (\((), pos) -> DefaultInfix { infixPos = pos }, revfunc)
+           (xpElem (gxFromString "Default")
+                   (xpAttrFixed (gxFromString "fixity") (gxFromString "infix"))
+                   (xpElemNodes (gxFromString "pos") xpickle))
+
+defaultPostfixPickler :: (GenericXMLString tag, Show tag,
+                          GenericXMLString text, Show text,
+                          XmlPickler [NodeG [] tag text] expty) =>
+                        PU [NodeG [] tag text] (Level expty)
+defaultPostfixPickler =
+  let
+    revfunc DefaultPostfix { postfixPos = pos } = ((), pos)
+    revfunc _ = error "Can't convert"
+  in
+    xpWrap (\((), pos) -> DefaultPostfix { postfixPos = pos }, revfunc)
+           (xpElem (gxFromString "Default")
+                   (xpAttrFixed (gxFromString "fixity")
+                                (gxFromString "postfix"))
+                   (xpElemNodes (gxFromString "pos") xpickle))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] expty) =>
+         XmlPickler [NodeG [] tag text] (Level expty) where
+  xpickle =
+    let
+      picker Level {} = 0
+      picker DefaultPrefix {} = 1
+      picker DefaultInfix {} = 2
+      picker DefaultPostfix {} = 3
+    in
+      xpAlt picker [levelPickler, defaultPrefixPickler, defaultInfixPickler,
+                    defaultPostfixPickler]
+
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Prec expty) where
-  xpickle = xpWrap (\(ord, (ex, pos)) ->
-                     Prec { precOrd = ord, precExp = ex, precPos = pos },
-                    \Prec { precOrd = ord, precExp = ex, precPos = pos } ->
-                    (ord, (ex, pos)))
+  xpickle = xpWrap (\(ord, (ref, pos)) ->
+                     Prec { precOrd = ord, precLevel = ref, precPos = pos },
+                    \Prec { precOrd = ord, precLevel = ref, precPos = pos } ->
+                    (ord, (ref, pos)))
                    (xpElem (gxFromString "Prec")
                            (xpAttr (gxFromString "order") xpPrim)
-                           (xpPair (xpElemNodes (gxFromString "exp") xpickle)
+                           (xpPair (xpElemNodes (gxFromString "level") xpickle)
                                    (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance Hashable BuilderKind where
