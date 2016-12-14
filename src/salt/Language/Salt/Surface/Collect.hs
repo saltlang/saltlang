@@ -471,11 +471,11 @@ collectPattern pat =
             internalError "Empty field list" [pos]
             return accum
         collapseField accum (sym, [single]) =
-          return $! HashMap.insert sym single accum
-        collapseField accum (sym, (syntax @ (first : _))) =
+          return $! HashMap.insert FieldName { fieldSym = sym } single accum
+        collapseField accum (sym, syntax @ (first : _)) =
           do
             duplicateField sym (map position syntax)
-            return $! HashMap.insert sym first accum
+            return $! HashMap.insert FieldName { fieldSym = sym } first accum
       in do
         -- First collect all field patterns
         (collectedFields, newbinds) <-

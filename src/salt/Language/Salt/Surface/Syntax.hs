@@ -292,7 +292,7 @@ data Pattern expty =
     -- | A projection.  Mirrors a record expression.
   | Split {
       -- | The fields being projected.
-      splitFields :: !(HashMap Symbol (Entry expty)),
+      splitFields :: !(HashMap FieldName (Entry expty)),
       -- | Whether or not the binding is strict (ie. it omits some fields)
       splitStrict :: !Bool,
       -- | The position in source from which this arises.
