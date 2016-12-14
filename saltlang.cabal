@@ -153,6 +153,7 @@ Library
                         Language.Salt.Surface.Common
                         Language.Salt.Surface.Lexer
                         Language.Salt.Surface.Parser
+                        Language.Salt.Surface.Precedence
                         Language.Salt.Surface.Refs
 --                        Language.Salt.Core.Proofs.ProofScript,
 --                        Language.Salt.Core.Proofs.ProofState,

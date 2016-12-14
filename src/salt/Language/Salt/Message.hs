@@ -1116,7 +1116,7 @@ cyclicPrecedence :: (MonadMessages Message m, MonadSymbols m) =>
 cyclicPrecedence pos = message CyclicPrecedence { cyclicPrecedencePos = pos }
 
 -- | Report precedence parse errors
-precedenceParseError :: (MonadMessages Message m, MonadSymbols m) =>
+precedenceParseError :: (MonadMessages Message m) =>
                         Position
                      -- ^ The position at which the inheritance occurs.
                      -> m ()
@@ -1124,7 +1124,7 @@ precedenceParseError pos =
   message PrecedenceParseError { precParseErrorPos = pos }
 
 -- | Report non-references where a reference was expected
-expectedRef :: (MonadMessages Message m, MonadSymbols m) =>
+expectedRef :: (MonadMessages Message m) =>
                Position
             -- ^ The position at which the inheritance occurs.
             -> m ()
