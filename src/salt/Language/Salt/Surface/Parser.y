@@ -29,6 +29,23 @@
 -- SUCH DAMAGE.
 {
 
+-- |
+-- = Parser
+--
+-- This module defines the parser.  Its purpose is to parse input from
+-- files into an 'AST'.  Note that parsing at this phase does /not/
+-- resolve operator precedence.  As this is affected by syntax
+-- directives and cannot be resolved until after resolution, it must
+-- be done later in compilation.  Therefore, expressions are parsed
+-- into a sequence-based form.  Additionally, parenthetical
+-- expressions are parsed here as tuples containing a single element,
+-- and converted to the proper form later on.
+--
+-- The parser makes use of the lexer defined in
+-- "Language.Salt.Surface.Lexer", and tokens defined in
+-- "Language.Salt.Surface.Token".  It produces the 'AST' defined in
+-- "Language.Salt.Surface.AST".  Operator precedence parsing is
+-- defined in "Language.Salt.Surface.Precedence".
 module Language.Salt.Surface.Parser(
        parserWithTokens,
        parser
@@ -1045,12 +1062,16 @@ str :: Token -> Strict.ByteString
 str (Token.String str _) = str
 str _ = error "Cannot get str of token"
 
--- | Run the parser, include tokens with the result.
+-- | Parse input from a file into an 'AST'.  Also produce the token
+-- stream from the file.
 parserWithTokens :: Position.Filename
                  -- ^ Name of the file being parsed.
                  -> Lazy.ByteString
                  -- ^ Content of the file being parsed
                  -> Frontend (Maybe AST, [Token])
+                 -- ^ The 'AST' produced from the contents, if the
+                 -- parse succeeded, as well as the tokens produced
+                 -- from the contents.
 parserWithTokens name input =
   let
     run :: Lexer Frontend (Maybe AST)
@@ -1066,12 +1087,14 @@ parserWithTokens name input =
   in
     runLexerWithTokens run name input
 
--- | Run the parser
+-- | Parse input from a file into an 'AST'.
 parser :: Position.Filename
        -- ^ Name of the file being parsed.
        -> Lazy.ByteString
        -- ^ Content of the file being parsed
        -> Frontend (Maybe AST)
+       -- ^ The 'AST' produced from the contents, if the parse
+       -- succeeded.
 parser name input =
   let
     run :: Lexer Frontend (Maybe AST)

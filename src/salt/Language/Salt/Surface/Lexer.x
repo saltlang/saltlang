@@ -31,11 +31,24 @@
 {-# OPTIONS_GHC -funbox-strict-fields -fno-warn-tabs #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances, UndecidableInstances #-}
 
+-- |
+-- = Lexer
+--
+-- This module defines the lexer.  It is designed primarily for use by
+-- the (Happy-based) parser defined by "Language.Salt.Surface.Parser",
+-- and thus its interface conforms to what Happy expects.
+--
+-- The lexer produces tokens defined in "Language.Salt.Surface.Token".
 module Language.Salt.Surface.Lexer(
+       -- * Types
        MonadFrontend,
        Lexer,
+
+       -- * Lexer Interface
        runLexerWithTokens,
        runLexer,
+
+       -- ** Low-Level Interface
        lex,
        lexRemaining,
        ) where
@@ -502,6 +515,7 @@ bufferedComments :: (MonadCommentBuffer m, MonadState AlexState m) =>
 bufferedComments _ pos _ = CommentBuffer.saveCommentsAsPreceeding pos >>
                            CommentBuffer.clearComments
 
+-- | A synonym for the monad used by the lexer.
 type Lexer m = AlexT UserState m
 
 data UserState =
@@ -524,6 +538,8 @@ initUserState saveTokens =
   UserState { userStringBuf = [], userStartPos = undefined, userTokenBuf = [],
               userCommentDepth = 0, userSaveTokens = saveTokens }
 
+-- | An abbreviation for the (very long) list of type classes used by
+-- the lexer and the parser.
 class (MonadMessages Message m, MonadGensym m, MonadGenpos m,
        MonadCommentBuffer m, MonadSourceBuffer m,
        MonadKeywords BasicPosition Token m) => MonadFrontend m
@@ -592,7 +608,11 @@ lex =
       else
         return tok
 
--- | Lex all remaining tokens
+-- | Lex all remaining tokens.  This is primarily used to consume the
+-- rest of input in the event of a parse error, thereby buffering
+-- everything and reporting any lexical errors past the parse error.
+-- It can also be used in conjunction with 'runLexer' or
+-- 'runLexerWithTokens' to lex an entire file.
 lexRemaining :: (MonadMessages Message m, MonadGensym m, MonadGenpos m,
                  MonadCommentBuffer m, MonadSourceBuffer m,
                  MonadKeywords BasicPosition Token m) =>
@@ -604,6 +624,11 @@ lexRemaining =
       EOF -> return ()
       _ -> lexRemaining
 
+-- | Run the lexer on input from a file, producing the tokens in
+-- addition to the usual output.
+--
+-- Use with 'lexRemaining' in order to lex an entire file and produce
+-- the token stream.
 runLexerWithTokens :: (MonadSourceBuffer m) =>
                       Lexer m a
                    -- ^ The lexer monad to run.
@@ -626,6 +651,12 @@ runLexerWithTokens l name input =
   in do
     runAlexT run input name initState
 
+-- | Run the lexer on input from a file.
+--
+
+-- Use with 'lexRemaining' in order to lex an entire file, buffering
+-- it and reporting any errors.  Note that you won't get any output
+-- this way; see 'runLexerWithTokens' to get the token stream.
 runLexer :: (MonadSourceBuffer m) =>
             Lexer m a
          -- ^ The lexer monad to run.

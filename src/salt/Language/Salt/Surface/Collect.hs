@@ -31,9 +31,33 @@
 {-# LANGUAGE OverloadedStrings, FlexibleContexts, FlexibleInstances,
              MultiParamTypeClasses #-}
 
+-- |
+-- = Collect Phase
+--
+-- This module defines the collect phase of the compiler.  Generally
+-- speaking, this phase is responsible for assembling all the parts of
+-- the program into the table-based surface syntax structure.  At the
+-- top level, it fully resolves all component references and parses or
+-- loads the necessary files to gather all their definitions.  It also
+-- converts the list-based scopes, field lists, and other structures
+-- in the AST to a table-based form, reporting collisions and other
+-- problems.
+--
+-- The collect phase consumes the structures defined in
+-- "Language.Salt.Surface.AST" and produces the structures defined in
+-- "Language.Salt.Surface.Syntax".
+--
+-- Collect can issue several messages:
+-- * Duplicate record fields.
+-- * Uninitialized definition without a top-level name (warning).
+-- * Multiple truth definitions with the same names.
+
 module Language.Salt.Surface.Collect(
+       -- * Collect Phase
        collectComponents,
        collectFiles,
+
+       -- * Utilities
        componentFileName
        ) where
 
@@ -986,30 +1010,7 @@ collectScope pos groups =
     (_, scopeid) <- makeScope pos (mapM_ collectGroup groups)
     return scopeid
 
--- | The Collect phase of the compiler.  Collect consumes an AST and
--- produces a Surface structure.
---
--- The primary responsibility of this phase is to construct scopes,
--- which contain all definitions in an indexed map, and further
--- grouped by visibility.  At the end of collection, all scopes are
--- represented as tables, containing the definitions they _directly_
--- define.  Derived scopes are _not_ constructed by this phase.
---
--- Collect also does some minor restructuring of the tree, including
--- the following:
--- * 'Seq's are transformed into a single constructor which contains a
---   list of 'Exp's
--- * Record patterns and literals have their fields stored in a 'HashMap'.
--- * Syntax directives are parsed and stored as data in the scope.
--- * Scopes are split into definitions, truths, and directives (proofs
---   and imports).
---
--- Collect can issue several messages:
--- * Duplicate record fields.
--- * Uninitialized definition without a top-level name (warning).
--- * Multiple truth definitions with the same names.
--- * Malformed syntax directives.
--- * Undefined symbols in syntax directives.
+-- | Collect a single AST.  This does not resolve or load use directives.
 collectAST :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
               Position
            -- ^ Position corresponding to this entire file.
@@ -1145,6 +1146,7 @@ collectComponent parseFunc pos cname =
     unless done loadAndCollect
     return ()
 
+-- | Collect a set of components into a surface syntax structure.
 collectComponents :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                       MonadMessages Message m, MonadGenpos m,
                       MonadSymbols m, MonadIO m) =>
@@ -1153,6 +1155,8 @@ collectComponents :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                   -> [(Position, [Symbol])]
                   -- ^ The names of the components to collect.
                   -> m (Syntax.Surface (Syntax.Exp Syntax.Seq Symbol))
+                  -- ^ Surface syntax of the collected components and
+                  -- all their dependencies.
 collectComponents parsefunc files =
   let
     collectOne (pos, fname) = collectComponent parsefunc pos fname
@@ -1227,6 +1231,7 @@ collectFile parseFunc pos fstr =
                 mapM_ collectUse uses
             Nothing -> return ()
 
+-- | Collect a set of files into a surface syntax structure.
 collectFiles :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                  MonadMessages Message m, MonadGenpos m,
                  MonadSymbols m, MonadIO m) =>
@@ -1235,6 +1240,8 @@ collectFiles :: (MonadLoader Strict.ByteString Lazy.ByteString m,
              -> [(Position, Strict.ByteString)]
              -- ^ The names of the files to collect.
              -> m (Syntax.Surface (Syntax.Exp Syntax.Seq Symbol))
+             -- ^ Surface syntax of the collected files and all their
+             -- dependencies.
 collectFiles parsefunc files =
   let
     collectOne (pos, fname) = collectFile parsefunc pos fname

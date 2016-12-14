@@ -30,29 +30,39 @@
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FlexibleContexts #-}
 
--- | The Abstract Syntax Tree, as yielded by a parser.  This is
--- rendered into Absyn by Collect, which gathers all entries
--- into a table.
+-- |
+-- = Abstract Syntax Tree Datatypes
 --
--- Note that this structure isn't meant to be processed in any truly
--- meaningful way.
+-- This module defines the abstract syntax tree, as yielded by the
+-- parser.  This is rendered into surface syntax by the collect phase,
+-- which converts it to a table-based form.
+--
+-- In general, you should work on the structures in
+-- "Language.Salt.Surface.Syntax" as opposed to the AST.
 module Language.Salt.Surface.AST(
-       BuilderKind(..),
-       TruthKind(..),
-       Visibility(..),
+       -- * Core Structures
+
+       -- ** Top-Level
        AST(..),
        Component(..),
        Use(..),
-       Group(..),
+
+       -- ** Scopes
        Content(..),
+       Group(..),
        Scope,
        Element(..),
-       Compound(..),
-       Pattern(..),
+
+       -- ** Expressions
        Exp(..),
+       Compound(..),
        Field(..),
-       Entry(..),
+
+       -- ** Cases and Patterns
        Case(..),
+       Pattern(..),
+       Entry(..),
+
        -- * Graphviz Renderer
        astDot
        ) where
@@ -76,18 +86,19 @@ import Text.XML.Expat.Tree(NodeG)
 import qualified Data.ByteString as Strict
 import qualified Data.ByteString.UTF8 as Strict
 
--- | Type of an AST.
+-- | Top-level AST structure
 data AST =
   AST {
+    -- | The component declaration for this component, if one was given.
     astComponent :: !(Maybe Component),
-    -- | The headers.
+    -- | The use statements for this component.
     astUses :: ![Use],
-    -- | The top-level scope.
+    -- | The top-level definitions.
     astScope :: ![Element]
   }
   deriving (Ord, Eq)
 
--- | A component statement.
+-- | A component declaration.  This gives the name of the component.
 data Component =
   Component {
     -- | The component name.
@@ -96,19 +107,19 @@ data Component =
     componentPos :: !Position
   }
 
--- | Use directives.  These import content from another file.
+-- | Use directives.  These import other components for use.
 data Use =
-  -- | A use header.
   Use {
-    -- | The qualified name in the use directive.
+    -- | The qualified name of the component to use.
     useName :: ![Symbol],
     -- | The position in source from which this arises.
     usePos :: !Position
   }
 
--- | Represents a group of definitions with a given visibility.
+-- | A group of definitions with a given visibility.
 --
 -- Corresponds to the syntax
+--
 -- > (visibility): def1 def2 ...
 data Group =
   Group {
@@ -120,12 +131,12 @@ data Group =
     groupPos :: !Position
   }
 
--- | Content of a definition.  Used wherever we can see a definition
--- body, or else an expression.
+-- | Content of a definition.  This is used wherever we can see a
+-- scope body or an expression referencing another definition.
 data Content =
-    -- | An actual definition body.
+    -- | An actual scope body.
     Body { bodyScope :: !Scope }
-    -- | An expression.
+    -- | An expression referencing another definition.
   | Value { valueExp :: !Exp }
 
 -- | Type of a scope.
@@ -202,6 +213,8 @@ data Element =
       -- | The position in source from which this arises.
       importPos :: !Position
     }
+    -- | A syntax directive.  These allow the syntax of a given symbol
+    -- defined in this scope to be changed.
   | Syntax {
       -- | The syntax directive.
       syntaxSym :: !Symbol,
@@ -214,14 +227,14 @@ data Element =
     }
 
 -- | Compound expression elements.  These are either "ordinary"
--- expressions, or declarations.
+-- expressions or declarations.
 data Compound =
     -- | An ordinary expression.
     Exp { expVal :: !Exp }
     -- | A definition.
   | Element { elemVal :: !Element }
 
--- | A pattern, for pattern match expressions.
+-- | A pattern.  These decompose values and bind names.
 data Pattern =
     Option {
       -- | The option patterns
@@ -260,6 +273,7 @@ data Pattern =
     -- continues to match.
     --
     -- Corresponds to the syntax
+    --
     -- > name as (pattern)
   | As {
       -- | The name to bind.
@@ -414,7 +428,7 @@ data Entry =
     -- | Unnamed field.  This is just an expression.
   | Unnamed { unnamedPat :: !Pattern }
 
--- | A field.
+-- | A field in a record.
 data Field =
   Field {
     -- | The name being bound.
