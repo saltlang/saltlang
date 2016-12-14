@@ -36,6 +36,7 @@
 -- into 'Apply'-based forms.
 --
 -- The basic grammar for expressions looks like this:
+--
 -- > start : exp
 -- >       | partial_right
 -- >       | partial_left
