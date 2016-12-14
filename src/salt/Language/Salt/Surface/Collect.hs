@@ -67,6 +67,7 @@ import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.HashTable.IO as HashTable
+import qualified Data.IntMap as IntMap
 import qualified Language.Salt.Surface.AST as AST
 import qualified Language.Salt.Surface.Syntax as Syntax
 
@@ -693,9 +694,11 @@ collectExp AST.Tuple { AST.tupleFields = [], AST.tuplePos = pos } =
     return Syntax.Bad { Syntax.badPos = pos }
 collectExp AST.Tuple { AST.tupleFields = [ single ] } = collectExp single
 collectExp AST.Tuple { AST.tupleFields = fields, AST.tuplePos = pos } =
-  do
+  let
+    toIntMap vals = IntMap.fromDistinctAscList (zip (iterate (+1) 1) vals)
+  in do
     collectedFields <- mapM collectExp fields
-    return Syntax.Tuple { Syntax.tupleFields = collectedFields,
+    return Syntax.Tuple { Syntax.tupleFields = toIntMap collectedFields,
                           Syntax.tuplePos = pos }
 -- The remainder of these are straightforward
 collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =

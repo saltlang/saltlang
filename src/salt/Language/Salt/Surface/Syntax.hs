@@ -77,6 +77,7 @@ import Control.Monad.Symbols
 import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
+import Data.IntMap(IntMap)
 import Data.List(sort)
 import Data.PositionElement
 import Data.ScopeID
@@ -90,6 +91,7 @@ import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
 import qualified Data.HashMap.Strict as HashMap
+import qualified Data.IntMap as IntMap
 
 -- | Unique ID for initializers.
 newtype DefID = DefID { defID :: Word } deriving (Eq, Ord, Ix)
@@ -392,8 +394,10 @@ data Exp callty refty =
     }
     -- | A tuple literal.
   | Tuple {
-      -- | The fields in this tuple expression.
-      tupleFields :: ![Exp callty refty],
+      -- | The fields in this tuple expression.  This is a map,
+      -- because some tuples are incomplete in the same way that some
+      -- records are.
+      tupleFields :: IntMap (Exp callty refty),
       -- | The position in source from which this arises.
       tuplePos :: !Position
     }
@@ -1070,7 +1074,7 @@ instance (Hashable (callty refty), Hashable refty,
   hashWithSalt s RecordType { recordTypeFields = fields } =
     s `hashWithSalt` (7 :: Int) `hashWithSalt` fields
   hashWithSalt s Tuple { tupleFields = fields } =
-    s `hashWithSalt` (8 :: Int) `hashWithSalt` fields
+    s `hashWithSalt` (8 :: Int) `hashWithSalt` IntMap.toAscList fields
   hashWithSalt s Project { projectVal = val, projectFields = sym } =
     s `hashWithSalt` (9 :: Int) `hashWithSalt` sym `hashWithSalt` val
   hashWithSalt s Sym { symRef = sym } =
@@ -1204,6 +1208,18 @@ formatMap hashmap =
         return $! tupleDoc [symdoc, entdoc]
   in do
     entrydocs <- mapM formatEntry (HashMap.toList hashmap)
+    return $! listDoc entrydocs
+
+formatIntMap :: (MonadSymbols m, MonadPositions m, FormatM m val) =>
+                IntMap val -> m Doc
+formatIntMap hashmap =
+  let
+    formatEntry (key, ent) =
+      do
+        entdoc <- formatM ent
+        return $! tupleDoc [string (show key), entdoc]
+  in do
+    entrydocs <- mapM formatEntry (IntMap.toList hashmap)
     return $! listDoc entrydocs
 
 formatListMap :: (MonadSymbols m, MonadPositions m,
@@ -1493,10 +1509,10 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty,
   formatM Tuple { tupleFields = fields, tuplePos = pos } =
     do
       posdoc <- formatM pos
-      fielddocs <- mapM formatM fields
+      fielddocs <- formatIntMap fields
       return (compoundApplyDoc (string "Tuple")
                              [(string "pos", posdoc),
-                              (string "fields", listDoc fielddocs)])
+                              (string "fields", fielddocs)])
   formatM Project { projectVal = val, projectFields = fields,
                     projectPos = pos } =
     do
@@ -1602,6 +1618,17 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
            (xpElem (gxFromString "Syntax") xpickle
                    (xpPair (xpElemNodes (gxFromString "precs") (xpList xpickle))
                            (xpElemNodes (gxFromString "pos") xpickle)))
+
+intMapPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [NodeG [] tag text] val) =>
+                 PU [NodeG [] tag text] (IntMap val)
+intMapPickler =
+  xpWrap (IntMap.fromList, IntMap.toList)
+         (xpElemNodes (gxFromString "Map")
+                      (xpList (xpElem (gxFromString "entry")
+                                      (xpAttr (gxFromString "key") xpPrim)
+                                      xpickle)))
 
 mapPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
@@ -2106,7 +2133,8 @@ tuplePickler =
     xpWrap (\(fields, pos) -> Tuple { tupleFields = fields,
                                       tuplePos = pos }, revfunc)
            (xpElemNodes (gxFromString "Tuple")
-                        (xpPair (xpElemNodes (gxFromString "fields") xpickle)
+                        (xpPair (xpElemNodes (gxFromString "fields")
+                                             intMapPickler)
                                 (xpElemNodes (gxFromString "pos") xpickle)))
 
 projectPickler :: (GenericXMLString tag, Show tag,
