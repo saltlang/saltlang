@@ -31,21 +31,36 @@
 {-# LANGUAGE FlexibleInstances, MultiParamTypeClasses, FlexibleContexts,
              DeriveTraversable, DeriveFoldable, DeriveFunctor #-}
 
--- | A module containing common structures for both AST and Syntax.
+-- |
+-- = Common Surface Syntax Structures
+--
+-- This module contains structures that are common to both AST and
+-- surface syntax.
 module Language.Salt.Surface.Common(
-       Assoc(..),
-       Fixity(..),
-       Level(..),
-       Prec(..),
-       FieldName(..),
+       module Data.Position.BasicPosition,
+
+       -- * Enumerations
        BuilderKind(..),
        ContextKind(..),
        TruthKind(..),
        AbstractionKind(..),
        Visibility(..),
+
+       -- * Syntax Directive Information
+       Assoc(..),
+       Fixity(..),
+       Level(..),
+       Prec(..),
+
+       -- * Newtypes
+       FieldName(..),
+
+       -- * Literals
        Literal(..),
-       BasicPosition(..),
+
+       -- * Position Alias
        Position,
+
        literalDot,
        getNodeID,
        ) where
@@ -69,6 +84,7 @@ import Text.Format
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
+-- | Type alias for positions used by the surface language.
 type Position = BasicPosition
 
 -- | A newtype to discriminate field names from symbols.
@@ -185,6 +201,8 @@ data TruthKind =
   | Axiom
     deriving (Ord, Eq, Enum)
 
+-- | Kinds of abstractions.  This includes logical quantifiers as well
+-- as lambdas.
 data AbstractionKind =
     -- | A function abstraction.
     Lambda

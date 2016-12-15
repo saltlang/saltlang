@@ -31,32 +31,59 @@
 {-# LANGUAGE MultiParamTypeClasses, FlexibleInstances, FlexibleContexts,
              DeriveTraversable, DeriveFoldable, DeriveFunctor #-}
 
--- | Abstract Syntax structure.  This represents the surface language
--- in a more abstract form than is found in the AST structure.  In
--- this form, definitions have been gathered up into tables, and some
--- amount of processing has been done.  However, symbols have not been
--- resolved and inherited scopes have not been constructed.
+-- |
+-- = Surface Syntax Datatypes
+--
+-- This module defines the datatypes for the surface syntax structure.
+-- This is the primary data structure of the surface language and the
+-- frontend of the compiler.  Any processing on the surface language
+-- should take place on this structure.
+--
+-- Surface syntax is organized around scopes.  A 'Surface' structure
+-- should contain all the content of the program (this is ensured by
+-- the collect phase which generates surface syntax).  Unlike the AST,
+-- surface syntax is structured around tables, and all definitions are
+-- unordered.  Conflicting definitions should have already been
+-- reported as errors.
+--
+-- Surface syntax is defined polymorphically, particularly with regard
+-- to 'Exp's, and there are several variations of the data structure
+-- that reflect different stages of processing.  The 'Exp' datatype
+-- has two type parameters: the first gives the datatype used to store
+-- calls; the second gives the datatype used to store references.
+--
+-- Immediately following the collect phase, surface syntax will use
+-- 'Seq's for calls and raw 'Symbol's for references.  Resolution
+-- translates this isto a form using 'Ref's for references, and
+-- precedence parsing then converts to a form that uses 'Apply' for
+-- calls.
 module Language.Salt.Surface.Syntax(
        -- * Syntax Structures
+
+       -- ** Top-Level
        Surface(..),
        Component(..),
-       Assoc(..),
-       Fixity(..),
+
+       -- ** Scopes
+       Scope(..),
        Syntax(..),
        Truth(..),
        Proof(..),
-       Scope(..),
        Builder(..),
        Def(..),
        Import(..),
-       Compound(..),
-       Pattern(..),
-       Literal(..),
+
+       -- ** Expressions
        Exp(..),
-       Entry(..),
+       Compound(..),
        Fields(..),
        Field(..),
+       Literal(..),
+
+       -- ** Cases and Patterns
        Case(..),
+       Pattern(..),
+       Entry(..),
 
        -- * Representations
 
@@ -96,10 +123,12 @@ import qualified Data.IntMap as IntMap
 -- | Unique ID for initializers.
 newtype DefID = DefID { defID :: Word } deriving (Eq, Ord, Ix)
 
--- | A reference to a definition in a scope.
+-- | A fully-resolved reference.  This uniquely identifies a
+-- definition in a scope.  These should only refer to local
+-- definitions in scopes.
 data Ref =
   Ref {
-    -- | The symbol in the scope.
+    -- | The name of the definition.
     refSymbol :: !Symbol,
     -- | The scope ID.
     refScopeID :: !ScopeID
@@ -137,7 +166,7 @@ data Scope expty =
     -- | The truth environment for this scope.  This contains all
     -- theorems, axioms, and invariants.
     scopeTruths :: !(HashMap Symbol (Truth expty)),
-    -- | All concrete definitions in this scope.
+    -- | An array mapping 'DefID's to all local definitions in the scope.
     scopeDefs :: !(Array DefID (Def expty)),
     -- | A map from names to definition IDs.
     scopeNames :: !(Array Visibility (HashMap Symbol [DefID])),
@@ -198,8 +227,8 @@ data Builder expty =
   }
   deriving (Functor, Foldable, Traversable)
 
--- | Directives.  These are static commands, like imports or proofs,
--- which influence a scope, but do not directly define anything.
+-- | Proofs.  These are proof scripts targeted at individual truths,
+-- or at proof obligations.
 data Proof expty =
     -- | A proof.  This is just a code block with the name of the
     -- theorem being proven.

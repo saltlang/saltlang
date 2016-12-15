@@ -40,7 +40,7 @@
 -- In general, you should work on the structures in
 -- "Language.Salt.Surface.Syntax" as opposed to the AST.
 module Language.Salt.Surface.AST(
-       -- * Core Structures
+       -- * Syntax Structures
 
        -- ** Top-Level
        AST(..),
