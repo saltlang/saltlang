@@ -29,20 +29,26 @@
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# Language FlexibleInstances, FlexibleContexts, UndecidableInstances,
-             MultiParamTypeClasses, DeriveTraversable, DeriveFoldable,
-             DeriveFunctor #-}
+             MultiParamTypeClasses #-}
 
 -- | The Salt core language.  Salt's surface syntax is transliterated
 -- into Core, which is then type-checked and compiled.  Core is
 -- generally not meant for human consumption.
 module Language.Salt.Core.Syntax(
-       Literal(..),
-       Quantifier(..),
-       Pattern(..),
-       Element(..),
-       Case(..),
+       -- * Terms
        Intro(..),
        Elim(..),
+       Element(..),
+       Quantifier(..),
+
+       -- * Cases and Patterns
+       Case(..),
+       Pattern(..),
+
+       -- * Literals
+       Literal(..),
+
+       -- * Computations
        Cmd(..),
        Comp(..),
        elimTermPos
