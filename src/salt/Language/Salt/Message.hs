@@ -107,7 +107,7 @@ import Language.Salt.Surface.Token(Token)
 import Data.Default
 import Data.Symbol
 import Text.Format
-import Language.Salt.Core.Syntax
+import Language.Salt.Core.Syntax hiding (Position)
 
 import qualified Data.ByteString as Strict
 import qualified Data.ByteString.Lazy as Lazy
