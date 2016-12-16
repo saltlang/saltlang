@@ -61,8 +61,8 @@ import Control.Monad.Symbols
 import Control.Monad.Trans.Journal
 import Control.Monad.Writer
 import Data.ScopeID
-import Language.Salt.Surface.Refs
 import Language.Salt.Surface.Syntax
+import Language.Salt.Refs
 
 -- | Class of monads providing access to the definitions used directly
 -- by the compiler.

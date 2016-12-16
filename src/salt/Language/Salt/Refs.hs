@@ -29,10 +29,17 @@
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -Wall -Werror -funbox-strict-fields #-}
 
-module Language.Salt.Surface.Refs(
+module Language.Salt.Refs(
        Refs(..),
-       refStrs
+       refStrs,
+       refSyms
        ) where
+
+import Control.Monad.Gensym
+import Data.Bifunctor
+import Data.Bifoldable
+import Data.Bitraversable
+import Data.Symbol
 
 import qualified Data.ByteString.UTF8 as Strict
 
@@ -40,23 +47,48 @@ import qualified Data.ByteString.UTF8 as Strict
 -- by the compiler.
 data Refs compty refty =
   Refs {
-    -- | Reference to the component "base"
-    refBaseComponent :: !compty,
-    -- | Reference to the component "base"
-    refSaltCComponent :: !compty,
-    -- | Reference to the module "base"
-    refBaseModule :: !refty,
-    -- | Reference to the module "saltc"
-    refSaltCModule :: !refty,
-    -- | Reference to the function "compose"
-    refCompose :: !refty
+    -- | Name of the component "salt".
+    refSaltComponent :: !compty,
+    -- | Name of the compose function.
+    refCompose :: !refty,
+    -- | Name of the unit type and value.
+    refUnit :: !refty
   }
+
+saltComponentName :: [Strict.ByteString]
+saltComponentName = [Strict.fromString "salt"]
+
+composeName :: Strict.ByteString
+composeName = Strict.fromString "compose"
+
+unitName :: Strict.ByteString
+unitName = Strict.fromString "unit"
 
 -- | The string names of everything referenced by the compiler.
 refStrs :: Refs [Strict.ByteString] Strict.ByteString
-refStrs = Refs { refBaseComponent = [ Strict.fromString "base" ],
-                 refSaltCComponent = [ Strict.fromString "base",
-                                       Strict.fromString "saltc" ],
-                 refBaseModule = Strict.fromString "base",
-                 refSaltCModule = Strict.fromString "saltc",
-                 refCompose = Strict.fromString "compose" }
+refStrs = Refs { refSaltComponent = saltComponentName,
+                 refCompose = composeName,
+                 refUnit = unitName }
+
+-- | The symbol names of everything referenced by the compiler.
+refSyms :: (MonadGensym m) =>
+           m (Refs [Symbol] Symbol)
+refSyms = bimapM (mapM symbol) symbol refStrs
+
+instance Bifunctor Refs where
+  bimap = bimapDefault
+
+instance Bifoldable Refs where
+  bifoldMap = bifoldMapDefault
+
+instance Bitraversable Refs where
+  bitraverse mapcomp mapref Refs { refSaltComponent = saltcomp,
+                                   refCompose = compose,
+                                   refUnit = unit } =
+    let
+      new newsaltcomp newcompose newunit =
+        Refs { refSaltComponent = newsaltcomp,
+               refCompose = newcompose,
+               refUnit = newunit }
+    in
+      new <$> mapcomp saltcomp <*> mapref compose <*> mapref unit
