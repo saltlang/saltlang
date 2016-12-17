@@ -104,6 +104,7 @@ import Control.Monad.Symbols
 import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
+import Data.HashSet(HashSet)
 import Data.IntMap(IntMap)
 import Data.List(sort)
 import Data.PositionElement
@@ -118,6 +119,7 @@ import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
 import qualified Data.HashMap.Strict as HashMap
+import qualified Data.HashSet as HashSet
 import qualified Data.IntMap as IntMap
 
 -- | Unique ID for initializers.
@@ -524,6 +526,8 @@ data Case expty =
   Case {
     -- | The pattern to match for this case.
     casePat :: !(Pattern expty),
+    -- | All symbols bound by the pattern.
+    caseBinds :: ![Symbol],
     -- | The expression to execute for this case.
     caseBody :: !expty,
     -- | The position in source from which this arises.
@@ -2347,11 +2351,29 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Case expty) where
   xpickle =
-    xpWrap (\(pat, body, pos) -> Case { casePat = pat, caseBody = body,
-                                        casePos = pos },
-            \Case { casePat = pat, caseBody = body, casePos = pos } ->
-            (pat, body, pos))
-           (xpElemNodes (gxFromString "Case")
-                        (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
-                                  (xpElemNodes (gxFromString "body") xpickle)
-                                  (xpElemNodes (gxFromString "pos") xpickle)))
+    let
+      binds :: Pattern expty -> [Symbol]
+      binds =
+        let
+          binds' :: Pattern expty -> HashSet Symbol
+          binds' Option { optionPats = pats } = mconcat (map binds' pats)
+          binds' Deconstruct { deconstructPat = pat } = binds' pat
+          binds' Split { splitFields = fields } =
+            foldMap (binds' . entryPat) fields
+          binds' Typed { typedPat = pat } = binds' pat
+          binds' As { asName = sym, asPat = pat } =
+            HashSet.insert sym (binds' pat)
+          binds' Name { nameSym = sym } = HashSet.singleton sym
+          binds' Exact {} = HashSet.empty
+        in
+          HashSet.toList . binds'
+    in
+      xpWrap (\(pat, body, pos) -> Case { casePat = pat, caseBinds = binds pat,
+                                          caseBody = body, casePos = pos },
+              \Case { casePat = pat, caseBody = body, casePos = pos } ->
+              (pat, body, pos))
+             (xpElemNodes (gxFromString "Case")
+                          (xpTriple (xpElemNodes (gxFromString "pattern")
+                                                 xpickle)
+                                    (xpElemNodes (gxFromString "body") xpickle)
+                                    (xpElemNodes (gxFromString "pos") xpickle)))

@@ -854,9 +854,10 @@ collectCase :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
 collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
                        AST.casePos = pos } =
   do
-    (collectedPat, _) <- collectPattern pat
+    (collectedPat, binds) <- collectPattern pat
     collectedBody <- collectExp body
     return Syntax.Case { Syntax.casePat = collectedPat,
+                         Syntax.caseBinds = binds,
                          Syntax.caseBody = collectedBody,
                          Syntax.casePos = pos }
 
