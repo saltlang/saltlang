@@ -37,11 +37,14 @@ import Bound.Scope
 import Control.Monad.Positions.Class
 import Control.Monad.State
 import Data.HashSet(HashSet)
-import Data.Position.DWARFPosition
+import Data.Position.BasicPosition(BasicPosition)
+import Data.Position.DWARFPosition(DWARFPosition)
 import Data.PositionElement
 import Data.Symbol
 
 import qualified Data.HashSet as HashSet
+import qualified Data.Position.BasicPosition as Basic
+import qualified Data.Position.DWARFPosition as DWARF
 import qualified Language.Salt.Core.Syntax as Core
 import qualified Language.Salt.Surface.Syntax as Surface
 import qualified Language.Salt.Surface.Common as Surface
@@ -64,8 +67,19 @@ inBlock :: Monad m =>
         -- ^ The computation run in the context of the block.
 inBlock blockpos action =
   let
-    blockfunc posfunc pos = Block { blockCtx = posfunc blockpos,
-                                    blockPos = pos }
+    blockfunc posfunc Basic.Span { Basic.spanStart = start,
+                                   Basic.spanEnd = end } =
+      DWARF.Block { DWARF.blockCtx = posfunc blockpos,
+                    DWARF.blockPos = DWARF.Span { DWARF.spanStart = start,
+                                                  DWARF.spanEnd = end } }
+    blockfunc posfunc Basic.Point { Basic.pointPos = pos } =
+      DWARF.Block { DWARF.blockCtx = posfunc blockpos,
+                    DWARF.blockPos = DWARF.Point { DWARF.pointPos = pos } }
+    blockfunc posfunc Basic.File { Basic.fileName = fname } =
+        DWARF.File { DWARF.fileName = fname }
+    blockfunc posfunc Basic.Synthetic { Basic.synthDesc = desc } =
+        DWARF.Synthetic { DWARF.synthDesc = desc }
+    blockfunc posfunc Basic.CmdLine = DWARF.CmdLine
   in do
     state @ TransState { transPositionStack = stack,
                          transPosition = mkpos } <- get
@@ -80,7 +94,7 @@ dwarfPos :: Monad m =>
             Surface.Position
          -- ^ The 'BasicPosition' to turn into a 'DWARFPosition'
          -> TransliterateT m Core.Position
-dwarfPos pos elem =
+dwarfPos pos =
   do
     state @ TransState { transPosition = mkpos } <- get
     return $! mkpos pos
@@ -95,6 +109,19 @@ genPattern Surface.Option { Surface.optionPats = pats,
     corepos <- dwarfPos pos
     -- XXX Core doesn't presently have an Options pattern
     _
+genPattern Surface.Deconstruct {
+             Surface.deconstructPat = Surface.Split {
+                                        Surface.splitFields = fields,
+                                        Surface.splitStrict = strict
+                                      },
+             Surface.deconstructName = name,
+             Surface.deconstructPos = pos
+           } =
+  do
+    _
+genPattern Surface.Deconstruct { Surface.deconstructPat = pat,
+                                 Surface.deconstructName = name,
+                                 Surface.deconstructPos = pos } = _
 genPattern Surface.As { Surface.asName = sym, Surface.asPat = pat,
                         Surface.asPos = pos } =
   do
@@ -196,7 +223,9 @@ genElimExp Surface.Bad { Surface.badPos = pos } =
 -- XXX We need some way of representing components in the core language.
 
 -- XXX Figure out what the top-level core language structure should be
+{-
 transliterate :: Monad m =>
                  Surface.Surface (Surface.Exp Surface.Apply Surface.Ref)
               -> m Core.Core
 transliterate = _
+-}
