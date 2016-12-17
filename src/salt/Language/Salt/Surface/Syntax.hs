@@ -58,6 +58,8 @@
 -- precedence parsing then converts to a form that uses 'Apply' for
 -- calls.
 module Language.Salt.Surface.Syntax(
+       module Language.Salt.Surface.Common,
+
        -- * Syntax Structures
 
        -- ** Top-Level
@@ -95,7 +97,7 @@ module Language.Salt.Surface.Syntax(
        Apply(..),
 
        -- * Newtypes
-       DefID,
+       DefID
        ) where
 
 import Control.Monad.Positions

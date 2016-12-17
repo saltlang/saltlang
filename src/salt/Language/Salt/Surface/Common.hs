@@ -53,9 +53,6 @@ module Language.Salt.Surface.Common(
        Level(..),
        Prec(..),
 
-       -- * Newtypes
-       FieldName(..),
-
        -- * Literals
        Literal(..),
 
