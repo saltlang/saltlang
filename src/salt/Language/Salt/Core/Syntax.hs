@@ -207,11 +207,11 @@ data Element bound free =
 -- type checking.  Introduction terms are those terms that require a
 -- type to be checked against.
 data Intro bound free =
-  -- Types.  These do not support decidable equality.  As such, they
-  -- cannot be the result of a computation, and cannot appear in
-  -- patterns.
+    -- Types.  These do not support decidable equality.  As such, they
+    -- cannot be the result of a computation, and cannot appear in
+    -- patterns.
 
-  -- | Dependent product type.  This is the type given to functions.
+    -- | Dependent product type.  This is the type given to functions.
     FuncType {
       -- | The binding order for arguments.  This is used to determine
       -- the order in which to evaluate scopes.
@@ -224,7 +224,7 @@ data Intro bound free =
       -- | The position in source from which this originates.
       funcTypePos :: !Position
     }
-  -- | Dependent sum type.  This is the type given to structures.
+    -- | Dependent sum type.  This is the type given to structures.
   | RecordType {
       -- | The remaining elements of the sum type.  The first element
       -- in the binding order is a degenerate scope; the remaining
@@ -238,8 +238,8 @@ data Intro bound free =
       -- | The position in source from which this originates.
       recTypePos :: !Position
     }
-  -- | Refinement type.  This type represents all members of a type
-  -- satisfying a given proposition.
+    -- | Refinement type.  This type represents all members of a type
+    -- satisfying a given proposition.
   | RefineType {
       -- | The base type.
       refineType :: Intro bound free,
@@ -249,9 +249,9 @@ data Intro bound free =
       -- | The position in source from which this originates.
       refinePos :: !Position
     }
-  -- | Computation type.  This type represents a computation, and
-  -- includes both its result type and a specification of its
-  -- behavior.
+    -- | Computation type.  This type represents a computation, and
+    -- includes both its result type and a specification of its
+    -- behavior.
   | CompType {
       -- | The result type of the computation.
       compType :: Intro bound free,
@@ -263,11 +263,11 @@ data Intro bound free =
       compTypePos :: !Position
     }
 
-  -- Propositions.  These do not support decidable equality.  As such,
-  -- they cannot be the result of a computation, and cannot appear in
-  -- a pattern.
+    -- Propositions.  These do not support decidable equality.  As such,
+    -- they cannot be the result of a computation, and cannot appear in
+    -- a pattern.
 
-  -- | Quantified proposition.
+    -- | Quantified proposition.
   | Quantified {
       -- | The kind of quantification this represents (forall/exists).
       quantKind :: !Quantifier,
@@ -280,12 +280,12 @@ data Intro bound free =
       -- | The position in source from which this originates.
       quantPos :: !Position
     }
-  -- | A lambda expression.  Represents a function value.  Lambdas
-  -- cannot appear in patterns, though they can be computed on.
-  --
-  -- Lambdas will ultimately need to be extended to support
-  -- overloading, which adds an inherent multiple dispatch ability.
-  -- This is obviousy highly nontrivial to implement.
+    -- | A lambda expression.  Represents a function value.  Lambdas
+    -- cannot appear in patterns, though they can be computed on.
+    --
+    -- Lambdas will ultimately need to be extended to support
+    -- overloading, which adds an inherent multiple dispatch ability.
+    -- This is obviousy highly nontrivial to implement.
   | Lambda {
       -- | The cases describing this function's behavior.
       lambdaCases :: [Case bound free],
@@ -293,19 +293,19 @@ data Intro bound free =
       lambdaPos :: !Position
     }
 
-  -- | An eta expansion.  This is present for type checking only.
-  -- This represents a "frozen" substitution.
-  --
-  -- XXX Quite possibly this will be removed
+    -- | An eta expansion.  This is present for type checking only.
+    -- This represents a "frozen" substitution.
+
+    -- XXX Quite possibly this will be removed
   | Eta {
       etaTerm :: Elim bound free,
       etaType :: Intro bound free,
       -- | The position in source from which this originates.
       etaPos :: !Position
     }
-  -- | A record.  Records can be named or ordered in the surface
-  -- syntax.  Ordered records are transliterated into named
-  -- records, with the fields "1", "2", and so on.
+    -- | A record.  Records can be named or ordered in the surface
+    -- syntax.  Ordered records are transliterated into named
+    -- records, with the fields "1", "2", and so on.
   | Record {
       -- | The bindings for this record.  These are introduction terms.
       recFields :: !(HashMap bound (Intro bound free)),
@@ -368,13 +368,13 @@ data Intro bound free =
 
 -- | Elimination Terms.  These terms generate a type in type checking.
 data Elim bound free =
-  -- | Call term.  Represents a call to a function.  The type of the
-  -- term comes from the called function's return type.
-  --
-  -- As with structures, calls can be named or ordered in surface
-  -- syntax.  Also similar to structures, ordered calls are
-  -- transliterated into named calls with parameter names "1", "2",
-  -- and so on.
+    -- | Call term.  Represents a call to a function.  The type of the
+    -- term comes from the called function's return type.
+    --
+    -- As with structures, calls can be named or ordered in surface
+    -- syntax.  Also similar to structures, ordered calls are
+    -- transliterated into named calls with parameter names "1", "2",
+    -- and so on.
     Call {
       -- | The argument to the call. Multiple arguments are
       -- implemented using either a record or a tuple.
@@ -385,8 +385,8 @@ data Elim bound free =
       -- | The position in source from which this originates.
       callPos :: !Position
     }
-  -- | A typed term.  This is an introduction term with an explicit
-  -- type tag, which makes it an elimination term.
+    -- | A typed term.  This is an introduction term with an explicit
+    -- type tag, which makes it an elimination term.
   | Typed {
       -- | The introduction term being typed.
       typedTerm :: Intro bound free,
@@ -395,16 +395,16 @@ data Elim bound free =
       -- | The position in source from which this originates.
       typedPos :: !Position
     }
-  -- | A variable symbol.  Since we know the types of all variables,
-  -- this is an elimination term.
+    -- | A variable symbol.  Since we know the types of all variables,
+    -- this is an elimination term.
   | Var {
       -- | The underlying symbol.
       varSym :: !free,
       -- | The position in source from which this originates.
       varPos :: !Position
     }
-  -- | Placeholder for a malformed term, allowing type checking to
-  -- continue in spite of errors.
+    -- | Placeholder for a malformed term, allowing type checking to
+    -- continue in spite of errors.
   | BadElim {
       -- | The position in source from which this originates.
       badElimPos :: !Position
@@ -430,16 +430,16 @@ data Cmd bound free =
       -- | The position in source from which this originates.
       valPos :: !Position
     }
-  -- | Evaluate a computation value.  This allows execution of
-  -- computations produced by terms.
+    -- | Evaluate a computation value.  This allows execution of
+    -- computations produced by terms.
   | Eval {
       -- | The computation value to evaluate
       evalTerm :: Intro bound free,
       -- | The position in source from which this originates.
       evalPos :: !Position
     }
-  -- | Placeholder for a malformed command, allowing type checking to
-  -- continue in spite of errors.
+    -- | Placeholder for a malformed command, allowing type checking to
+    -- continue in spite of errors.
   | BadCmd {
       -- | The position in source from which this originates.
       badCmdPos :: !Position
@@ -457,7 +457,7 @@ data Cmd bound free =
 -- or a monad in Haskell. Stateful functions with arguments are
 -- modeled as regular functions which produce a computation.
 data Comp bound free =
-  -- | A sequential composition of terms.
+    -- | A sequential composition of terms.
     Seq {
       -- | The pattern to which to bind the result of seqCmd.
       seqPat :: Pattern bound,
@@ -470,15 +470,15 @@ data Comp bound free =
       -- | The position in source from which this originates.
       seqPos :: !Position
     }
-  -- | Result of a computation. This is always the end of a sequence.
+    -- | Result of a computation. This is always the end of a sequence.
   | End {
       -- | The command to run to produce a result.
       endCmd :: Cmd bound free,
       -- | The position in source from which this originates.
       endPos :: !Position
     }
-  -- | Placeholder for a malformed computation, allowing type checking
-  -- to continue in spite of errors.
+    -- | Placeholder for a malformed computation, allowing type checking
+    -- to continue in spite of errors.
   | BadComp {
       -- | The position in source from which this originates.
       badCompPos :: !Position
