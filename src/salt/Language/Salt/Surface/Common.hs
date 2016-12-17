@@ -38,6 +38,7 @@
 -- surface syntax.
 module Language.Salt.Surface.Common(
        module Data.Position.BasicPosition,
+       module Language.Salt.Common,
 
        -- * Enumerations
        BuilderKind(..),
@@ -75,8 +76,8 @@ import Data.Hashable.Extras(Hashable1)
 import Data.Ratio
 import Data.Position.BasicPosition
 import Data.PositionElement
-import Data.Symbol
 import Data.Word
+import Language.Salt.Common
 import Language.Salt.Format
 import Prelude hiding (concat)
 import Prelude.Extras(Eq1, Ord1)
@@ -86,10 +87,6 @@ import Text.XML.Expat.Tree(NodeG)
 
 -- | Type alias for positions used by the surface language.
 type Position = BasicPosition
-
--- | A newtype to discriminate field names from symbols.
-newtype FieldName = FieldName { fieldSym :: Symbol }
-  deriving (Ord, Eq)
 
 -- | Associativity for syntax directives.
 data Assoc = LeftAssoc | RightAssoc | NonAssoc
@@ -366,22 +363,8 @@ instance Hashable expty => Hashable (Prec expty) where
 instance Hashable1 Level
 instance Hashable1 Prec
 
-instance Hashable FieldName where
-  hashWithSalt s FieldName { fieldSym = sym } = s `hashWithSalt` sym
-
-instance MonadSymbols m => FormatM m FieldName where
-  formatM = formatM . fieldSym
-
 instance Format Assoc where format = string . show
 instance Format Fixity where format = string . show
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
-         XmlPickler [NodeG [] tag text] FieldName where
-  xpickle = xpWrap (FieldName, fieldSym) xpickle
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
-         XmlPickler [(tag, text)] FieldName where
-  xpickle = xpWrap (FieldName, fieldSym) xpickle
 
 instance Eq Literal where
   Num { numVal = num1 } == Num { numVal = num2 } = num1 == num2

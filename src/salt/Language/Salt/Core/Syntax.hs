@@ -35,6 +35,8 @@
 -- into Core, which is then type-checked and compiled.  Core is
 -- generally not meant for human consumption.
 module Language.Salt.Core.Syntax(
+       module Language.Salt.Common,
+
        -- * Terms
        Intro(..),
        Elim(..),
@@ -78,6 +80,7 @@ import Data.Ratio
 import Data.Symbol
 import Data.Traversable
 import Data.Word
+import Language.Salt.Common
 import Language.Salt.Format
 import Prelude hiding (foldl, mapM)
 import Prelude.Extras(Eq1(..), Ord1(..))
@@ -131,7 +134,7 @@ data Pattern bound =
       deconstructConstructor :: !bound,
       -- | The fields in the record being bound.  Note: all fields are
       -- given names by transliteration.
-      deconstructBinds :: HashMap bound (Pattern bound),
+      deconstructBinds :: HashMap FieldName (Pattern bound),
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
@@ -186,7 +189,7 @@ data Case bound free =
 data Element bound free =
   Element {
     -- | The name of the element.
-    elemName :: !bound,
+    elemName :: !FieldName,
     -- | The binding pattern of the element.
     elemPat :: Pattern bound,
     -- | The type of the element.
@@ -308,7 +311,7 @@ data Intro bound free =
     -- records, with the fields "1", "2", and so on.
   | Record {
       -- | The bindings for this record.  These are introduction terms.
-      recFields :: !(HashMap bound (Intro bound free)),
+      recFields :: !(HashMap FieldName (Intro bound free)),
       -- | The position in source from which this originates.
       recPos :: !Position
     }
@@ -964,7 +967,8 @@ instance Traversable (Element b) where
 
 instance Traversable (Intro b) where
   traverse f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
-    (\argtys' retty' -> t { funcTypeArgs = argtys', funcTypeRetTy = retty' }) <$>
+    (\argtys' retty' -> t { funcTypeArgs = argtys',
+                            funcTypeRetTy = retty' }) <$>
       traverse (traverse f) argtys <*> traverse f retty
   traverse f t @ RecordType { recTypeBody = body } =
     (\body' -> t { recTypeBody = body' }) <$> traverse (traverse f) body
@@ -1219,11 +1223,7 @@ instance Show Literal where
 instance Monad m => FormatM m Literal where
   formatM = return . format
 
-formatBind :: (Default sym, Format sym, Format ent, Eq sym) =>
-              (sym, ent) -> (Doc, Doc)
-formatBind (fname, ent) = (format fname, format ent)
-
-formatMBind :: (MonadPositions m, MonadSymbols m, Default sym,
+formatMBind :: (MonadPositions m, MonadSymbols m,
                 FormatM m sym, FormatM m ent, Eq sym) =>
               (sym, ent) -> m (Doc, Doc)
 formatMBind (fname, ent) =
@@ -1235,31 +1235,6 @@ formatMBind (fname, ent) =
 instance Format Quantifier where
   format Forall = string "forall"
   format Exists = string "exists"
-
-instance (Default bound, Format bound, Eq bound) => Format (Pattern bound) where
-  format Deconstruct { deconstructConstructor = sym, deconstructBinds = binds }
-    | sym == def =
-      let
-        binddocs = map formatBind (HashMap.toList binds)
-      in
-        recordDoc binddocs
-    | otherwise =
-      let
-        binddocs = map formatBind (HashMap.toList binds)
-        symdoc = format sym
-      in
-        compoundApplyDoc symdoc binddocs
-  format As { asBind = bind, asName = sym } =
-    let
-      namedoc = format sym
-      binddoc = format bind
-    in
-      namedoc </> nest nestLevel (string "as" </> binddoc)
-  format Name { nameSym = sym } = format sym
-  format Exact { exactLiteral = e } = format e
-
-instance (Format bound, Default bound, Eq bound) => Show (Pattern bound) where
-  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m,
           FormatM m bound, Default bound, Eq bound) =>
@@ -1282,19 +1257,6 @@ instance (MonadPositions m, MonadSymbols m,
   formatM Name { nameSym = sym } = formatM sym
   formatM Exact { exactLiteral = e } = formatM e
 
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Format (Case bound free) where
-  format Case { casePat = pat, caseBody = body } =
-    let
-      patdoc = format pat
-      bodydoc = format body
-    in
-      patdoc </> equals </> nest nestLevel bodydoc
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Show (Case bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
-
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
          FormatM m (Case bound free) where
@@ -1303,36 +1265,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
       patdoc <- formatM pat
       bodydoc <- formatM body
       return (patdoc </> equals </> nest nestLevel bodydoc)
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Format (Element bound free) where
-  format Element { elemPat = Name { nameSym = sym' },
-                   elemType = ty, elemName = sym } | sym' == def =
-    let
-      symdoc = format sym
-      tydoc = format ty
-    in case flatten tydoc of
-      Just flatty ->
-        choose [ symdoc <+> colon <+> flatty,
-                 symdoc <+> colon <!> nest nestLevel tydoc ]
-      Nothing -> symdoc <+> colon <!> nest nestLevel tydoc
-  format Element { elemPat = pat, elemType = ty, elemName = sym } =
-    let
-      symdoc = format sym
-      patdoc = format pat
-      tydoc = format ty
-    in case flatten tydoc of
-      Just flatty ->
-        choose [ symdoc <+> colon <+> flatty <+>
-                 equals <!> nest nestLevel patdoc,
-                 symdoc <+> colon <!>
-                 nest nestLevel (tydoc <+> equals <!> nest nestLevel patdoc) ]
-      Nothing -> symdoc <+> colon <!>
-                 nest nestLevel (tydoc <+> equals <!> nest nestLevel patdoc)
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Show (Element bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1363,31 +1295,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
                            nest nestLevel (tydoc <+> equals <!>
                                            nest nestLevel patdoc))
 
-formatCompList :: (Format bound, Format free, Default bound, Eq bound) =>
-                  Comp bound free -> [Doc]
-formatCompList =
-  let
-    formatCompList':: (Format bound, Format free, Default bound, Eq bound) =>
-                      [Doc] -> Comp bound free -> [Doc]
-    formatCompList' accum Seq { seqCmd = cmd, seqPat = pat,
-                                seqType = ty, seqNext = next } =
-      let
-        cmddoc = format cmd
-        patdoc = format pat
-        typedoc = format ty
-        doc = patdoc <+> colon </>
-              nest nestLevel (typedoc <+> equals </> nest nestLevel cmddoc)
-      in
-        formatCompList' (doc : accum) (fromScope next)
-    formatCompList' accum End { endCmd = cmd } =
-      let
-        cmddoc = format cmd
-      in
-        reverse (cmddoc : accum)
-    formatCompList' accum BadComp {} = reverse (string "<bad>" : accum)
-  in
-    formatCompList' []
-
 formatMCompList :: (MonadPositions m, MonadSymbols m, FormatM m bound,
                     FormatM m free, Default bound, Eq bound) =>
                   Comp bound free -> m [Doc]
@@ -1414,73 +1321,6 @@ formatMCompList =
       return $! reverse (string "<bad>" : accum)
   in
     formatMCompList' []
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Format (Intro bound free) where
-  format Eta {} = error "Eta is going away"
-  format FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
-    let
-      argdocs = map format args
-      rettydoc = format retty
-    in
-      tupleDoc argdocs <+> string "->" </> nest nestLevel rettydoc
-  format RecordType { recTypeBody = body } =
-    let
-      bodydocs = map format body
-    in
-      tupleDoc bodydocs
-  format RefineType { refineType = ty, refineCases = cases } =
-    let
-      tydoc = format ty
-      casedocs = map format cases
-    in
-      tydoc </> nest nestLevel (string "where" <+> casesDoc casedocs)
-  format CompType { compType = ty, compCases = cases } =
-    let
-      tydoc = format ty
-      casedocs = map format cases
-    in
-      tydoc </> nest nestLevel (string "spec" <+> casesDoc casedocs)
-  format Quantified { quantType = ty, quantCases = cases, quantKind = kind } =
-    let
-      tydoc = format ty
-      casedocs = map format cases
-    in
-      format kind <+> tydoc <> dot <+> casesDoc casedocs
-  format Lambda { lambdaCases = cases } =
-    let
-      casedocs = map format cases
-    in
-      string "lambda" <+> casesDoc casedocs
-  format Record { recFields = fields } =
-    let
-      fielddocs = map formatBind (HashMap.toList fields)
-    in
-      recordDoc fielddocs
-  format Tuple { tupleFields = fields } =
-    let
-      fielddocs = map format (elems fields)
-    in
-      tupleDoc fielddocs
-  format Fix { fixSym = sym, fixTerm = term } =
-    let
-      symdoc = format sym
-      termdoc = format term
-    in
-      string "fix " <> symdoc <+> equals <//> nest nestLevel termdoc
-  format Comp { compBody = body } =
-    let
-      bodydocs = formatCompList body
-    in
-      blockDoc bodydocs
-  format Elim { elimTerm = term } = format term
-  format Constructor { constructorSym = sym } = format sym
-  format Literal { literalVal = lit } = format lit
-  format BadIntro {} = string "<bad>"
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Show (Intro bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
@@ -1536,27 +1376,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
   formatM Literal { literalVal = lit } = formatM lit
   formatM BadIntro {} = return $! string "<bad>"
 
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Format (Elim bound free) where
-  format Call { callFunc = func, callArg = arg } =
-    let
-      argdoc = format arg
-      funcdoc = format func
-    in
-      funcdoc </> argdoc
-  format Typed { typedTerm = term, typedType = ty } =
-    let
-      termdoc = format term
-      typedoc = format ty
-    in
-      termdoc <+> colon </> nest nestLevel typedoc
-  format Var { varSym = sym } = format sym
-  format BadElim {} = string "<bad>"
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Show (Elim bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
-
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
          FormatM m (Elim bound free) where
@@ -1573,16 +1392,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
   formatM Var { varSym = sym } = formatM sym
   formatM BadElim {} = return $! string "<bad>"
 
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Format (Cmd bound free) where
-  format Value { valTerm = term } = format term
-  format Eval { evalTerm = term } = string "do" </> nest nestLevel (format term)
-  format BadCmd {} = string "BadCmd"
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Show (Cmd bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
-
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
          FormatM m (Cmd bound free) where
@@ -1592,18 +1401,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
       termdoc <- formatM term
       return $! string "do" </> nest nestLevel termdoc
   formatM BadCmd {} = return $! string "<bad>"
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Format (Comp bound free) where
-  format comp =
-    let
-      stmlist = formatCompList comp
-    in
-      stmsDoc stmlist
-
-instance (Format bound, Format free, Default bound, Eq bound) =>
-         Show (Comp bound free) where
-  show = Lazy.toString . renderOptimal 80 False . format
 
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
