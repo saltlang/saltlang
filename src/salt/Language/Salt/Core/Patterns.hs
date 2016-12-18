@@ -60,11 +60,11 @@ patternMatchTail result Deconstruct { deconstructConstructor = constructor,
     case term of
       Record { recFields = fields } ->
         let
-          foldfun accum sym bind =
+          foldfun accum sym Field { fieldVal = bind } =
             do
               justaccum <- accum
-              field <- HashMap.lookup sym fields
-              patternMatchTail justaccum bind field
+              Field { fieldVal = val } <- HashMap.lookup sym fields
+              patternMatchTail justaccum bind val
         in
           HashMap.foldlWithKey' foldfun (Just result) binds
       _ -> Nothing
@@ -82,10 +82,10 @@ patternMatchTail result Deconstruct { deconstructConstructor = constructor,
            } ->
         if constructor == constructor'
         then let
-            foldfun accum sym bind =
+            foldfun accum sym Field { fieldVal = bind } =
               do
                 justaccum <- accum
-                arg <- HashMap.lookup sym args
+                Field { fieldVal = arg } <- HashMap.lookup sym args
                 patternMatchTail justaccum bind arg
           in
             HashMap.foldlWithKey' foldfun (Just result) binds

@@ -29,7 +29,7 @@
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
 {-# Language FlexibleInstances, FlexibleContexts, UndecidableInstances,
-             MultiParamTypeClasses #-}
+             MultiParamTypeClasses, DeriveTraversable #-}
 
 -- | The Salt core language.  Salt's surface syntax is transliterated
 -- into Core, which is then type-checked and compiled.  Core is
@@ -53,6 +53,9 @@ module Language.Salt.Core.Syntax(
        -- * Computations
        Cmd(..),
        Comp(..),
+
+       -- * Fields
+       Field(..),
 
        -- * Positions
        Position
@@ -134,7 +137,7 @@ data Pattern bound =
       deconstructConstructor :: !bound,
       -- | The fields in the record being bound.  Note: all fields are
       -- given names by transliteration.
-      deconstructBinds :: HashMap FieldName (Pattern bound),
+      deconstructBinds :: HashMap FieldName (Field (Pattern bound)),
       -- | Whether or not the binding is strict (ie. it omits some names)
       deconstructStrict :: !Bool,
       -- | The position in source from which this originates.
@@ -170,6 +173,7 @@ data Pattern bound =
       -- | The position in source from which this originates.
       exactPos :: !Position
     }
+    deriving (Functor, Foldable, Traversable)
 
 -- | A case.  Consists of a pattern and a body wrapped in a scope.
 -- Used to describe functions and computations with parameters.
@@ -182,6 +186,7 @@ data Case bound free =
     -- | The position in source from which this originates.
     casePos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
 
 -- | An element.  This is either an argument in a function type or a
 -- field in a record type.  The pattern introduces variables in
@@ -197,6 +202,17 @@ data Element bound free =
     -- | The position in source from which this originates.
     elemPos :: !Position
   }
+  deriving (Functor, Foldable, Traversable)
+
+-- | A field.
+data Field valty =
+  Field {
+    -- | The value assigned to the bound name.
+    fieldVal :: !valty,
+    -- | The position in source from which this arises.
+    fieldPos :: !Position
+  }
+  deriving (Functor, Foldable, Traversable)
 
 -- | Terms.  Represents pure terms in the language.  Terms are further
 -- subdivided into types, propositions, and elimination and
@@ -311,7 +327,7 @@ data Intro bound free =
     -- records, with the fields "1", "2", and so on.
   | Record {
       -- | The bindings for this record.  These are introduction terms.
-      recFields :: !(HashMap FieldName (Intro bound free)),
+      recFields :: !(HashMap FieldName (Field (Intro bound free))),
       -- | The position in source from which this originates.
       recPos :: !Position
     }
@@ -368,6 +384,7 @@ data Intro bound free =
       -- | The position in source from which this originates.
       badIntroPos :: !Position
     }
+    deriving (Functor, Foldable, Traversable)
 
 -- | Elimination Terms.  These terms generate a type in type checking.
 data Elim bound free =
@@ -412,6 +429,7 @@ data Elim bound free =
       -- | The position in source from which this originates.
       badElimPos :: !Position
     }
+    deriving (Functor, Foldable, Traversable)
 
 -- | Commands.  These represent individual statements, or combinations
 -- thereof, which do not bind variables.
@@ -447,6 +465,7 @@ data Cmd bound free =
       -- | The position in source from which this originates.
       badCmdPos :: !Position
     }
+    deriving (Functor, Foldable, Traversable)
 
 -- | Computations. Semantically, computations are generators for
 -- sequences of atomic actions, which are not guaranteed to terminate,
@@ -486,6 +505,7 @@ data Comp bound free =
       -- | The position in source from which this originates.
       badCompPos :: !Position
     }
+    deriving (Functor, Foldable, Traversable)
 
 positionDefault :: DWARFPositionElement [Symbol] [Symbol] ty =>
                    ty
@@ -507,6 +527,9 @@ instance DWARFPositionElement [Symbol] [Symbol] (Case bound free) where
 
 instance DWARFPositionElement [Symbol] [Symbol] (Element bound free) where
   debugPosition Element { elemPos = pos } = pos
+
+instance DWARFPositionElement [Symbol] [Symbol] (Field expty) where
+  debugPosition Field { fieldPos = pos } = pos
 
 instance DWARFPositionElement [Symbol] [Symbol] (Intro bound free) where
   debugPosition FuncType { funcTypePos = pos } = pos
@@ -545,6 +568,7 @@ instance PositionElement (Comp bound free) where position = positionDefault
 instance PositionElement (Pattern bound) where position = positionDefault
 instance PositionElement (Case bound free) where position = positionDefault
 instance PositionElement (Element bound free) where position = positionDefault
+instance PositionElement (Field expty) where position = positionDefault
 instance PositionElement (Intro bound free) where position = positionDefault
 instance PositionElement (Elim bound free) where position = positionDefault
 instance PositionElement (Cmd bound free) where position = positionDefault
@@ -572,6 +596,9 @@ instance Eq b => Eq1 (Element b) where
   Element { elemType = ty1, elemPat = pat1, elemName = sym1 } ==#
     Element { elemType = ty2, elemPat = pat2, elemName = sym2 } =
     sym1 == sym2 && ty1 ==# ty2 && pat1 ==# pat2
+
+instance Eq1 Field where
+  Field { fieldVal = val1 } ==# Field { fieldVal = val2 } = val1 == val2
 
 instance Eq b => Eq1 (Intro b) where
   FuncType { funcTypeArgs = argtys1, funcTypeArgOrder = ord1,
@@ -620,7 +647,6 @@ instance Eq b => Eq1 (Elim b) where
   BadElim {} ==# BadElim {} = True
   _ ==# _ = False
 
-
 instance Eq b => Eq1 (Cmd b) where
   Value { valTerm = term1 } ==# Value { valTerm = term2 } = term1 ==# term2
   Eval { evalTerm = term1 } ==# Eval { evalTerm = term2 } = term1 ==# term2
@@ -640,6 +666,7 @@ instance Eq b => Eq1 (Comp b) where
 instance (Eq b) => Eq (Pattern b) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Case b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Element b s) where (==) = (==#)
+instance (Eq v) => Eq (Field v) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Intro b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Elim b s) where (==) = (==#)
 instance (Eq b, Eq s) => Eq (Cmd b s) where (==) = (==#)
@@ -690,6 +717,10 @@ instance Ord b => Ord1 (Element b) where
         EQ -> compare1 pat1 pat2
         out -> out
       out -> out
+
+instance Ord1 Field where
+  compare1 Field { fieldVal = val1 } Field { fieldVal = val2 } =
+    compare val1 val2
 
 instance Ord b => Ord1 (Intro b) where
   compare1 FuncType { funcTypeArgs = argtys1, funcTypeRetTy = retty1 }
@@ -830,6 +861,7 @@ instance Ord b => Ord1 (Comp b) where
 instance (Ord b) => Ord (Pattern b) where compare = compare1
 instance (Ord b, Ord s) => Ord (Case b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Element b s) where compare = compare1
+instance (Ord v) => Ord (Field v) where compare = compare1
 instance (Ord b, Ord s) => Ord (Intro b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Elim b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
@@ -850,6 +882,9 @@ instance (Hashable b, Ord b) => Hashable1 (Case b) where
 instance (Hashable b, Ord b) => Hashable1 (Element b) where
   hashWithSalt1 s Element { elemName = sym, elemPat = pat, elemType = ty } =
     (s `hashWithSalt` sym `hashWithSalt` pat) `hashWithSalt1` ty
+
+instance Hashable1 Field where
+  hashWithSalt1 s = hashWithSalt s . fieldVal
 
 instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
@@ -931,6 +966,9 @@ instance (Hashable b, Hashable s, Ord b) => Hashable (Case b s) where
 instance (Hashable b, Hashable s, Ord b) => Hashable (Element b s) where
   hashWithSalt = hashWithSalt1
 
+instance (Hashable v) => Hashable (Field v) where
+  hashWithSalt = hashWithSalt1
+
 instance (Hashable b, Hashable s, Ord b) => Hashable (Intro b s) where
   hashWithSalt = hashWithSalt1
 
@@ -942,91 +980,6 @@ instance (Hashable b, Hashable s, Ord b) => Hashable (Cmd b s) where
 
 instance (Hashable b, Hashable s, Ord b) => Hashable (Comp b s) where
   hashWithSalt = hashWithSalt1
-
-instance Functor (Case b) where fmap = fmapDefault
-instance Functor (Element b) where fmap = fmapDefault
-instance Functor (Intro b) where fmap = fmapDefault
-instance Functor (Elim b) where fmap = fmapDefault
-instance Functor (Cmd b) where fmap = fmapDefault
-instance Functor (Comp b) where fmap = fmapDefault
-
-instance Foldable (Case b) where foldMap = foldMapDefault
-instance Foldable (Element b) where foldMap = foldMapDefault
-instance Foldable (Intro b) where foldMap = foldMapDefault
-instance Foldable (Elim b) where foldMap = foldMapDefault
-instance Foldable (Cmd b) where foldMap = foldMapDefault
-instance Foldable (Comp b) where foldMap = foldMapDefault
-
-instance Traversable (Case b) where
-  traverse f c @ Case { caseBody = body } =
-    (\body' -> c { caseBody = body' }) <$> traverse f body
-
-instance Traversable (Element b) where
-  traverse f c @ Element { elemType = ty } =
-    (\ty' -> c { elemType = ty' }) <$> traverse f ty
-
-instance Traversable (Intro b) where
-  traverse f t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
-    (\argtys' retty' -> t { funcTypeArgs = argtys',
-                            funcTypeRetTy = retty' }) <$>
-      traverse (traverse f) argtys <*> traverse f retty
-  traverse f t @ RecordType { recTypeBody = body } =
-    (\body' -> t { recTypeBody = body' }) <$> traverse (traverse f) body
-  traverse f t @ RefineType { refineType = ty, refineCases = cases } =
-    (\ty' cases' -> t { refineType = ty', refineCases = cases' }) <$>
-      traverse f ty <*> traverse (traverse f) cases
-  traverse f t @ CompType { compType = ty, compCases = cases } =
-    (\ty' cases' -> t { compType = ty', compCases = cases' }) <$>
-      traverse f ty <*> traverse (traverse f) cases
-  traverse f t @ Quantified { quantType = ty, quantCases = cases } =
-    (\ty' cases' -> t { quantType = ty', quantCases = cases' }) <$>
-      traverse f ty <*> traverse (traverse f) cases
-  traverse f t @ Eta { etaTerm = term, etaType = ty } =
-    (\term' ty' -> t { etaTerm = term', etaType = ty' }) <$>
-      traverse f term <*> traverse f ty
-  traverse f t @ Lambda { lambdaCases = cases } =
-    (\cases' -> t { lambdaCases = cases' }) <$> traverse (traverse f) cases
-  traverse f t @ Record { recFields = vals } =
-    (\vals' -> t { recFields = vals' }) <$> traverse (traverse f) vals
-  traverse f t @ Tuple { tupleFields = vals } =
-    (\vals' -> t { tupleFields = vals' }) <$> traverse (traverse f) vals
-  traverse f t @ Fix { fixTerm = term } =
-    (\term' -> t { fixTerm = term' }) <$> traverse f term
-  traverse f c @ Comp { compBody = body } =
-    (\body' -> c { compBody = body' }) <$> traverse f body
-  traverse f t @ Elim { elimTerm = term } =
-    (\term' -> t { elimTerm = term' }) <$> traverse f term
-  traverse _ Constructor { constructorSym = sym, constructorPos = p } =
-    pure Constructor { constructorSym = sym, constructorPos = p }
-  traverse _ Literal { literalVal = lit, literalPos = p } =
-    pure Literal { literalVal = lit, literalPos = p }
-  traverse _ BadIntro { badIntroPos = p } = pure BadIntro { badIntroPos = p }
-
-instance Traversable (Elim b) where
-  traverse f t @ Call { callArg = arg, callFunc = func } =
-    (\arg' func' -> t { callArg = arg', callFunc = func' }) <$>
-      traverse f arg <*> traverse f func
-  traverse f t @ Typed { typedTerm = term, typedType = ty } =
-    (\term' ty' -> t { typedTerm = term', typedType = ty' }) <$>
-      traverse f term <*> traverse f ty
-  traverse f t @ Var { varSym = sym } =
-    (\sym' -> t { varSym = sym' }) <$> f sym
-  traverse _ BadElim { badElimPos = p } = pure BadElim { badElimPos = p }
-
-instance Traversable (Cmd b) where
-  traverse f c @ Value { valTerm = term } =
-    (\term' -> c { valTerm = term' }) <$> traverse f term
-  traverse f c @ Eval { evalTerm = term } =
-    (\term' -> c { evalTerm = term' }) <$> traverse f term
-  traverse _ (BadCmd c) = pure (BadCmd c)
-
-instance Traversable (Comp b) where
-  traverse f c @ Seq { seqCmd = cmd, seqNext = next, seqType = ty } =
-    (\ty' cmd' next' -> c { seqCmd = cmd', seqNext = next', seqType = ty' }) <$>
-      traverse f ty <*> traverse f cmd <*> traverse f next
-  traverse f c @ End { endCmd = cmd } =
-    (\cmd' -> c { endCmd = cmd' }) <$> traverse f cmd
-  traverse _ (BadComp p) = pure (BadComp p)
 
 injectpos :: Position
 injectpos = Synthetic { synthDesc = Strict.fromString "Monad return" }
@@ -1096,7 +1049,8 @@ instance Monad (Intro b) where
     t { quantCases = fmap (caseSubstIntro f) cases, quantType = ty >>= f }
   t @ Lambda { lambdaCases = cases } >>= f =
     t { lambdaCases = fmap (caseSubstIntro f) cases }
-  t @ Record { recFields = vals } >>= f = t { recFields = fmap (>>= f) vals }
+  t @ Record { recFields = vals } >>= f =
+    t { recFields = fmap (fmap (>>= f)) vals }
   t @ Tuple { tupleFields = vals } >>= f = t { tupleFields = fmap (>>= f) vals }
   t @ Fix { fixTerm = term } >>= f = t { fixTerm = term >>>= f }
   t @ Comp { compBody = body } >>= f = t { compBody = compSubstIntro f body }
@@ -1150,7 +1104,7 @@ introSubstElim f t @ Quantified { quantType = ty, quantCases = cases } =
 introSubstElim f t @ Lambda { lambdaCases = cases } =
     t { lambdaCases = fmap (caseSubstElim f) cases }
 introSubstElim f t @ Record { recFields = vals } =
-  t { recFields = fmap (introSubstElim f) vals }
+  t { recFields = fmap (fmap (introSubstElim f)) vals }
 introSubstElim f t @ Tuple { tupleFields = vals } =
   t { tupleFields = fmap (introSubstElim f) vals }
 introSubstElim f t @ Fix { fixTerm = term } = t { fixTerm = term >>>= Elim . f }
@@ -1235,6 +1189,10 @@ formatMBind (fname, ent) =
 instance Format Quantifier where
   format Forall = string "forall"
   format Exists = string "exists"
+
+instance (MonadPositions m, MonadSymbols m, FormatM m valty) =>
+         FormatM m (Field valty) where
+  formatM = formatM . fieldVal
 
 instance (MonadPositions m, MonadSymbols m,
           FormatM m bound, Default bound, Eq bound) =>
@@ -1592,6 +1550,16 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                    (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
                              (xpElemNodes (gxFromString "body") xpickle)
                              (xpElemNodes (gxFromString "pos") xpickle)))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] expty) =>
+         XmlPickler [NodeG [] tag text] (Field expty) where
+  xpickle =
+    xpWrap (\(val, pos) -> Field { fieldVal = val, fieldPos = pos },
+            \Field { fieldVal = val, fieldPos = pos } -> (val, pos))
+           (xpElemNodes (gxFromString "Field")
+                        (xpPair (xpElemNodes (gxFromString "val") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
 
 listToArr :: [a] -> Array Word a
 listToArr l = listArray (0, fromIntegral (length l)) l
