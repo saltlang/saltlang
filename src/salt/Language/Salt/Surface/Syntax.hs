@@ -85,7 +85,6 @@ module Language.Salt.Surface.Syntax(
        -- ** Cases and Patterns
        Case(..),
        Pattern(..),
-       Entry(..),
 
        -- * Representations
 
@@ -327,7 +326,7 @@ data Pattern expty =
     -- | A projection.  Mirrors a record expression.
   | Split {
       -- | The fields being projected.
-      splitFields :: !(HashMap FieldName (Entry expty)),
+      splitFields :: !(HashMap FieldName (Field (Pattern expty))),
       -- | Whether or not the binding is strict (ie. it omits some fields)
       splitStrict :: !Bool,
       -- | The position in source from which this arises.
@@ -490,18 +489,6 @@ data Exp callty refty =
   | Bad { badPos :: !Position }
     deriving (Functor, Foldable, Traversable)
 
--- | An entry in a record field or call argument list.
-data Entry expty =
-  -- | A named field.  This sets a specific field or argument to a
-  -- certain value.
-  Entry {
-    -- | The value to which the field or argument is set.
-    entryPat :: !(Pattern expty),
-    -- | The position in source from which this arises.
-    entryPos :: !Position
-  }
-  deriving (Functor, Foldable, Traversable)
-
 -- | Representation of fields.  This contains information for
 -- interpreting record as well as tuple values.
 data Fields expty =
@@ -514,10 +501,10 @@ data Fields expty =
   deriving (Functor, Foldable, Traversable)
 
 -- | A field.
-data Field expty =
+data Field valty =
   Field {
     -- | The value assigned to the bound name.
-    fieldVal :: !expty,
+    fieldVal :: !valty,
     -- | The position in source from which this arises.
     fieldPos :: !Position
   }
@@ -597,9 +584,6 @@ instance (PositionElement (callty refty)) =>
   position Anon { anonPos = pos } = pos
   position Literal { literalVal = l } = position l
   position Bad { badPos = pos } = pos
-
-instance PositionElement (Entry expty) where
-  position Entry { entryPos = pos } = pos
 
 instance PositionElement (Field expty) where
   position Field { fieldPos = pos } = pos
@@ -708,9 +692,6 @@ instance (Eq (callty refty), Eq refty) => Eq (Exp callty refty) where
       fields1 == fields2 && content1 == content2
   Literal lit1 == Literal lit2 = lit1 == lit2
   _ == _ = False
-
-instance Eq expty => Eq (Entry expty) where
-  Entry { entryPat = pat1 } == Entry { entryPat = pat2 } = pat1 == pat2
 
 instance Eq expty => Eq (Fields expty) where
   Fields { fieldsBindings = bindings1, fieldsOrder = order1 } ==
@@ -973,10 +954,6 @@ instance (Ord (callty refty), Ord refty) => Ord (Exp callty refty) where
   compare _ Literal {} = GT
   compare Bad {} Bad {} = EQ
 
-instance Ord expty => Ord (Entry expty) where
-  compare Entry { entryPat = pat1 } Entry { entryPat = pat2 } =
-    compare pat1 pat2
-
 instance Ord expty => Ord (Fields expty) where
   compare Fields { fieldsBindings = bindings1, fieldsOrder = order1 }
           Fields { fieldsBindings = bindings2, fieldsOrder = order2 } =
@@ -1125,9 +1102,6 @@ instance (Hashable (callty refty), Hashable refty,
   hashWithSalt s (Literal lit) =
     s `hashWithSalt` (14 :: Int) `hashWithSalt` lit
   hashWithSalt s Bad {} = s `hashWithSalt` (0 :: Int)
-
-instance (Hashable expty, Ord expty) => Hashable (Entry expty) where
-  hashWithSalt s Entry { entryPat = pat } = s `hashWithSalt` pat
 
 instance (Hashable expty, Ord expty) => Hashable (Fields expty) where
   hashWithSalt s Fields { fieldsBindings = bindings, fieldsOrder = order } =
@@ -1598,16 +1572,6 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty,
                               (string "body", format body)])
   formatM Literal { literalVal = l } = formatM l
   formatM Bad {} = return (string "<bad>")
-
-instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
-         FormatM m (Entry expty) where
-  formatM Entry { entryPat = pat, entryPos = pos } =
-    do
-      posdoc <- formatM pos
-      patdoc <- formatM pat
-      return (compoundApplyDoc (string "Entry")
-                             [(string "pos", posdoc),
-                              (string "pattern", patdoc)])
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Fields expty) where
@@ -2320,16 +2284,6 @@ makeArray l = listArray (1, fromIntegral (length l)) l
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
-         XmlPickler [NodeG [] tag text] (Entry expty) where
-  xpickle =
-    xpWrap (\(pat, pos) -> Entry { entryPat = pat, entryPos = pos },
-            \Entry { entryPat = pat, entryPos = pos } -> (pat, pos))
-           (xpElemNodes (gxFromString "Entry")
-                        (xpPair (xpElemNodes (gxFromString "val") xpickle)
-                                (xpElemNodes (gxFromString "pos") xpickle)))
-
-instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
-          XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Fields expty) where
   xpickle = xpWrap (\(bindings, order) ->
                      Fields { fieldsBindings = bindings,
@@ -2361,7 +2315,7 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           binds' Option { optionPats = pats } = mconcat (map binds' pats)
           binds' Deconstruct { deconstructPat = pat } = binds' pat
           binds' Split { splitFields = fields } =
-            foldMap (binds' . entryPat) fields
+            foldMap (binds' . fieldVal) fields
           binds' Typed { typedPat = pat } = binds' pat
           binds' As { asName = sym, asPat = pat } =
             HashSet.insert sym (binds' pat)

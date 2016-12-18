@@ -97,6 +97,9 @@ import qualified Language.Salt.Surface.Syntax as Syntax
 
 type Table = BasicHashTable [Symbol] (Maybe Syntax.Component)
 
+type SyntaxExp = Syntax.Exp Syntax.Seq Symbol
+type SyntaxPattern = Syntax.Pattern SyntaxExp
+
 -- | A temporary scope.  We build this up and then convert it into a
 -- real scope.
 data TempSaltScope expty =
@@ -218,8 +221,8 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                                       Syntax.scopeEnclosing = enclosing })
 
 type CollectT m =
-  ReaderT Table (ScopeBuilderT (TempSaltScope (Syntax.Exp Syntax.Seq Symbol))
-                               (Syntax.Scope (Syntax.Exp Syntax.Seq Symbol)) m)
+  ReaderT Table (ScopeBuilderT (TempSaltScope SyntaxExp)
+                               (Syntax.Scope SyntaxExp) m)
 
 -- | Check whether a component exists.
 componentExists :: MonadIO m =>
@@ -249,13 +252,13 @@ addComponent path component =
 addBuilder :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
               Symbol
            -- ^ The name of the 'Builder'.
-           -> Syntax.Builder (Syntax.Exp Syntax.Seq Symbol)
+           -> Syntax.Builder SyntaxExp
            -- ^ The 'Builder' definition.
            -> CollectT m ()
 addBuilder sym builder =
   let
-    addBuilder' :: TempSaltScope (Syntax.Exp Syntax.Seq Symbol) ->
-                   TempSaltScope (Syntax.Exp Syntax.Seq Symbol)
+    addBuilder' :: TempSaltScope SyntaxExp ->
+                   TempSaltScope SyntaxExp
     addBuilder' scope @ TempSaltScope { tempScopeBuilders = builders } =
       let
         newbuilders = HashMap.insertWith (++) sym [builder] builders
@@ -268,13 +271,13 @@ addBuilder sym builder =
 addTruth :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
             Symbol
          -- ^ The name of the 'Truth'.
-         -> Syntax.Truth (Syntax.Exp Syntax.Seq Symbol)
+         -> Syntax.Truth SyntaxExp
          -- ^ The 'Truth' definition.
          -> CollectT m ()
 addTruth sym truth =
   let
-    addTruth' :: TempSaltScope (Syntax.Exp Syntax.Seq Symbol) ->
-                 TempSaltScope (Syntax.Exp Syntax.Seq Symbol)
+    addTruth' :: TempSaltScope SyntaxExp ->
+                 TempSaltScope SyntaxExp
     addTruth' scope @ TempSaltScope { tempScopeTruths = truths } =
       let
         newtruths = HashMap.insertWith (++) sym [truth] truths
@@ -285,13 +288,13 @@ addTruth sym truth =
 
 -- | Add a 'Proof' to the current scope.
 addProof :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
-            Syntax.Proof (Syntax.Exp Syntax.Seq Symbol)
+            Syntax.Proof SyntaxExp
          -- ^ The 'Proof' definition.
          -> CollectT m ()
 addProof proof =
   let
-    addProof' :: TempSaltScope (Syntax.Exp Syntax.Seq Symbol) ->
-                   TempSaltScope (Syntax.Exp Syntax.Seq Symbol)
+    addProof' :: TempSaltScope SyntaxExp ->
+                   TempSaltScope SyntaxExp
     addProof' scope @ TempSaltScope { tempScopeProofs = proofs } =
       scope { tempScopeProofs = proof : proofs }
   in
@@ -299,13 +302,13 @@ addProof proof =
 
 -- | Add an import to the current scope.
 addImport :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
-             Syntax.Import (Syntax.Exp Syntax.Seq Symbol)
+             Syntax.Import SyntaxExp
           -- ^ The 'Import' structure.
           -> CollectT m ()
 addImport import' =
   let
-    addImport' :: TempSaltScope (Syntax.Exp Syntax.Seq Symbol) ->
-                  TempSaltScope (Syntax.Exp Syntax.Seq Symbol)
+    addImport' :: TempSaltScope SyntaxExp ->
+                  TempSaltScope SyntaxExp
     addImport' scope @ TempSaltScope { tempScopeImports = imports } =
       scope { tempScopeImports = import' : imports }
   in
@@ -315,13 +318,13 @@ addImport import' =
 addSyntax :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
              Symbol
           -- ^ The 'Symbol' to which the syntax directive applies.
-          -> Syntax.Syntax (Syntax.Exp Syntax.Seq Symbol)
+          -> Syntax.Syntax SyntaxExp
           -- ^ The syntax directive.
           -> CollectT m ()
 addSyntax sym syntax =
   let
-    addSyntax' :: TempSaltScope (Syntax.Exp Syntax.Seq Symbol) ->
-                 TempSaltScope (Syntax.Exp Syntax.Seq Symbol)
+    addSyntax' :: TempSaltScope SyntaxExp ->
+                 TempSaltScope SyntaxExp
     addSyntax' scope @ TempSaltScope { tempScopeSyntax = syntaxes } =
       let
         newsyntaxes = HashMap.insertWith (++) sym [syntax] syntaxes
@@ -332,14 +335,14 @@ addSyntax sym syntax =
 
 -- | Add a definition into a scope, get a 'DefID' for it.
 addDef :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
-          Syntax.Def (Syntax.Exp Syntax.Seq Symbol)
+          Syntax.Def SyntaxExp
        -- ^ The definition to add.
        -> CollectT m Syntax.DefID
        -- ^ The 'DefID' for the definition that was added.
 addDef def @ Syntax.Def {} =
   let
-    addDef' :: TempSaltScope (Syntax.Exp Syntax.Seq Symbol) ->
-               (Syntax.DefID, TempSaltScope (Syntax.Exp Syntax.Seq Symbol))
+    addDef' :: TempSaltScope SyntaxExp ->
+               (Syntax.DefID, TempSaltScope SyntaxExp)
     addDef' scope @ TempSaltScope { tempScopeDefID = defid,
                                     tempScopeDefs = defs } =
       (defid, scope { tempScopeDefs = (defid, def) : defs,
@@ -361,7 +364,7 @@ addNames vis syms defid =
     foldfun accum sym = HashMap.insertWith (++) sym [defid] accum
 
     addNames' :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
-                 TempSaltScope (Syntax.Exp Syntax.Seq Symbol) -> m ()
+                 TempSaltScope SyntaxExp -> m ()
     addNames' TempSaltScope { tempScopeNames = names } =
       do
         curr <- liftIO $! IOArray.readArray names vis
@@ -374,8 +377,7 @@ addNames vis syms defid =
 collectPattern :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                   AST.Pattern
                -- ^ The pattern to collect.
-               -> CollectT m (Syntax.Pattern (Syntax.Exp Syntax.Seq Symbol),
-                              [Symbol])
+               -> CollectT m (SyntaxPattern, [Symbol])
                -- ^ Collected pattern and names that it binds.
 collectPattern pat =
   let
@@ -388,8 +390,7 @@ collectPattern pat =
                         -> AST.Pattern
                         -- ^ The pattern to collect.
                         -> CollectT m (Maybe Symbol,
-                                       Syntax.Pattern (Syntax.Exp Syntax.Seq
-                                                                  Symbol),
+                                       SyntaxPattern,
                                        HashMap Symbol [Position])
                         -- ^ The top-level binding, the collected
                         -- pattern, and the bound names.  For an
@@ -429,15 +430,12 @@ collectPattern pat =
     -- | Collect an entry.  This is a foldable function.  Note that we
     -- keep all pattern for a given name for error reporting purposes.
     collectEntry :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                    (HashMap Symbol [Syntax.Entry (Syntax.Exp Syntax.Seq
-                                                              Symbol)],
+                    (HashMap Symbol [Syntax.Field SyntaxPattern],
                      HashMap Symbol [Position])
                  -- ^ Incoming name-pattern bindings and set of bound names.
                  -> AST.Entry
                  -- ^ The entry to collect.
-                 -> CollectT m (HashMap Symbol
-                                        [Syntax.Entry (Syntax.Exp Syntax.Seq
-                                                                  Symbol)],
+                 -> CollectT m (HashMap Symbol [Syntax.Field SyntaxPattern],
                                 HashMap Symbol [Position])
                  -- ^ The name-pattern bindings and set of bound names.
     -- For a named entry, use the name as the index and the pattern as
@@ -447,9 +445,9 @@ collectPattern pat =
                                             AST.namedPos = pos } =
       do
         (collectedPat, newbinds) <- collectPattern' binds inner
-        return (HashMap.insertWith (++) sym [Syntax.Entry {
-                                               Syntax.entryPat = collectedPat,
-                                               Syntax.entryPos = pos
+        return (HashMap.insertWith (++) sym [Syntax.Field {
+                                               Syntax.fieldVal = collectedPat,
+                                               Syntax.fieldPos = pos
                                              }] accum,
                 HashMap.insertWith (++) sym [pos] newbinds)
     -- For an unnamed entry, we try to extract the name from the pattern itself.
@@ -463,9 +461,9 @@ collectPattern pat =
           -- If it does, use that as the name for the entry.
           (Just sym, collectedPat, newbinds) ->
             return (HashMap.insertWith (++) sym
-                                       [Syntax.Entry {
-                                          Syntax.entryPat = collectedPat,
-                                          Syntax.entryPos = pos
+                                       [Syntax.Field {
+                                          Syntax.fieldVal = collectedPat,
+                                          Syntax.fieldPos = pos
                                         }] accum,
                     HashMap.insertWith (++) sym [pos] newbinds)
           -- Otherwise, it's an error
@@ -482,9 +480,7 @@ collectPattern pat =
                     -- ^ The incoming set of bound names.
                     -> AST.Pattern
                     -- ^ The pattern to collect.
-                    -> CollectT m (Syntax.Pattern (Syntax.Exp Syntax.Seq
-                                                              Symbol),
-                                   HashMap Symbol [Position])
+                    -> CollectT m (SyntaxPattern, HashMap Symbol [Position])
                     -- ^ The collected pattern and bound names.
     -- For split, collect all fields, then report duplicates.
     collectPattern' binds AST.Split { AST.splitFields = fields,
@@ -588,11 +584,11 @@ collectPattern pat =
 
 -- | Foldable function to collect compound expression components.
 collectCompound :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                   [Syntax.Compound (Syntax.Exp Syntax.Seq Symbol)]
+                   [Syntax.Compound SyntaxExp]
                 -- ^ The incoming compound content.
                 -> AST.Compound
                 -- ^ The compound content to collect.
-                -> CollectT m [Syntax.Compound (Syntax.Exp Syntax.Seq Symbol)]
+                -> CollectT m [Syntax.Compound SyntaxExp]
                 -- ^ The compound content.
 -- For definitions, add the definition to the scope, and add an
 -- initializer mark to the content.
@@ -645,7 +641,7 @@ collectCompound accum AST.Exp { AST.expVal = exp } =
 collectExp :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
               AST.Exp
            -- ^ Expression to collect.
-           -> CollectT m (Syntax.Exp Syntax.Seq Symbol)
+           -> CollectT m SyntaxExp
            -- ^ Collected expression.
 -- For a compound statement, construct a sub-scope
 collectExp AST.Compound { AST.compoundBody = body, AST.compoundPos = pos } =
@@ -659,8 +655,8 @@ collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
                         AST.recordPos = pos } =
   let
     collapseField :: (MonadMessages Message m, MonadSymbols m) =>
-                     HashMap FieldName (Syntax.Exp Syntax.Seq Symbol) ->
-                     (FieldName, [Syntax.Exp Syntax.Seq Symbol]) ->
+                     HashMap FieldName SyntaxExp ->
+                     (FieldName, [SyntaxExp]) ->
                      CollectT m (HashMap FieldName (Syntax.Exp Syntax.Seq
                                                                Symbol))
     collapseField accum (_, []) =
@@ -677,7 +673,7 @@ collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
 
     -- Fold function.  Only build a HashMap.
     collectValueField :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
-                         HashMap FieldName [Syntax.Exp Syntax.Seq Symbol] ->
+                         HashMap FieldName [SyntaxExp] ->
                          AST.Field ->
                          CollectT m (HashMap FieldName [Syntax.Exp Syntax.Seq
                                                                    Symbol])
@@ -793,7 +789,7 @@ collectFields :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                  [AST.Field]
               -> Position
               -- ^ The position of the whole fields list.
-              -> CollectT m (Syntax.Fields (Syntax.Exp Syntax.Seq Symbol))
+              -> CollectT m (Syntax.Fields SyntaxExp)
               -- ^ The collected fields.
 collectFields fields fieldspos =
   let
@@ -849,7 +845,7 @@ collectFields fields fieldspos =
 collectCase :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                AST.Case
             -- ^ Case to collect.
-            -> CollectT m (Syntax.Case (Syntax.Exp Syntax.Seq Symbol))
+            -> CollectT m (Syntax.Case SyntaxExp)
             -- ^ The collected case.
 collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
                        AST.casePos = pos } =
@@ -1155,7 +1151,7 @@ collectComponents :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                   -- ^ The parsing function to use.
                   -> [(Position, [Symbol])]
                   -- ^ The names of the components to collect.
-                  -> m (Syntax.Surface (Syntax.Exp Syntax.Seq Symbol))
+                  -> m (Syntax.Surface SyntaxExp)
                   -- ^ Surface syntax of the collected components and
                   -- all their dependencies.
 collectComponents parsefunc files =
@@ -1240,7 +1236,7 @@ collectFiles :: (MonadLoader Strict.ByteString Lazy.ByteString m,
              -- ^ The parsing function to use.
              -> [(Position, Strict.ByteString)]
              -- ^ The names of the files to collect.
-             -> m (Syntax.Surface (Syntax.Exp Syntax.Seq Symbol))
+             -> m (Syntax.Surface SyntaxExp)
              -- ^ Surface syntax of the collected files and all their
              -- dependencies.
 collectFiles parsefunc files =
