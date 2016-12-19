@@ -236,7 +236,7 @@ data Intro bound free =
       -- the order in which to evaluate scopes.
       funcTypeArgs :: [Element bound free],
       -- | Array used to map tuple arguments to the correct parameter names.
-      funcTypeArgOrder :: !(Array Word bound),
+      funcTypeArgOrder :: !(Array Word FieldName),
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
       funcTypeRetTy :: Scope bound (Intro bound) free,
@@ -253,7 +253,7 @@ data Intro bound free =
       -- Note: all fields are given names by transliteration.
       recTypeBody :: [Element bound free],
       -- | Array used to convert tuples to records of this type.
-      recTypeOrder :: !(Array Word bound),
+      recTypeOrder :: !(Array Word FieldName),
       -- | The position in source from which this originates.
       recTypePos :: !Position
     }
