@@ -49,11 +49,17 @@ class Monad m => MonadTypeCheck m where
             -> m (Intro Symbol Symbol)
             -- ^ The type of the checked term.
 
+  synthComp :: Comp Symbol Symbol
+            -> m (Intro Symbol Symbol)
+
   checkIntro :: Intro Symbol Symbol
              -- ^ The term to check.
              -> Intro Symbol Symbol
              -- ^ The type against which to check.
              -> m ()
+
+  checkFields :: [(Element Symbol Symbol, Intro Symbol Symbol)]
+              -> m ()
 
   checkCase :: Case Symbol Symbol
             -- ^ The case to check.
@@ -69,12 +75,17 @@ class Monad m => MonadTypeCheck m where
             -- ^ The term to check.
             -> m ()
 
-  -- | Get the best supertype of a type that has a functional form.
+  -- | Get the best supertype of a type that has a function form.
   -- In essence, this computes the join of the argument type with @top
   -- -> bottom@.
   typeJoinFunc :: Intro Symbol Symbol
                -- ^ The type for which to get a function form.
                -> m (Intro Symbol Symbol)
+
+  -- | Get the best supertype of a type that has a record form.
+  typeJoinRecord :: Intro Symbol Symbol
+                 -- ^ The type for which to get a record form.
+                 -> m (Intro Symbol Symbol)
 
   -- | Check that the first type is a subtype of the second.  The term
   -- must also be supplied, so as to be able to generate proof
@@ -155,6 +166,40 @@ class MonadTypeCheck m => MonadElimSynth m where
            -- ^ The type of the 'Var' term.
 
 class MonadTypeCheck m => MonadIntroCheck m where
+  -- | Apply the checkRecord rule to the current goal state.  This
+  -- will check that a record term has all the fields in the record
+  -- type, and check all the fields' types.
+  --
+  -- Corresponds to the following type rule:
+  --
+  -- >  {fname_j} = {bname_i}   E |- [ (term_l, ty_k) | fname_k = bname_l ]
+  -- > ---------------------------------------------------------------------
+  -- >           E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
+  checkRecord :: m ()
+
+  -- | Check that a tuple term has the same number of fields as the
+  -- record type, and check all the fields' types.
+  --
+  -- Corresponds to the following type rule:
+  --
+  -- >  |{fname_j}| = |{bname_i}|   E |- [(term_k, ty_k)]
+  -- > -------------------------------------------------------------------------
+  -- >             E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
+  checkTuple :: m ()
+
+  -- | Apply the checkIntroComp rule to the current goal state.  This
+  -- will generate an actual computation type using type synthesis on
+  -- computations and check that it is a subtype of the expected type.
+  -- This will cause an internal error if the goal term is anything
+  -- other than a 'Comp'.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >  E |- comp => ty'   E |- (do comp : ty') :> ty
+  -- > -----------------------------------------------
+  -- >               E |- do comp <= ty
+  checkIntroComp :: m ()
+
   -- | Apply the checkElim rule to the current goal state.  This will
   -- generate an actual type using type synthesis and check that it is
   -- a subtype of the expected type.  This will cause an internal
@@ -186,9 +231,24 @@ class MonadTypeCheck m => MonadIntroCheck m where
   -- completeness.  This will cause an internal error if the goal term is
   -- anything other than a 'Lambda'.
   --
-  -- Corresponds to the following type rule:
+  -- The formal statement of the type rule is as follows:
   --
   -- >   E |- case_i <= ty
   -- > ----------------------
   -- >  E |- \[case_i] <= ty
   checkLambda :: m ()
+
+  -- | Apply the checkLiteral rule to the current goal.  This checks
+  -- that the expected type is a subtype of the most general type for
+  -- the specific kind of literal.  This will cause an internal error
+  -- if the goal term is anything other than a 'Literal'.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >  E |- lit : ty :> LitTy[lit]
+  -- > -----------------------------
+  -- >       E |- lit <= ty
+  --
+  -- Where @LitTy[lit]@ is the most general type for that kind of
+  -- literal.
+  checkLiteral :: m ()

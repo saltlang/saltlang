@@ -94,6 +94,10 @@ module Language.Salt.Message(
        cannotAccessComponent,
        cannotCreateFile,
        cannotCreateArtifact,
+
+       -- ** Type Check Errors
+       missingFields,
+       tupleMismatch
 ) where
 
 import Control.Monad.Messages
@@ -314,6 +318,15 @@ data Message =
   | ExpectedRef {
       expectedRefPos :: !Position
     }
+  | MissingFields {
+      missingFieldsNames :: ![Strict.ByteString],
+      missingFieldsPos :: !Position
+    }
+  | TupleMismatch {
+      tupleMismatchExpected :: !Word,
+      tupleMismatchActual :: !Word,
+      tupleMismatchPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -475,6 +488,14 @@ instance Hashable Message where
     s `hashWithSalt` (36 :: Int) `hashWithSalt` pos
   hashWithSalt s ExpectedRef { expectedRefPos = pos } =
     s `hashWithSalt` (37 :: Int) `hashWithSalt` pos
+  hashWithSalt s MissingFields { missingFieldsPos = pos,
+                                 missingFieldsNames = names } =
+    s `hashWithSalt` (38 :: Int) `hashWithSalt` names `hashWithSalt` pos
+  hashWithSalt s TupleMismatch { tupleMismatchExpected = expected,
+                                 tupleMismatchActual = actual,
+                                 tupleMismatchPos = pos } =
+    s `hashWithSalt` (39 :: Int) `hashWithSalt`
+    expected `hashWithSalt` actual `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity HardTabs {} = Msg.Warning
@@ -555,6 +576,11 @@ instance Msg.Message Message where
   brief CyclicPrecedence {} = string "Conflicting precedence directives"
   brief PrecedenceParseError {} = string "Syntax error"
   brief ExpectedRef {} = string "Expected a reference to a definition"
+  brief MissingFields {} = string "Record value does not have required field(s)"
+  brief TupleMismatch { tupleMismatchExpected = expected,
+                        tupleMismatchActual = actual }
+    | expected < actual = string "Too many fields in tuple"
+    | otherwise = string "Not enough fields in tuple"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -597,6 +623,10 @@ instance Msg.Message Message where
     Just $! fillSep [string "value", term, string "could not be matched"]
   details CyclicPrecedence {} =
     Just $! string "These precedence directives form one or more cycles"
+  details TupleMismatch { tupleMismatchExpected = expected,
+                        tupleMismatchActual = actual } =
+    Just $! string "Expected " <> format expected <>
+            string ", got " <> format actual
   details _ = Nothing
 
   highlighting HardTabs {} = Msg.Background
@@ -643,6 +673,8 @@ instance Msg.MessagePosition BasicPosition Message where
   positions CyclicPrecedence { cyclicPrecedencePos = poslist } = poslist
   positions PrecedenceParseError { precParseErrorPos = pos } = [pos]
   positions ExpectedRef { expectedRefPos = pos } = [pos]
+  positions MissingFields { missingFieldsPos = pos } = [pos]
+  positions TupleMismatch { tupleMismatchPos = pos } = [pos]
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1129,3 +1161,29 @@ expectedRef :: (MonadMessages Message m) =>
             -- ^ The position at which the inheritance occurs.
             -> m ()
 expectedRef pos = message ExpectedRef { expectedRefPos = pos }
+
+-- | Report missing fields in a record.
+missingFields :: (MonadMessages Message m, MonadSymbols m) =>
+                 [Symbol]
+              -- ^ The extra binding symbol.
+              -> Position
+              -- ^ The position at which the extra symbol occurs.
+              -> m ()
+missingFields sym pos =
+  do
+    strs <- mapM name sym
+    message MissingFields { missingFieldsNames = strs, missingFieldsPos = pos }
+
+-- | Report missing fields in a record.
+tupleMismatch :: (MonadMessages Message m) =>
+                 Word
+              -- ^ The expected number of fields
+              -> Word
+              -- ^ The actual number of fields
+              -> Position
+              -- ^ The position at which the extra symbol occurs.
+              -> m ()
+tupleMismatch expected actual pos =
+  message TupleMismatch { tupleMismatchExpected = expected,
+                          tupleMismatchActual = actual,
+                          tupleMismatchPos = pos }

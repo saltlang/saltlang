@@ -42,9 +42,14 @@ module Language.Salt.Core.TypeCheck.Rules(
        ) where
 
 import Bound
+import Control.Monad
 import Control.Monad.Messages
+import Control.Monad.Symbols
 import Control.Monad.TypeCheck.Class
+import Data.Array(Array, (!))
 import Data.Default
+import Data.HashMap.Strict(HashMap)
+import Data.Maybe
 import Data.Position.DWARFPosition
 import Data.PositionElement
 import Data.Symbol
@@ -53,6 +58,7 @@ import Language.Salt.Core.TypeCheck.Env(Env)
 import Language.Salt.Message
 
 import qualified Data.Array as Array
+import qualified Data.HashMap.Strict as HashMap
 import qualified Language.Salt.Core.TypeCheck.Env as Env
 
 emptyPattern :: Position
@@ -63,13 +69,12 @@ makeFuncType :: Monad m =>
                 Intro Symbol Symbol
              -> Intro Symbol Symbol
              -> m (Intro Symbol Symbol)
-makeFuncType RecordType { recTypeBody = args, recTypeOrder = order,
-                          recTypePos = pos } retty =
+makeFuncType RecordType { recTypeBody = args, recTypePos = pos } retty =
   let
     retscope = abstract (const Nothing) retty
   in
-    return FuncType { funcTypeArgs = args, funcTypeArgOrder = order,
-                      funcTypeRetTy = retscope, funcTypePos = pos }
+    return FuncType { funcTypeArgs = args, funcTypeRetTy = retscope,
+                      funcTypePos = pos }
 makeFuncType argty retty =
   let
     argscope = abstract (const Nothing) argty
@@ -81,11 +86,67 @@ makeFuncType argty retty =
     -- Construct a synthetic function type
     return FuncType { funcTypeArgs = [Element { elemName = argname,
                                                 elemPat = emptyPattern pos,
+                                                elemTupleIdx = 1,
                                                 elemType = argscope,
                                                 elemPos = pos }],
-                      funcTypeArgOrder = Array.listArray (1, 1) [argname],
                       funcTypeRetTy = retscope, funcTypePos = pos }
 
+-- | Match up record type elements with their fields in the record
+-- value.  Missing fields will be reported, and 'BadIntro's will be
+-- substituted for their values.
+matchRecordFields :: (MonadMessages Message m, MonadSymbols m,
+                      MonadTypeCheck m) =>
+                     Position
+                  -- ^ Position of the record value (used for error reporting).
+                  -> [Element Symbol Symbol]
+                  -- ^ Record type elements.
+                  -> HashMap FieldName (Field (Intro Symbol Symbol))
+                  -- ^ The fields of the record value.
+                  -> m [(Element Symbol Symbol, Intro Symbol Symbol)]
+                  -- ^ The matched elements with field values.
+matchRecordFields pos elems fieldmap =
+  let
+    mapfun elem @ Element { elemName = fname } =
+      case HashMap.lookup fname fieldmap of
+        Just Field { fieldVal = field } -> ((elem, field), Nothing)
+        Nothing -> ((elem, BadIntro { badIntroPos = pos }), Just fname)
+
+    (binds, maybeerrs) = unzip (map mapfun elems)
+  in do
+    case catMaybes maybeerrs of
+      [] -> return binds
+      fnames ->
+        do
+          missingFields (map fieldSym fnames) (basicPosition pos)
+          return binds
+
+-- | Match up a record type against tuple fields.
+matchTupleFields :: (MonadMessages Message m, MonadSymbols m,
+                     MonadTypeCheck m) =>
+                    Position
+                 -- ^ Position of the record value (used for error reporting).
+                 -> [Element Symbol Symbol]
+                 -- ^ Record type elements.
+                 -> Array Word (Intro Symbol Symbol)
+                 -- ^ The fields of the tuple value.
+                 -> m [(Element Symbol Symbol, Intro Symbol Symbol)]
+                 -- ^ The matched elements with field values.
+matchTupleFields debugpos elems fields =
+  let
+    -- XXX This is wrong; we need to rearrange RecordType
+    pos = basicPosition debugpos
+    elemlen = fromIntegral (length elems - 1)
+    (fieldstart, fieldlen) = Array.bounds fields
+
+    mapfun elem @ Element { elemName = fname, elemTupleIdx = idx }
+      | idx + fieldstart <= fieldlen = (elem, fields ! (idx + fieldstart))
+      | otherwise = (elem, BadIntro { badIntroPos = debugpos })
+  in do
+    -- The starting indexes should always be 0
+    unless (fieldstart == 0) (internalError "Start index is not 0" [pos])
+    -- Check that the tuple length matches the number of fields
+    unless (elemlen == fieldlen) (tupleMismatch elemlen fieldlen pos)
+    return (map mapfun elems)
 
 -- | Check that the called object is a function, get its type, check
 -- the argument, and synthesize the return type with the substitutions
@@ -105,11 +166,10 @@ synthCallRule Call { callFunc = func, callArg = arg, callPos = callpos } =
                        Intro Symbol Symbol
                     -> m (Intro Symbol Symbol)
     -- We can work with a function type
-    checkSingleCall FuncType { funcTypeArgs = argtys, funcTypeArgOrder = order,
-                               funcTypeRetTy = retty, funcTypePos = pos } =
+    checkSingleCall FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty,
+                               funcTypePos = pos } =
       let
-        argty = RecordType { recTypeBody = argtys, recTypeOrder = order,
-                             recTypePos = pos }
+        argty = RecordType { recTypeBody = argtys, recTypePos = pos }
       in do
         -- Check that the argument has the right type
         checkIntro arg argty
@@ -224,9 +284,9 @@ checkAgainstRefineRule term _ =
 --
 -- Corresponds to the following type rule:
 --
--- >  ty :> prop   E |- qty <= type   E |- case_i <= Pi(qty, ty)
--- > ------------------------------------------------------------
--- >               E |- quant qty. [case_i] <= ty
+-- >  E |- ty :> prop   E |- qty <= type   E |- case_i <= Pi(qty, ty)
+-- > -----------------------------------------------------------------
+-- >                  E |- quant qty. [case_i] <= ty
 checkQuantifiedRule :: (MonadMessages Message m, MonadTypeCheck m) =>
                        Intro Symbol Symbol
                     -- ^ The term being checked.
@@ -244,12 +304,12 @@ checkQuantifiedRule Quantified { quantType = qty, quantCases = cases,
     casety <- makeFuncType qty _
     mapM_ ((flip checkCase) casety) cases
 
--- | Check a lambda term's cases against the expected type, and check
--- for case completeness.
+-- | Check a 'Lambda' term's cases against the expected type, and
+-- check for case completeness.
 --
 -- Corresponds to the following type rule:
 --
--- >   E |- case_i <= ty
+-- >    E |- case_i <= ty
 -- > ----------------------
 -- >  E |- \[case_i] <= ty
 checkLambdaRule :: (MonadMessages Message m, MonadTypeCheck m) =>
@@ -265,14 +325,91 @@ checkLambdaRule Lambda { lambdaCases = cases, lambdaPos = pos } ty =
     -- Assert that the cases are complete
     _
 
+-- | Check that a record term has the same fields as the record type,
+-- and check all the fields' types.
+--
+-- Corresponds to the following type rule:
+--
+-- >  {fname_j} = {bname_i}   E |- [ (term_l, ty_k) | fname_k = bname_l ]
+-- > ---------------------------------------------------------------------
+-- >           E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
+checkRecordRule :: (MonadMessages Message m, MonadSymbols m,
+                    MonadTypeCheck m) =>
+                   Intro Symbol Symbol
+                -- ^ The term being checked.
+                -> Intro Symbol Symbol
+                -- ^ The type against which it's being checked.
+                -> m ()
+checkRecordRule Record { recPos = pos, recFields = fields } ty =
+  do
+    recty <- typeJoinRecord ty
+    case recty of
+      RecordType { recTypeBody = fieldtys } ->
+        do
+          pairings <- matchRecordFields pos fieldtys fields
+          checkFields pairings
+      BadIntro {} -> return ()
+      _ -> internalError "Expected a record-form type" [basicPosition pos]
+checkRecordRule term _ =
+  internalError "Improper use of checkRecord rule" [position term]
+
+-- | Check that a tuple term has the same number of fields as the record type,
+-- and check all the fields' types.
+--
+-- Corresponds to the following type rule:
+--
+-- >  |{fname_j}| = |{bname_i}|   E |- [ (term_l, ty_k) | fname_k = bname_l ]
+-- > -------------------------------------------------------------------------
+-- >             E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
+checkTupleRule :: (MonadMessages Message m, MonadSymbols m,
+                   MonadTypeCheck m) =>
+                  Intro Symbol Symbol
+               -- ^ The term being checked.
+               -> Intro Symbol Symbol
+               -- ^ The type against which it's being checked.
+               -> m ()
+checkTupleRule Tuple { tuplePos = pos, tupleFields = fields } ty =
+  do
+    recty <- typeJoinRecord ty
+    case recty of
+      RecordType { recTypeBody = fieldtys } ->
+        do
+          pairings <- matchTupleFields pos fieldtys fields
+          checkFields pairings
+      BadIntro {} -> return ()
+      _ -> internalError "Expected a record-form type" [basicPosition pos]
+checkTupleRule term _ =
+  internalError "Improper use of checkTuple rule" [position term]
+
+-- | Check that a computation term's actual type is a subtype of the
+-- expected type.
+--
+-- Corresponds to the following type rule:
+--
+-- >  E |- comp => ty'   E |- (do comp : ty') :> ty
+-- > -----------------------------------------------
+-- >               E |- do comp <= ty
+checkIntroCompRule :: (MonadMessages Message m, MonadTypeCheck m) =>
+                      Intro Symbol Symbol
+                   -- ^ The term being checked.
+                   -> Intro Symbol Symbol
+                   -- ^ The type against which it's being checked.
+                   -> m ()
+checkIntroCompRule c @ Comp { compBody = body } expectedty =
+  do
+    actualty <- synthComp body
+    checkSubtype c actualty expectedty
+checkIntroCompRule term _ =
+  internalError "Improper use of checkIntroComp rule" [position term]
+
 -- | Check that an elimination term's actual type is a subtype of the
 -- expected type.
 --
 -- Corresponds to the following type rule:
 --
--- >  E |- term => ty'   (term : ty') :> ty
--- > ---------------------------------------
--- >            E |- term <= ty
+-- >  E |- term => ty'   E |- (term : ty') :> ty
+-- > --------------------------------------------
+-- >               E |- term <= ty
 checkElimRule :: (MonadMessages Message m, MonadTypeCheck m) =>
                  Intro Symbol Symbol
               -- ^ The term being checked.
@@ -287,3 +424,34 @@ checkElimRule term @ Elim { elimTerm = elim } expectedty =
     checkSubtype term actualty expectedty
 checkElimRule term _ =
   internalError "Improper use of checkElim rule" [position term]
+
+-- | Check that a literal's expected type is a subtype of the most
+-- general type for this kind of literal.
+--
+-- Corresponds to the following type rule:
+--
+-- >  E |- (lit : ty) :> LitTy[lit]
+-- > -------------------------------
+-- >        E |- lit <= ty
+--
+-- Where @LitTy[lit]@ is the most general type for that kind of
+-- literal.
+checkLiteralRule :: (MonadMessages Message m, MonadTypeCheck m) =>
+                    Intro Symbol Symbol
+                 -- ^ The term being checked.
+                 -> Intro Symbol Symbol
+                 -- ^ The type against which it's being checked.
+                 -> m ()
+checkLiteralRule term @ Literal { literalVal = lit } ty =
+  let
+    -- Get the most general type for this literal
+    litty = _
+  in do
+    -- Check that the expected type is a subtype of the most general
+    -- type for this literal.
+    checkSubtype term ty litty
+    -- XXX literals need to have some way of registering their actual
+    -- type.  Likely solution: they have a type variable, and we emit
+    -- an equality relationship
+checkLiteralRule term _ =
+  internalError "Improper use of checkLiteral rule" [position term]

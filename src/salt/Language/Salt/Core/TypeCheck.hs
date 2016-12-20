@@ -47,9 +47,13 @@ checkIntroImpl :: (MonadIntroCheck m) =>
                -> Intro Symbol Symbol
                -- ^ The type against which to check the term.
                -> m ()
-checkIntroImpl Elim {} _ = checkElim
 checkIntroImpl Quantified {} _ = checkQuantified
 checkIntroImpl Lambda {} _ = checkLambda
+checkIntroImpl Record {} _ = checkRecord
+checkIntroImpl Tuple {} _ = checkTuple
+checkIntroImpl Comp {} _ = checkIntroComp
+checkIntroImpl Elim {} _ = checkElim
+checkIntroImpl Literal {} _ = checkLiteral
 -- Skip bad terms or types
 checkIntroImpl BadIntro {} _ = return ()
 checkIntroImpl _ BadIntro {} = return ()
