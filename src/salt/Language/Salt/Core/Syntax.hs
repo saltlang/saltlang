@@ -92,6 +92,7 @@ import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 import Text.Format hiding ((<$>))
 
+import qualified Data.Array as Array
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
@@ -234,7 +235,7 @@ data Intro bound free =
     FuncType {
       -- | The binding order for arguments.  This is used to determine
       -- the order in which to evaluate scopes.
-      funcTypeArgs :: [Element bound free],
+      funcTypeArgs :: !(Array Word (Element bound free)),
       -- | Array used to map tuple arguments to the correct parameter names.
       funcTypeArgOrder :: !(Array Word FieldName),
       -- | The return type of the function, which can reference the
@@ -251,7 +252,7 @@ data Intro bound free =
       -- order, but not themselves or any future scopes.
       --
       -- Note: all fields are given names by transliteration.
-      recTypeBody :: [Element bound free],
+      recTypeBody :: !(Array Word (Element bound free)),
       -- | Array used to convert tuples to records of this type.
       recTypeOrder :: !(Array Word FieldName),
       -- | The position in source from which this originates.
@@ -1286,12 +1287,12 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
   formatM Eta {} = error "Eta is going away"
   formatM FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
     do
-      argdocs <- mapM formatM args
+      argdocs <- mapM formatM (Array.elems args)
       rettydoc <- formatM retty
       return (tupleDoc argdocs <+> string "->" </> nest nestLevel rettydoc)
   formatM RecordType { recTypeBody = body } =
     do
-      bodydocs <- mapM formatM body
+      bodydocs <- mapM formatM (Array.elems body)
       return (tupleDoc bodydocs)
   formatM RefineType { refineType = ty, refineCases = cases } =
     do
@@ -1575,11 +1576,11 @@ funcTypePickler =
   let
     revfunc FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
                        funcTypeArgOrder = ord, funcTypePos = pos } =
-      (args, elems ord, retty, pos)
+      (elems args, elems ord, retty, pos)
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (\(args, ord, retty, pos) ->
-             FuncType { funcTypeArgs = args, funcTypeRetTy = retty,
+             FuncType { funcTypeArgs = listToArr args, funcTypeRetTy = retty,
                         funcTypeArgOrder = listToArr ord, funcTypePos = pos },
             revfunc)
            (xpElemNodes (gxFromString "FuncType")
@@ -1598,11 +1599,11 @@ recordTypePickler :: (GenericXMLString tag, Show tag,
 recordTypePickler =
   let
     revfunc RecordType { recTypeBody = body, recTypeOrder = ord,
-                         recTypePos = pos } = (body, elems ord, pos)
+                         recTypePos = pos } = (elems body, elems ord, pos)
     revfunc _ = error $! "Can't convert"
   in
     xpWrap (\(body, ord, pos) -> RecordType { recTypeOrder = listToArr ord,
-                                              recTypeBody = body,
+                                              recTypeBody = listToArr body,
                                               recTypePos = pos }, revfunc)
            (xpElemNodes (gxFromString "RecordType")
                         (xpTriple (xpList (xpElemNodes (gxFromString "body")
