@@ -58,7 +58,9 @@ data Components ty =
 data FieldNames ty =
   FieldNames {
     -- | The field name "arg".
-    fieldNameArg :: !ty
+    fieldNameArg :: !ty,
+    -- | The field name for receiver parameters (i.e. @this@).
+    fieldNameReceiver :: !ty
   }
   deriving (Eq, Ord, Functor, Foldable, Traversable)
 
@@ -78,11 +80,14 @@ data Refs ty =
     refCharSuper :: !ty,
     -- | The supertype of all strings.
     refStrSuper :: !ty,
+    -- | The supertype of all naturals.
+    refNaturalSuper :: !ty,
     -- | The supertype of all integers.
-    refIntSuper :: !ty,
+    refIntegerSuper :: !ty,
     -- | The supertype of all rationals.
-    refRationalSuper :: !ty
-
+    refRationalSuper :: !ty,
+    -- | The type of behavior specifications for computation types.
+    refCompSpec :: !ty
   }
   deriving (Eq, Ord, Functor, Foldable, Traversable)
 
@@ -92,7 +97,8 @@ componentStrs = Components { componentSalt = ["salt"] }
 
 -- | The string names of all field names used by the compiler.
 fieldNameStrs :: FieldNames Strict.ByteString
-fieldNameStrs = FieldNames { fieldNameArg = "arg" }
+fieldNameStrs = FieldNames { fieldNameArg = "arg",
+                             fieldNameReceiver = "this" }
 
 -- | The symbol names of all field names used by the compiler.
 fieldNames :: (MonadGensym m) =>
@@ -114,8 +120,10 @@ refStrs = Refs { refCompose = "compose",
                  refType = "type",
                  refCharSuper = "char",
                  refStrSuper = "string",
-                 refIntSuper = "integer",
-                 refRationalSuper = "rational"}
+                 refNaturalSuper = "natural",
+                 refIntegerSuper = "integer",
+                 refRationalSuper = "rational",
+                 refCompSpec = "proc" }
 
 -- | The symbol names of all components referenced by the compiler.
 componentSyms :: (MonadGensym m) =>

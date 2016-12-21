@@ -72,6 +72,10 @@ class Monad m => MonadFieldNames m where
   getArgField :: m FieldName
   getArgField = fmap fieldNameArg getFieldNames
 
+  -- | Get the 'FieldName' for receiver parameters (i.e. @this@).
+  getReceiverField :: m FieldName
+  getReceiverField = fmap fieldNameReceiver getFieldNames
+
 -- | Class of monads providing access to the definitions used directly
 -- by the compiler.
 class MonadFieldNames m => MonadRefs refty m  where
@@ -81,6 +85,42 @@ class MonadFieldNames m => MonadRefs refty m  where
   -- | Get a reference to the compose function.
   getComposeRef :: m refty
   getComposeRef = fmap refCompose getRefs
+
+  -- | Get a reference to the unit type.
+  getUnitRef :: m refty
+  getUnitRef = fmap refUnit getRefs
+
+  -- | Get a reference to the prop type.
+  getPropRef :: m refty
+  getPropRef = fmap refProp getRefs
+
+  -- | Get a reference to the type type.
+  getTypeRef :: m refty
+  getTypeRef = fmap refType getRefs
+
+  -- | Get a reference to the supertype of all character types.
+  getCharSuperRef :: m refty
+  getCharSuperRef = fmap refCharSuper getRefs
+
+  -- | Get a reference to the supertype of all string types.
+  getStrSuperRef :: m refty
+  getStrSuperRef = fmap refStrSuper getRefs
+
+  -- | Get a reference to the supertype of all natural types.
+  getNaturalSuperRef :: m refty
+  getNaturalSuperRef = fmap refNaturalSuper getRefs
+
+  -- | Get a reference to the supertype of all integer types.
+  getIntegerSuperRef :: m refty
+  getIntegerSuperRef = fmap refIntegerSuper getRefs
+
+  -- | Get a reference to the supertype of all rational types.
+  getRationalSuperRef :: m refty
+  getRationalSuperRef = fmap refRationalSuper getRefs
+
+  -- | Get a reference to the supertype of behaviors of computations.
+  getCompSpecRef :: m refty
+  getCompSpecRef = fmap refCompSpec getRefs
 
 instance MonadRefs refty m => MonadRefs refty (CommentBufferT m) where
   getRefs = lift getRefs
