@@ -67,14 +67,6 @@ class Monad m => MonadTypeCheck m where
             -- ^ The type against which to check.
             -> m ()
 
-  checkProp :: Intro Symbol Symbol
-            -> m ()
-
-  -- | Check that a given 'Intro' term is a type of some rank.
-  checkType :: Intro Symbol Symbol
-            -- ^ The term to check.
-            -> m ()
-
   -- | Get the best supertype of a type that has a function form.
   -- In essence, this computes the join of the argument type with @top
   -- -> bottom@.
@@ -166,11 +158,52 @@ class MonadTypeCheck m => MonadElimSynth m where
            -- ^ The type of the 'Var' term.
 
 class MonadTypeCheck m => MonadIntroCheck m where
+  -- | Apply the checkRefine rule to check that a refinement type's
+  -- inner type is a type of lesser rank than its own type, and that
+  -- the cases all match the inner type and produce a prop.  This will
+  -- cause an internal error if the goal is anything other than
+  -- checking a 'PropType' against 'Type'.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >  E |- innerty <= type(n)   n < m   E |- case_i <= Pi(innerty, prop)
+  -- > --------------------------------------------------------------------
+  -- >                E |- { innerty | [case_i] } <= type(m)
+  checkRefine :: m ()
+
+  -- | Apply the checkType rule to the current goal state.  This is an
+  -- axiomatic rule that discharges the goal of proving that a @type@
+  -- is a @type@ of higher rank.  Rank checking is implemented by
+  -- generating constraints and checking them in a separate mechanism.
+  -- This constraint will be generated automatically by applying this
+  -- rule.  This will cause an internal error if the goal is anything
+  -- other than checking a 'PropType' against 'Type'.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >         n < m
+  -- > -----------------------
+  -- >  |- type(n) <= type(m)
+  checkType :: m ()
+
+  -- | Apply the checkProp rule to the current goal state.  This
+  -- is an axiomatic rule that discharges the goal of proving that
+  -- @prop@ is a @type@ of any rank.  This will cause an internal
+  -- error if the goal term is anything other than checking a
+  -- 'PropType' against 'Type'.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >
+  -- > -----------------
+  -- >  |- prop <= type
+  checkProp :: m ()
+
   -- | Apply the checkRecord rule to the current goal state.  This
   -- will check that a record term has all the fields in the record
   -- type, and check all the fields' types.
   --
-  -- Corresponds to the following type rule:
+  -- The formal statement of the type rule is as follows:
   --
   -- >  {fname_j} = {bname_i}   E |- [ (term_l, ty_k) | fname_k = bname_l ]
   -- > ---------------------------------------------------------------------
@@ -180,11 +213,11 @@ class MonadTypeCheck m => MonadIntroCheck m where
   -- | Check that a tuple term has the same number of fields as the
   -- record type, and check all the fields' types.
   --
-  -- Corresponds to the following type rule:
+  -- The formal statement of the type rule is as follows:
   --
   -- >  |{fname_j}| = |{bname_i}|   E |- [(term_k, ty_k)]
-  -- > -------------------------------------------------------------------------
-  -- >             E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
+  -- > ---------------------------------------------------
+  -- >   E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
   checkTuple :: m ()
 
   -- | Apply the checkIntroComp rule to the current goal state.  This
@@ -252,3 +285,17 @@ class MonadTypeCheck m => MonadIntroCheck m where
   -- Where @LitTy[lit]@ is the most general type for that kind of
   -- literal.
   checkLiteral :: m ()
+
+  -- | Apply the checkAgainstRefine rule to the current goal.  This
+  -- checks the geal term against the inner type of the refinement
+  -- type, and generates an assertion that the term satisfies the
+  -- predicate.  This will cause an internal error if the goal type is
+  -- anything other than a 'RefineType'; the goal term can be
+  -- anything.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >  E |- term <= ty0   E ==> pred(term)
+  -- > ------------------------------------
+  -- >      E |- term <= { ty0 | pred }
+  checkAgainstRefine :: m ()

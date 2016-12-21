@@ -47,16 +47,29 @@ checkIntroImpl :: (MonadIntroCheck m) =>
                -> Intro Symbol Symbol
                -- ^ The type against which to check the term.
                -> m ()
-checkIntroImpl Quantified {} _ = checkQuantified
-checkIntroImpl Lambda {} _ = checkLambda
-checkIntroImpl Record {} _ = checkRecord
-checkIntroImpl Tuple {} _ = checkTuple
-checkIntroImpl Comp {} _ = checkIntroComp
+-- We can check an elimination term against any type
 checkIntroImpl Elim {} _ = checkElim
-checkIntroImpl Literal {} _ = checkLiteral
--- Skip bad terms or types
+-- Checking refinement types against any non-elimination term
+-- generates assertions, and then recurses.
+checkIntroImpl _ RefineType {} = checkAgainstRefine
+-- If we can directly apply type rules, do so.
+checkIntroImpl RefineType {} Type {} = checkRefine
+checkIntroImpl Type {} Type {} = checkType
+checkIntroImpl PropType {} Type {} = checkProp
+checkIntroImpl Quantified {} PropType {} = checkQuantified
+checkIntroImpl Lambda {} FuncType {} = checkLambda
+checkIntroImpl Record {} RecordType {} = checkRecord
+checkIntroImpl Tuple {} RecordType {} = checkTuple
+checkIntroImpl Comp {} CompType {} = checkIntroComp
+checkIntroImpl Literal {} Elim { elimTerm = Var {} } = checkLiteral
+-- If we see an elim term on the right side, then we try to resolve it
+-- to a concrete type.
+checkIntroImpl _ Elim {} = _
+-- Skip bad terms or types completely.
 checkIntroImpl BadIntro {} _ = return ()
 checkIntroImpl _ BadIntro {} = return ()
+-- Anything else is an error.
+checkIntroImpl term ty = _
 
 -- | Synthesize the type of an 'Elim' terms.  These terms produce a
 -- type during type checking, as opposed to 'Intro' terms, which

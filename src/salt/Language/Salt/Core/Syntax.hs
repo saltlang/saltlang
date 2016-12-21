@@ -58,7 +58,10 @@ module Language.Salt.Core.Syntax(
        Field(..),
 
        -- * Positions
-       Position
+       Position,
+
+       -- * Newtypes
+       RankID(..)
        ) where
 
 import Bound
@@ -92,11 +95,15 @@ import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 import Text.Format hiding ((<$>))
 
+import qualified Data.Graph.Inductive.Graph as Graph
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy.UTF8 as Lazy
 
 type Position = DWARFPosition [Symbol] [Symbol]
+
+newtype RankID = RankID { rankID :: Graph.Node }
+  deriving (Eq, Ord, Ix)
 
 -- | A literal value.
 data Literal =
@@ -278,6 +285,22 @@ data Intro bound free =
       compCases :: [Case bound free],
       -- | The position in source from which this originates.
       compTypePos :: !Position
+    }
+    -- | Type of types of a given rank.  The type hierarchy is
+    -- statified, so @type(n)@ is an insance of @type(n+1)@.  In the
+    -- type checker, we implement this by building up greater-than
+    -- relationships among rank variables, and then checking for
+    -- cycles.
+  | Type {
+      -- | The rank variable for this type.
+      typeRank :: !RankID,
+      -- | The position in source from which this originates.
+      typePos :: !Position
+    }
+    -- | Type of propositions.
+  | PropType {
+      -- | The position in source from which this originates.
+      propPos :: !Position
     }
 
     -- Propositions.  These do not support decidable equality.  As such,
@@ -514,6 +537,10 @@ positionDefault e =
   in
     basicPosition pos
 
+instance Enum RankID where
+  toEnum = RankID
+  fromEnum = rankID
+
 instance DWARFPositionElement [Symbol] [Symbol] (Pattern bound) where
   debugPosition Deconstruct { deconstructPos = pos } = pos
   debugPosition As { asPos = pos } = pos
@@ -534,6 +561,8 @@ instance DWARFPositionElement [Symbol] [Symbol] (Intro bound free) where
   debugPosition RecordType { recTypePos = pos } = pos
   debugPosition RefineType { refinePos = pos } = pos
   debugPosition CompType { compTypePos = pos } = pos
+  debugPosition Type { typePos = pos } = pos
+  debugPosition PropType { propPos = pos } = pos
   debugPosition Quantified { quantPos = pos } = pos
   debugPosition Eta { etaPos = pos } = pos
   debugPosition Lambda { lambdaPos = pos } = pos
@@ -612,6 +641,8 @@ instance Eq b => Eq1 (Intro b) where
   CompType { compType = ty1, compCases = cases1 } ==#
     CompType { compType = ty2, compCases = cases2 } =
       ty1 ==# ty2 && cases1 ==# cases2
+  Type { typeRank = rank1 } ==# Type { typeRank = rank2 } = rank1 == rank2
+  PropType {} ==# PropType {} = True
   Quantified { quantKind = kind1, quantType = ty1, quantCases = cases1 } ==#
     Quantified { quantKind = kind2, quantType = ty2, quantCases = cases2 } =
       kind1 == kind2 && ty1 ==# ty2 && cases1 ==# cases2
@@ -749,6 +780,13 @@ instance Ord b => Ord1 (Intro b) where
       out -> out
   compare1 CompType {} _ = GT
   compare1 _ CompType {} = LT
+  compare1 Type { typeRank = rank1 } Type { typeRank = rank2 } =
+    compare rank1 rank2
+  compare1 Type {} _ = LT
+  compare1 _ Type {} = GT
+  compare1 PropType {} PropType {} = EQ
+  compare1 PropType {} _ = LT
+  compare1 _ PropType {} = GT
   compare1 Quantified { quantKind = kind1, quantType = ty1,
                         quantCases = cases1 }
            Quantified { quantKind = kind2, quantType = ty2,
@@ -865,6 +903,9 @@ instance (Ord b, Ord s) => Ord (Elim b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Cmd b s) where compare = compare1
 instance (Ord b, Ord s) => Ord (Comp b s) where compare = compare1
 
+instance Hashable RankID where
+  hashWithSalt s = hashWithSalt s . rankID
+
 instance Hashable Literal where
   hashWithSalt s Num { numVal = n } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` n
@@ -895,31 +936,34 @@ instance (Hashable b, Ord b) => Hashable1 (Intro b) where
     s `hashWithSalt` (3 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s CompType { compType = ty, compCases = cases } =
     s `hashWithSalt` (4 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
+  hashWithSalt1 s Type { typeRank = rank } =
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` rank
+  hashWithSalt1 s PropType {} = s `hashWithSalt` (6 :: Int)
   hashWithSalt1 s Quantified { quantKind = Forall, quantType = ty,
                                quantCases = cases } =
-    s `hashWithSalt` (5 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
+    s `hashWithSalt` (7 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s Quantified { quantKind = Exists, quantType = ty,
                                quantCases = cases } =
-    s `hashWithSalt` (6 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
+    s `hashWithSalt` (8 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s Eta { etaTerm = term, etaType = ty } =
-    s `hashWithSalt` (7 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
+    s `hashWithSalt` (9 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
   hashWithSalt1 s Lambda { lambdaCases = cases } =
-    s `hashWithSalt` (8 :: Int) `hashWithSalt1` cases
+    s `hashWithSalt` (10 :: Int) `hashWithSalt1` cases
   hashWithSalt1 s Record { recFields = vals } =
-    s `hashWithSalt` (9 :: Int) `hashWithSalt1`
+    s `hashWithSalt` (11 :: Int) `hashWithSalt1`
     sortBy keyOrd (HashMap.toList vals)
   hashWithSalt1 s Tuple { tupleFields = vals } =
-    s `hashWithSalt` (10 :: Int) `hashWithSalt1` elems vals
+    s `hashWithSalt` (12 :: Int) `hashWithSalt1` elems vals
   hashWithSalt1 s Fix { fixSym = sym, fixTerm = term } =
-    (s `hashWithSalt` (11 :: Int) `hashWithSalt` sym) `hashWithSalt1` term
+    (s `hashWithSalt` (13 :: Int) `hashWithSalt` sym) `hashWithSalt1` term
   hashWithSalt1 s Comp { compBody = body } =
-    s `hashWithSalt` (12 :: Int) `hashWithSalt1` body
+    s `hashWithSalt` (14 :: Int) `hashWithSalt1` body
   hashWithSalt1 s Elim { elimTerm = term } =
-    s `hashWithSalt` (13 :: Int) `hashWithSalt1` term
+    s `hashWithSalt` (15 :: Int) `hashWithSalt1` term
   hashWithSalt1 s Literal { literalVal = term } =
-    s `hashWithSalt` (14 :: Int) `hashWithSalt` term
+    s `hashWithSalt` (16 :: Int) `hashWithSalt` term
   hashWithSalt1 s Constructor { constructorSym = sym } =
-    s `hashWithSalt` (15 :: Int) `hashWithSalt` sym
+    s `hashWithSalt` (17 :: Int) `hashWithSalt` sym
   hashWithSalt1 s BadIntro {} = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable b, Ord b) => Hashable1 (Elim b) where
@@ -1034,7 +1078,7 @@ compSubstIntro f c @ End { endCmd = cmd } =
 compSubstIntro _ (BadComp p) = BadComp p
 
 instance Monad (Intro b) where
-  return sym = Elim { elimTerm = Var { varSym = sym, varPos = injectpos } }
+  return sym = Elim { elimTerm = return sym }
 
   t @ FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } >>= f =
     t { funcTypeArgs = fmap (elementSubstIntro f) argtys,
@@ -1045,6 +1089,9 @@ instance Monad (Intro b) where
     t { refineType = ty >>= f, refineCases = fmap (caseSubstIntro f) cases }
   t @ CompType { compType = ty, compCases = cases } >>= f =
     t { compType = ty >>= f, compCases = fmap (caseSubstIntro f) cases }
+  Type { typeRank = rank, typePos = pos } >>= _ =
+    Type { typeRank = rank, typePos = pos }
+  PropType { propPos = pos } >>= _ = PropType { propPos = pos }
   t @ Quantified { quantType = ty, quantCases = cases } >>= f =
     t { quantCases = fmap (caseSubstIntro f) cases, quantType = ty >>= f }
   t @ Lambda { lambdaCases = cases } >>= f =
@@ -1098,6 +1145,9 @@ introSubstElim f t @ RefineType { refineType = ty, refineCases = cases } =
       refineCases = fmap (caseSubstElim f) cases }
 introSubstElim f t @ CompType { compType = ty, compCases = cases } =
   t { compType = introSubstElim f ty, compCases = fmap (caseSubstElim f) cases }
+introSubstElim _ Type { typeRank = rank, typePos = p } =
+  Type { typeRank = rank, typePos = p }
+introSubstElim _ PropType { propPos = p } = PropType { propPos = p }
 introSubstElim f t @ Quantified { quantType = ty, quantCases = cases } =
   t { quantCases = fmap (caseSubstElim f) cases,
       quantType = introSubstElim f ty }
@@ -1146,17 +1196,9 @@ cmdSubstComp f c @ Eval { evalTerm = term } =
 cmdSubstComp _ (BadCmd p) = BadCmd p
 
 instance Monad (Comp b) where
-  return sym =
-    End {
-      endCmd = Eval {
-                 evalTerm = Elim {
-                              elimTerm = Var { varSym = sym,
-                                               varPos = injectpos }
-                              },
-                 evalPos = injectpos
-               },
-      endPos = injectpos
-    }
+  return sym = End { endCmd = Eval { evalTerm = return sym,
+                                     evalPos = injectpos },
+                     endPos = injectpos }
 
   c @ Seq { seqType = ty, seqCmd = cmd, seqNext = next } >>= f =
     c { seqType = ty >>= introSubstComp f, seqNext = next >>>= f,
@@ -1303,6 +1345,8 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
       tydoc <- formatM ty
       casedocs <- mapM formatM cases
       return (tydoc </> nest nestLevel (string "\\spec" <+> casesDoc casedocs))
+  formatM Type {} = return $! string "type"
+  formatM PropType {} = return $! string "prop"
   formatM Quantified { quantType = ty, quantCases = cases, quantKind = kind } =
     do
       tydoc <- formatM ty
@@ -1367,6 +1411,10 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
     do
       stmlist <- formatMCompList comp
       return $! stmsDoc stmlist
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [(tag, text)] RankID where
+  xpickle = xpWrap (RankID, rankID) (xpAttr (gxFromString "rank-var") xpickle)
 
 numPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text) =>
@@ -1654,6 +1702,36 @@ compTypePickler =
                                                        xpickle))
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
+typePickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Intro bound free)
+typePickler =
+  let
+    revfunc Type { typeRank = rank, typePos = pos } = (rank, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(rank, pos) -> Type { typeRank = rank, typePos = pos }, revfunc)
+           (xpElem (gxFromString "Type") xpickle
+                   (xpElemNodes (gxFromString "pos") xpickle))
+
+propPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text,
+                XmlPickler [NodeG [] tag text] bound,
+                XmlPickler [NodeG [] tag text] free,
+                Hashable bound, Eq bound) =>
+               PU [NodeG [] tag text] (Intro bound free)
+propPickler =
+  let
+    revfunc PropType { propPos = pos } = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (PropType, revfunc)
+           (xpElemNodes (gxFromString "PropType")
+                        (xpElemNodes (gxFromString "pos") xpickle))
+
 quantifiedPickler :: (GenericXMLString tag, Show tag,
                       GenericXMLString text, Show text,
                       XmlPickler [(tag, text)] bound,
@@ -1850,23 +1928,25 @@ instance (GenericXMLString tag, Show tag,
       picker RecordType {} = 1
       picker RefineType {} = 2
       picker CompType {} = 3
-      picker Quantified {} = 4
-      picker Lambda {} = 5
-      picker Record {} = 6
-      picker Tuple {} = 7
-      picker Fix {} = 8
-      picker Comp {} = 9
-      picker Elim {} = 10
-      picker Constructor {} = 11
-      picker Literal {} = 12
-      picker BadIntro {} = 13
+      picker Type {} = 4
+      picker PropType {} = 5
+      picker Quantified {} = 6
+      picker Lambda {} = 7
+      picker Record {} = 8
+      picker Tuple {} = 9
+      picker Fix {} = 10
+      picker Comp {} = 11
+      picker Elim {} = 12
+      picker Constructor {} = 13
+      picker Literal {} = 14
+      picker BadIntro {} = 15
       picker Eta {} = error "Eta not supported"
     in
       xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
-                     compTypePickler, quantifiedPickler, lambdaPickler,
-                     recordPickler, tuplePickler, fixPickler, compPickler,
-                     elimPickler, constructorPickler, literalPickler,
-                     badIntroPickler ]
+                     compTypePickler, typePickler, propPickler,
+                     quantifiedPickler, lambdaPickler, recordPickler,
+                     tuplePickler, fixPickler, compPickler, elimPickler,
+                     constructorPickler, literalPickler, badIntroPickler ]
 
 
 callPickler :: (GenericXMLString tag, Show tag,

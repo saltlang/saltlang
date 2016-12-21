@@ -133,7 +133,6 @@ matchTupleFields :: (MonadMessages Message m, MonadSymbols m,
                  -- ^ The matched elements with field values.
 matchTupleFields debugpos elems fields =
   let
-    -- XXX This is wrong; we need to rearrange RecordType
     pos = basicPosition debugpos
     elemlen = fromIntegral (length elems - 1)
     (fieldstart, fieldlen) = Array.bounds fields
@@ -220,7 +219,7 @@ synthTypedRule :: (MonadMessages Message m, MonadTypeCheck m) =>
 synthTypedRule Typed { typedType = ty, typedTerm = term, typedPos = pos } =
   do
     -- Check that the type actually is a type.
-    checkType ty
+    checkIntro ty Type { typeRank = _, typePos = pos }
     -- Check that the term has the given type.
     checkIntro term ty
     -- Give back the ascribed type as this term's type.
@@ -251,9 +250,9 @@ synthVarRule _ term =
 --
 -- Corresponds to the following type rule:
 --
--- >  E |- term <= ty0   E |- pred <= Pi(ty0, prop)   E ==> pred term
--- > -----------------------------------------------------------------
--- >                  E |- term <= { ty0 | pred }
+-- >  E |- term <= ty0   E ==> pred(term)
+-- > ------------------------------------
+-- >     E |- term <= { ty0 | pred }
 checkAgainstRefineRule :: (MonadMessages Message m, MonadTypeCheck m) =>
                           Intro Symbol Symbol
                        -- ^ The term being checked.
@@ -266,9 +265,7 @@ checkAgainstRefineRule term RefineType { refineType = innerty,
   let
     pred = Lambda { lambdaCases = cases, lambdaPos = pos }
   in do
-    -- First, make sure the inner type is a well-formed type.
-    checkType innerty
-    -- Now, check the term against the inner type.
+    -- First, check the term against the inner type.
     checkIntro term innerty
     -- Get the type of propositions.
     propty <- _
@@ -278,6 +275,71 @@ checkAgainstRefineRule term RefineType { refineType = innerty,
     assertion _
 checkAgainstRefineRule term _ =
   internalError "Improper use of checkAgainstRefineRule rule" [position term]
+
+-- | Check that a refinement type's inner type is a type of lesser
+-- rank, and that the cases all match the inner type and produce a
+-- prop.
+--
+-- Corresponds to the following type rule:
+--
+-- >  E |- innerty <= type(n)   n < m   E |- case_i <= Pi(innerty, prop)
+-- > --------------------------------------------------------------------
+-- >                E |- { innerty | [case_i] } <= type(m)
+checkRefineRule :: (MonadMessages Message m, MonadTypeCheck m) =>
+                   Intro Symbol Symbol
+                -- ^ The term being checked.
+                -> Intro Symbol Symbol
+                -- ^ The type against which it's being checked.
+                -> m ()
+checkRefineRule RefineType { refineType = innerty, refineCases = cases,
+                             refinePos = pos }
+                Type {} =
+  do
+    -- Check that the inner type is a well-formed type
+    checkIntro innerty Type { typeRank = _, typePos = pos }
+    -- Check the type of the cases.
+    _
+checkRefineRule term _ =
+  internalError "Improper use of checkRefine rule" [position term]
+
+-- | Axiomatic rule asserting that a @type(n)@ is a @type(m)@ where @n
+-- < m@.
+--
+-- Corresponds to the following type rule:
+--
+-- >         n < m
+-- > -----------------------
+-- >  |- type(n) <= type(m)
+checkTypeRule :: (MonadMessages Message m, MonadTypeCheck m) =>
+                 Intro Symbol Symbol
+              -- ^ The term being checked.
+              -> Intro Symbol Symbol
+              -- ^ The type against which it's being checked.
+              -> m ()
+-- Prop is a type
+checkTypeRule Type { typeRank = n } Type { typeRank = m } =
+  -- We need to figure out how to report rank relationships
+  _
+checkTypeRule term _ =
+  internalError "Improper use of checkType rule" [position term]
+
+-- | Axiomatic rule asserting that the @prop@ type is a @type@.
+--
+-- Corresponds to the following type rule:
+--
+-- >
+-- > -----------------
+-- >  |- prop <= type(n)
+checkPropRule :: (MonadMessages Message m, MonadTypeCheck m) =>
+                 Intro Symbol Symbol
+              -- ^ The term being checked.
+              -> Intro Symbol Symbol
+              -- ^ The type against which it's being checked.
+              -> m ()
+-- Prop is a type
+checkPropRule PropType {} Type {} = return ()
+checkPropRule term _ =
+  internalError "Improper use of checkProp rule" [position term]
 
 -- | Check that a quantified term's cases map from the quantifier type
 -- to prop.
@@ -294,14 +356,13 @@ checkQuantifiedRule :: (MonadMessages Message m, MonadTypeCheck m) =>
                     -- ^ The type against which it's being checked.
                     -> m ()
 checkQuantifiedRule Quantified { quantType = qty, quantCases = cases,
-                                 quantPos = pos } ty =
+                                 quantPos = pos }
+                    PropType {} =
   do
-    -- Check that the result type is a subtype of proposition
-    checkProp ty
     -- Check that the quantifier type is a well-formed type
-    checkType qty
+    checkIntro qty Type { typeRank = _, typePos = pos }
     -- Check the cases against the expected type
-    casety <- makeFuncType qty _
+    casety <- makeFuncType qty PropType { propPos = pos }
     mapM_ ((flip checkCase) casety) cases
 
 -- | Check a 'Lambda' term's cases against the expected type, and
@@ -318,10 +379,11 @@ checkLambdaRule :: (MonadMessages Message m, MonadTypeCheck m) =>
                 -> Intro Symbol Symbol
                 -- ^ The type against which it's being checked.
                 -> m ()
-checkLambdaRule Lambda { lambdaCases = cases, lambdaPos = pos } ty =
+checkLambdaRule Lambda { lambdaCases = cases, lambdaPos = pos }
+                ty @ FuncType {} =
   do
     -- Check the cases against the expected type
-    mapM_ ((flip checkCase) ty) cases
+    mapM_ (`checkCase` ty) cases
     -- Assert that the cases are complete
     _
 
@@ -340,16 +402,11 @@ checkRecordRule :: (MonadMessages Message m, MonadSymbols m,
                 -> Intro Symbol Symbol
                 -- ^ The type against which it's being checked.
                 -> m ()
-checkRecordRule Record { recPos = pos, recFields = fields } ty =
+checkRecordRule Record { recPos = pos, recFields = fields }
+                RecordType { recTypeBody = fieldtys } =
   do
-    recty <- typeJoinRecord ty
-    case recty of
-      RecordType { recTypeBody = fieldtys } ->
-        do
-          pairings <- matchRecordFields pos fieldtys fields
-          checkFields pairings
-      BadIntro {} -> return ()
-      _ -> internalError "Expected a record-form type" [basicPosition pos]
+    pairings <- matchRecordFields pos fieldtys fields
+    checkFields pairings
 checkRecordRule term _ =
   internalError "Improper use of checkRecord rule" [position term]
 
@@ -358,9 +415,9 @@ checkRecordRule term _ =
 --
 -- Corresponds to the following type rule:
 --
--- >  |{fname_j}| = |{bname_i}|   E |- [ (term_l, ty_k) | fname_k = bname_l ]
--- > -------------------------------------------------------------------------
--- >             E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
+-- >  |{fname_j}| = |{bname_i}|   E |- [(term_k, ty_k)]
+-- > ---------------------------------------------------
+-- >   E |- ([bname_i = term_i]) <= ([fname_j : ty_j])
 checkTupleRule :: (MonadMessages Message m, MonadSymbols m,
                    MonadTypeCheck m) =>
                   Intro Symbol Symbol
@@ -368,16 +425,11 @@ checkTupleRule :: (MonadMessages Message m, MonadSymbols m,
                -> Intro Symbol Symbol
                -- ^ The type against which it's being checked.
                -> m ()
-checkTupleRule Tuple { tuplePos = pos, tupleFields = fields } ty =
+checkTupleRule Tuple { tuplePos = pos, tupleFields = fields }
+               RecordType { recTypeBody = fieldtys } =
   do
-    recty <- typeJoinRecord ty
-    case recty of
-      RecordType { recTypeBody = fieldtys } ->
-        do
-          pairings <- matchTupleFields pos fieldtys fields
-          checkFields pairings
-      BadIntro {} -> return ()
-      _ -> internalError "Expected a record-form type" [basicPosition pos]
+    pairings <- matchTupleFields pos fieldtys fields
+    checkFields pairings
 checkTupleRule term _ =
   internalError "Improper use of checkTuple rule" [position term]
 
@@ -395,7 +447,8 @@ checkIntroCompRule :: (MonadMessages Message m, MonadTypeCheck m) =>
                    -> Intro Symbol Symbol
                    -- ^ The type against which it's being checked.
                    -> m ()
-checkIntroCompRule c @ Comp { compBody = body } expectedty =
+checkIntroCompRule c @ Comp { compBody = body }
+                   expectedty @ CompType {} =
   do
     actualty <- synthComp body
     checkSubtype c actualty expectedty
