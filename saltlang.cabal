@@ -145,6 +145,7 @@ Library
                         Language.Salt.Common
                         Language.Salt.Core.Patterns
                         Language.Salt.Core.Syntax
+                        Language.Salt.Core.Syntax.Util
 --                        Language.Salt.Core.TypeCheck
                         Language.Salt.Core.TypeCheck.Env
                         Language.Salt.Format
