@@ -265,7 +265,8 @@ compareNodes left right =
     return (hasEdge precs (left, right))
 
 -- | Parse a Seq into an Apply-based structure
-parseExp :: (MonadMessages Message m, MonadSymbols m, MonadRefs m, MonadIO m) =>
+parseExp :: (MonadMessages Message m, MonadSymbols m,
+             MonadRefs Ref m, MonadIO m) =>
             Seq Ref
          -> ParserDataT m (Exp Apply Ref)
 -- Report errors for empty and singleton lists
@@ -279,7 +280,7 @@ parseExp Seq { seqExps = [_], seqPos = seqpos } =
     return Bad { badPos = seqpos }
 parseExp Seq { seqExps = exps, seqPos = seqpos } =
   let
-    composition :: MonadRefs m =>
+    composition :: MonadRefs Ref m =>
                    Exp Apply Ref
                 -> Exp Apply Ref
                 -> m (Exp Apply Ref)
@@ -296,7 +297,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
 
     -- | Reduce the top of the stack, then contiune parsing
     reduce :: (MonadMessages Message m, MonadSymbols m,
-               MonadRefs m, MonadIO m) =>
+               MonadRefs Ref m, MonadIO m) =>
               [Exp Apply Ref]
            -- ^ The input stream
            -> [(Production, Maybe (Level Ref))]
@@ -427,7 +428,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
 
     -- | Control function for the precedence parser.
     parse :: (MonadMessages Message m, MonadSymbols m,
-              MonadRefs m, MonadIO m) =>
+              MonadRefs Ref m, MonadIO m) =>
              [Exp Apply Ref]
           -- ^ The input stream
           -> [(Production, Maybe (Level Ref))]
@@ -535,7 +536,8 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
     parse newexps []
 
 -- | Convert an 'Exp' based on 'Seq's to one based on 'Apply'.
-doExp :: (MonadMessages Message m, MonadSymbols m, MonadRefs m, MonadIO m) =>
+doExp :: (MonadMessages Message m, MonadSymbols m,
+          MonadRefs Ref m, MonadIO m) =>
          Exp Seq Ref
       -> ParserDataT m (Exp Apply Ref)
 -- Calls invoke the parser
@@ -748,7 +750,7 @@ scanScope equivs edgetab fixities (scopeid, Scope { scopeSyntax = syntax }) =
 -- | Transform 'Seq's into 'Apply's using the grammar derived from the
 -- syntax directives in each scope.
 precedence :: (MonadMessages Message m, MonadSymbols m,
-               MonadRefs m, MonadIO m) =>
+               MonadRefs Ref m, MonadIO m) =>
               Surface (Exp Seq Ref)
            -- ^ Surface syntax structure to transform.
            -> m (Surface (Exp Apply Ref))

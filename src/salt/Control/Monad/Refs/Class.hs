@@ -28,6 +28,7 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -Wall -Werror #-}
+{-# LANGUAGE MultiParamTypeClasses, FlexibleInstances #-}
 
 -- | Monad class for getting 'Ref's to compiler-referenced definitions
 -- after resolution.  Prior to resolution, these symbols will be
@@ -60,88 +61,171 @@ import Control.Monad.State
 import Control.Monad.Symbols
 import Control.Monad.Trans.Journal
 import Control.Monad.Writer
-import Data.ScopeID
 import Language.Salt.Surface.Syntax
 import Language.Salt.Refs
 
+class Monad m => MonadFieldNames m where
+  -- | Get all the compiler-used field names.
+  getFieldNames :: m (FieldNames FieldName)
+
+  -- | Get the 'FieldName' for the field @arg@.
+  getArgField :: m FieldName
+  getArgField = fmap fieldNameArg getFieldNames
+
 -- | Class of monads providing access to the definitions used directly
 -- by the compiler.
-class Monad m => MonadRefs m where
+class MonadFieldNames m => MonadRefs refty m  where
   -- | Get all the compiler-referenced definitions.
-  getRefs :: m (Refs ScopeID Ref)
+  getRefs :: m (Refs refty)
 
   -- | Get a reference to the compose function.
-  getComposeRef :: m Ref
+  getComposeRef :: m refty
   getComposeRef = fmap refCompose getRefs
 
-instance MonadRefs m => MonadRefs (CommentBufferT m) where
+instance MonadRefs refty m => MonadRefs refty (CommentBufferT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (CommentsT m) where
+instance MonadRefs refty m => MonadRefs refty (CommentsT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (ContT c m) where
+instance MonadRefs refty m => MonadRefs refty (ContT c m) where
   getRefs = lift getRefs
 
-instance (MonadRefs m) => MonadRefs (ExceptT e m) where
+instance MonadRefs refty m => MonadRefs refty (ExceptT e m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (FileArtifactsT m) where
+instance MonadRefs refty m => MonadRefs refty (FileArtifactsT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (FileLoaderT m) where
+instance MonadRefs refty m => MonadRefs refty (FileLoaderT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (GenposT m) where
+instance MonadRefs refty m => MonadRefs refty (GenposT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (GensymT m) where
+instance MonadRefs refty m => MonadRefs refty (GensymT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (GraphBuilderT n e m) where
+instance MonadRefs refty m => MonadRefs refty (GraphBuilderT n e m) where
   getRefs = lift getRefs
 
-instance (MonadRefs m, Monoid w) => MonadRefs (JournalT w m) where
+instance (MonadRefs refty m, Monoid w) => MonadRefs refty (JournalT w m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (KeywordsT pos tok m) where
+instance MonadRefs refty m => MonadRefs refty (KeywordsT pos tok m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (ListT m) where
+instance MonadRefs refty m => MonadRefs refty (ListT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (MemoryArtifactsT info m) where
+instance MonadRefs refty m => MonadRefs refty (MemoryArtifactsT info m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (MemoryLoaderT info m) where
+instance MonadRefs refty m => MonadRefs refty (MemoryLoaderT info m) where
   getRefs = lift getRefs
 
-instance (MonadRefs m, Monoid msgs) => MonadRefs (MessagesT msgs msg m) where
+instance (MonadRefs refty m, Monoid msgs) =>
+         MonadRefs refty (MessagesT msgs msg m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (PositionsT m) where
+instance MonadRefs refty m => MonadRefs refty (PositionsT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (ReaderT r m) where
+instance MonadRefs refty m => MonadRefs refty (ReaderT r m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (ScopeBuilderT tmpscope scope m) where
+instance MonadRefs refty m =>
+         MonadRefs refty (ScopeBuilderT tmpscope scope m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (SkipCommentsT m) where
+instance MonadRefs refty m => MonadRefs refty (SkipCommentsT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (SourceFilesT m) where
+instance MonadRefs refty m => MonadRefs refty (SourceFilesT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (SourceBufferT m) where
+instance MonadRefs refty m => MonadRefs refty (SourceBufferT m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (StateT s m) where
+instance MonadRefs refty m => MonadRefs refty (StateT s m) where
   getRefs = lift getRefs
 
-instance MonadRefs m => MonadRefs (SymbolsT m) where
+instance MonadRefs refty m => MonadRefs refty (SymbolsT m) where
   getRefs = lift getRefs
 
-instance (MonadRefs m, Monoid w) => MonadRefs (WriterT w m) where
+instance (MonadRefs refty m, Monoid w) => MonadRefs refty (WriterT w m) where
   getRefs = lift getRefs
+
+instance MonadFieldNames m => MonadFieldNames (CommentBufferT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (CommentsT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (ContT c m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (ExceptT e m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (FileArtifactsT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (FileLoaderT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (GenposT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (GensymT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (GraphBuilderT n e m) where
+  getFieldNames = lift getFieldNames
+
+instance (MonadFieldNames m, Monoid w) => MonadFieldNames (JournalT w m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (KeywordsT pos tok m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (ListT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (MemoryArtifactsT info m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (MemoryLoaderT info m) where
+  getFieldNames = lift getFieldNames
+
+instance (MonadFieldNames m, Monoid msgs) =>
+         MonadFieldNames (MessagesT msgs msg m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (PositionsT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (ReaderT r m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m =>
+         MonadFieldNames (ScopeBuilderT tmpscope scope m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (SkipCommentsT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (SourceFilesT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (SourceBufferT m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (StateT s m) where
+  getFieldNames = lift getFieldNames
+
+instance MonadFieldNames m => MonadFieldNames (SymbolsT m) where
+  getFieldNames = lift getFieldNames
+
+instance (MonadFieldNames m, Monoid w) => MonadFieldNames (WriterT w m) where
+  getFieldNames = lift getFieldNames

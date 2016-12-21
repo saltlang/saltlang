@@ -28,67 +28,101 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -Wall -Werror -funbox-strict-fields #-}
+{-# LANGUAGE DeriveTraversable, OverloadedStrings #-}
 
 module Language.Salt.Refs(
+       FieldNames(..),
+       Components(..),
        Refs(..),
+       fieldNames,
+       componentStrs,
+       componentSyms,
        refStrs,
-       refSyms
+       refSyms,
        ) where
 
 import Control.Monad.Gensym
-import Data.Bifunctor
-import Data.Bifoldable
-import Data.Bitraversable
 import Data.Symbol
+import Language.Salt.Common
 
 import qualified Data.ByteString.UTF8 as Strict
 
+data Components ty =
+  Components {
+    -- | Name of the component "salt".
+    componentSalt :: !ty
+  }
+  deriving (Eq, Ord, Functor, Foldable, Traversable)
+
+-- | Structure holding all the field names used by the compiler.
+data FieldNames ty =
+  FieldNames {
+    -- | The field name "arg".
+    fieldNameArg :: !ty
+  }
+  deriving (Eq, Ord, Functor, Foldable, Traversable)
+
 -- | Structure holding references to definitions that are referenced
 -- by the compiler.
-data Refs compty refty =
+data Refs ty =
   Refs {
-    -- | Name of the component "salt".
-    refSaltComponent :: !compty,
-    -- | Name of the compose function.
-    refCompose :: !refty,
-    -- | Name of the unit type and value.
-    refUnit :: !refty
+    -- | The compose function.
+    refCompose :: !ty,
+    -- | The unit type and value.
+    refUnit :: !ty,
+    -- | The prop type.
+    refProp :: !ty,
+    -- | The type type function.
+    refType :: !ty,
+    -- | The supertype of all chars.
+    refCharSuper :: !ty,
+    -- | The supertype of all strings.
+    refStrSuper :: !ty,
+    -- | The supertype of all integers.
+    refIntSuper :: !ty,
+    -- | The supertype of all rationals.
+    refRationalSuper :: !ty
+
   }
+  deriving (Eq, Ord, Functor, Foldable, Traversable)
 
-saltComponentName :: [Strict.ByteString]
-saltComponentName = [Strict.fromString "salt"]
+-- | The string names of all components referenced by the compiler.
+componentStrs :: Components [Strict.ByteString]
+componentStrs = Components { componentSalt = ["salt"] }
 
-composeName :: Strict.ByteString
-composeName = Strict.fromString "compose"
+-- | The string names of all field names used by the compiler.
+fieldNameStrs :: FieldNames Strict.ByteString
+fieldNameStrs = FieldNames { fieldNameArg = "arg" }
 
-unitName :: Strict.ByteString
-unitName = Strict.fromString "unit"
+-- | The symbol names of all field names used by the compiler.
+fieldNames :: (MonadGensym m) =>
+              m (FieldNames FieldName)
+fieldNames =
+  let
+    mapfun str =
+      do
+        sym <- symbol str
+        return FieldName { fieldSym = sym }
+  in
+    mapM mapfun fieldNameStrs
 
--- | The string names of everything referenced by the compiler.
-refStrs :: Refs [Strict.ByteString] Strict.ByteString
-refStrs = Refs { refSaltComponent = saltComponentName,
-                 refCompose = composeName,
-                 refUnit = unitName }
+-- | The string names of definitions referenced by the compiler.
+refStrs :: Refs Strict.ByteString
+refStrs = Refs { refCompose = "compose",
+                 refUnit = "unit",
+                 refProp = "prop",
+                 refType = "type",
+                 refCharSuper = "char",
+                 refStrSuper = "string",
+                 refIntSuper = "integer",
+                 refRationalSuper = "rational"}
+
+-- | The symbol names of all components referenced by the compiler.
+componentSyms :: (MonadGensym m) =>
+                 m (Components [Symbol])
+componentSyms = mapM (mapM symbol) componentStrs
 
 -- | The symbol names of everything referenced by the compiler.
 refSyms :: (MonadGensym m) =>
-           m (Refs [Symbol] Symbol)
-refSyms = bimapM (mapM symbol) symbol refStrs
-
-instance Bifunctor Refs where
-  bimap = bimapDefault
-
-instance Bifoldable Refs where
-  bifoldMap = bifoldMapDefault
-
-instance Bitraversable Refs where
-  bitraverse mapcomp mapref Refs { refSaltComponent = saltcomp,
-                                   refCompose = compose,
-                                   refUnit = unit } =
-    let
-      new newsaltcomp newcompose newunit =
-        Refs { refSaltComponent = newsaltcomp,
-               refCompose = newcompose,
-               refUnit = newunit }
-    in
-      new <$> mapcomp saltcomp <*> mapref compose <*> mapref unit
+           m (Refs Symbol)
+refSyms = mapM symbol refStrs
