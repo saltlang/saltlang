@@ -53,7 +53,10 @@ checkIntroImpl Elim {} _ = checkElim
 -- generates assertions, and then recurses.
 checkIntroImpl _ RefineType {} = checkAgainstRefine
 -- If we can directly apply type rules, do so.
+checkIntroImpl FuncType {} Type {} = checkFuncType
+checkIntroImpl RecordType {} Type {} = checkRecordType
 checkIntroImpl RefineType {} Type {} = checkRefine
+checkIntroImpl CompType {} Type {} = checkCompType
 checkIntroImpl Type {} Type {} = checkType
 checkIntroImpl PropType {} Type {} = checkProp
 checkIntroImpl Quantified {} PropType {} = checkQuantified

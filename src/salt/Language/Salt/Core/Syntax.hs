@@ -200,8 +200,6 @@ data Case bound free =
 -- subsequent elements.
 data Element bound free =
   Element {
-    -- | The name of the element.
-    elemName :: !FieldName,
     -- | The index of this element in a tuple.
     elemTupleIdx :: !Word,
     -- | The binding pattern of the element.
@@ -243,7 +241,7 @@ data Intro bound free =
     FuncType {
       -- | The binding order for arguments.  This is used to determine
       -- the order in which to evaluate scopes.
-      funcTypeArgs :: ![Element bound free],
+      funcTypeArgs :: !(HashMap FieldName (Element bound free)),
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
       funcTypeRetTy :: Scope bound (Intro bound) free,
@@ -258,7 +256,7 @@ data Intro bound free =
       -- order, but not themselves or any future scopes.
       --
       -- Note: all fields are given names by transliteration.
-      recTypeBody :: ![Element bound free],
+      recTypeBody :: !(HashMap FieldName (Element bound free)),
       -- | The position in source from which this originates.
       recTypePos :: !Position
     }
@@ -620,11 +618,9 @@ instance Eq b => Eq1 (Case b) where
     pat1 ==# pat2 && body1 ==# body2
 
 instance Eq b => Eq1 (Element b) where
-  Element { elemType = ty1, elemTupleIdx = idx1,
-            elemPat = pat1, elemName = sym1 } ==#
-    Element { elemType = ty2, elemTupleIdx = idx2,
-              elemPat = pat2, elemName = sym2 } =
-    sym1 == sym2 && idx1 == idx2 && ty1 ==# ty2 && pat1 ==# pat2
+  Element { elemType = ty1, elemTupleIdx = idx1, elemPat = pat1 } ==#
+    Element { elemType = ty2, elemTupleIdx = idx2, elemPat = pat2 } =
+      idx1 == idx2 && ty1 ==# ty2 && pat1 ==# pat2
 
 instance Eq1 Field where
   Field { fieldVal = val1 } ==# Field { fieldVal = val2 } = val1 == val2
@@ -738,15 +734,11 @@ instance Ord b => Ord1 (Case b) where
       out -> out
 
 instance Ord b => Ord1 (Element b) where
-  compare1 Element { elemName = sym1, elemTupleIdx = idx1,
-                     elemPat = pat1, elemType = ty1 }
-           Element { elemName = sym2, elemTupleIdx = idx2,
-                     elemPat = pat2, elemType = ty2 } =
-    case compare sym1 sym2 of
-      EQ -> case compare idx1 idx2 of
-        EQ -> case compare1 ty1 ty2 of
-          EQ -> compare1 pat1 pat2
-          out -> out
+  compare1 Element { elemTupleIdx = idx1, elemPat = pat1, elemType = ty1 }
+           Element { elemTupleIdx = idx2, elemPat = pat2, elemType = ty2 } =
+    case compare idx1 idx2 of
+      EQ -> case compare1 ty1 ty2 of
+        EQ -> compare1 pat1 pat2
         out -> out
       out -> out
 
@@ -919,19 +911,19 @@ instance (Hashable b, Ord b) => Hashable1 (Case b) where
     (s `hashWithSalt` pat) `hashWithSalt1` body
 
 instance (Hashable b, Ord b) => Hashable1 (Element b) where
-  hashWithSalt1 s Element { elemName = sym, elemTupleIdx = idx,
-                            elemPat = pat, elemType = ty } =
-    (s `hashWithSalt` sym `hashWithSalt`
-     pat `hashWithSalt` idx) `hashWithSalt1` ty
+  hashWithSalt1 s Element { elemTupleIdx = idx, elemPat = pat, elemType = ty } =
+    (s `hashWithSalt` pat `hashWithSalt` idx) `hashWithSalt1` ty
 
 instance Hashable1 Field where
   hashWithSalt1 s = hashWithSalt s . fieldVal
 
 instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s FuncType { funcTypeArgs = argtys, funcTypeRetTy = retty } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` argtys `hashWithSalt` retty
+    s `hashWithSalt` (1 :: Int) `hashWithSalt`
+    sortBy keyOrd (HashMap.toList argtys) `hashWithSalt` retty
   hashWithSalt1 s RecordType { recTypeBody = body } =
-    (s `hashWithSalt` (2 :: Int)) `hashWithSalt1` body
+    (s `hashWithSalt` (2 :: Int)) `hashWithSalt1`
+    sortBy keyOrd (HashMap.toList body)
   hashWithSalt1 s RefineType { refineType = ty, refineCases = cases } =
     s `hashWithSalt` (3 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
   hashWithSalt1 s CompType { compType = ty, compCases = cases } =
@@ -1027,17 +1019,7 @@ instance (Hashable b, Hashable s, Ord b) => Hashable (Comp b s) where
 
 injectpos :: Position
 injectpos = Synthetic { synthDesc = Strict.fromString "Monad return" }
-{-
-instance MonadTrans (Pattern b) where
-  lift = Exact
 
-instance Bound (Pattern b) where
-  b @ Deconstruct { deconstructBinds = binds } >>>= f =
-    b { deconstructBinds = fmap (>>>= f) binds }
-  b @ As { asBind = bind } >>>= f = b { asBind = bind >>>= f }
-  b @ Name { nameSym = sym } >>>= _ = b { nameSym = sym }
-  Exact t >>>= f = Exact (t >>= f)
--}
 instance Applicative (Intro b) where
   pure = return
   (<*>) = ap
@@ -1269,30 +1251,24 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
          FormatM m (Element bound free) where
-  formatM Element { elemPat = Name { nameSym = sym' },
-                    elemType = ty, elemName = sym } | sym' == def =
+  formatM Element { elemPat = Name { nameSym = sym' }, elemType = ty }
+    | sym' == def =
     do
-      symdoc <- formatM sym
       tydoc <- formatM ty
       case flatten tydoc of
         Just flatty ->
-          return (choose [ symdoc <+> colon <+> flatty,
-                           symdoc <+> colon <!> nest nestLevel tydoc ])
-        Nothing -> return (symdoc <+> colon <!> nest nestLevel tydoc)
-  formatM Element { elemPat = pat, elemType = ty, elemName = sym } =
+          return (choose [ flatty, nest nestLevel tydoc ])
+        Nothing -> return (nest nestLevel tydoc)
+  formatM Element { elemPat = pat, elemType = ty } =
     do
-      symdoc <- formatM sym
       patdoc <- formatM pat
       tydoc <- formatM ty
       case flatten tydoc of
         Just flatty ->
-          return (choose [ symdoc <+> colon <+> flatty <+>
-                           equals <!> nest nestLevel patdoc,
-                           symdoc <+> colon <!>
+          return (choose [ flatty <+> equals <!> nest nestLevel patdoc,
                            nest nestLevel (tydoc <+> equals <!>
                                            nest nestLevel patdoc) ])
-        Nothing -> return (symdoc <+> colon <!>
-                           nest nestLevel (tydoc <+> equals <!>
+        Nothing -> return (nest nestLevel (tydoc <+> equals <!>
                                            nest nestLevel patdoc))
 
 formatMCompList :: (MonadPositions m, MonadSymbols m, FormatM m bound,
@@ -1328,13 +1304,13 @@ instance (MonadPositions m, MonadSymbols m, FormatM m bound,
   formatM Eta {} = error "Eta is going away"
   formatM FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
     do
-      argdocs <- mapM formatM args
+      argdocs <- mapM formatMBind (HashMap.toList args)
       rettydoc <- formatM retty
-      return (tupleDoc argdocs <+> string "->" </> nest nestLevel rettydoc)
+      return (recordDoc argdocs <+> string "->" </> nest nestLevel rettydoc)
   formatM RecordType { recTypeBody = body } =
     do
-      bodydocs <- mapM formatM body
-      return (tupleDoc bodydocs)
+      fielddocs <- mapM formatMBind (HashMap.toList body)
+      return (recordDoc fielddocs)
   formatM RefineType { refineType = ty, refineCases = cases } =
     do
       tydoc <- formatM ty
@@ -1590,15 +1566,14 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           Hashable bound, Eq bound) =>
          XmlPickler [NodeG [] tag text] (Element bound free) where
   xpickle =
-    xpWrap (\((sym, idx), (pat, ty, pos)) ->
-             Element { elemName = sym, elemTupleIdx = idx, elemPat = pat,
+    xpWrap (\(idx, (pat, ty, pos)) ->
+             Element { elemTupleIdx = idx, elemPat = pat,
                        elemType = ty, elemPos = pos },
-            \Element { elemName = sym, elemTupleIdx = idx, elemPat = pat,
-                       elemType = ty, elemPos = pos } -> ((sym, idx),
-                                                          (pat, ty, pos)))
+            \Element { elemTupleIdx = idx, elemPat = pat,
+                       elemType = ty, elemPos = pos } ->
+            (idx, (pat, ty, pos)))
            (xpElem (gxFromString "Element")
-                   (xpPair xpickle
-                           (xpAttr (gxFromString "tuple-index") xpPrim))
+                   (xpAttr (gxFromString "tuple-index") xpPrim)
                    (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
                              (xpElemNodes (gxFromString "body") xpickle)
                              (xpElemNodes (gxFromString "pos") xpickle)))
@@ -1633,7 +1608,7 @@ funcTypePickler =
                                               funcTypeRetTy = retty,
                                               funcTypePos = pos }, revfunc)
            (xpElemNodes (gxFromString "FuncType")
-                        (xpTriple (xpElemNodes (gxFromString "args") xpickle)
+                        (xpTriple (mapPickler "args")
                                   (xpElemNodes (gxFromString "retty") xpickle)
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
@@ -1652,8 +1627,7 @@ recordTypePickler =
     xpWrap (\(body, pos) -> RecordType { recTypeBody = body,
                                          recTypePos = pos }, revfunc)
            (xpElemNodes (gxFromString "RecordType")
-                        (xpPair (xpList (xpElemNodes (gxFromString "body")
-                                                     xpickle))
+                        (xpPair (mapPickler "body")
                                 (xpElemNodes (gxFromString "pos") xpickle)))
 
 refineTypePickler :: (GenericXMLString tag, Show tag,

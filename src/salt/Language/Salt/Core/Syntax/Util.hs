@@ -57,6 +57,30 @@ import Prelude hiding (elem)
 import qualified Data.Array as Array
 import qualified Data.HashMap.Strict as HashMap
 
+getField :: MonadMessages Message m =>
+            Intro bound free
+         -- ^ The base term.
+         -> Intro bound free
+         -- ^ The term's type.
+         -> FieldName
+         -- ^ The field to get.
+         -> Position
+         -- ^ The position at which to report errors.
+         -> m (Intro bound free)
+         -- ^ A term representing the field.
+-- Preserve badness
+getField bad @ BadIntro {} _ _ _ = return bad
+getField _ BadIntro {} _ pos = return BadIntro { badIntroPos = pos }
+-- Extract the field from records
+getField Record { recFields = fields } RecordType {} field pos =
+  -- The field should be here
+  case HashMap.lookup field fields of
+    Just Field { fieldVal = out } -> return out
+    Nothing ->
+      do
+        internalError "No such field in record" [basicPosition pos]
+        return BadIntro { badIntroPos = pos }
+
 -- | Make an empty pattern that matches anything.
 emptyPattern :: Default bound =>
                 Position
@@ -85,15 +109,19 @@ funcType argty retty =
     argscope = abstract (const Nothing) argty
     retscope = abstract (const Nothing) retty
     pos = debugPosition argty
+
+    makeArgs =
+      do
+        argname <- getArgField
+        return (HashMap.singleton argname Element { elemPat = emptyPattern pos,
+                                                    elemTupleIdx = 1,
+                                                    elemType = argscope,
+                                                    elemPos = pos })
   in do
-    argname <- getArgField
+    args <- makeArgs
     -- Construct a synthetic function type
-    return FuncType { funcTypeArgs = [Element { elemName = argname,
-                                                elemPat = emptyPattern pos,
-                                                elemTupleIdx = 1,
-                                                elemType = argscope,
-                                                elemPos = pos }],
-                      funcTypeRetTy = retscope, funcTypePos = pos }
+    return FuncType { funcTypeArgs = args, funcTypeRetTy = retscope,
+                      funcTypePos = pos }
 
 -- | Match up record type elements with their fields in the record
 -- value.  Missing fields will be reported, and 'BadIntro's will be
@@ -102,7 +130,7 @@ matchRecordFields :: (MonadMessages Message m, MonadSymbols m,
                       MonadTypeCheck m) =>
                      Position
                   -- ^ Position of the record value (used for error reporting).
-                  -> [Element Symbol Symbol]
+                  -> HashMap FieldName (Element Symbol Symbol)
                   -- ^ Record type elements.
                   -> HashMap FieldName (Field (Intro Symbol Symbol))
                   -- ^ The fields of the record value.
@@ -110,19 +138,18 @@ matchRecordFields :: (MonadMessages Message m, MonadSymbols m,
                   -- ^ The matched elements with field values.
 matchRecordFields pos elems fieldmap =
   let
-    mapfun elem @ Element { elemName = fname } =
+    mapfun (fname, elem) =
       case HashMap.lookup fname fieldmap of
         Just Field { fieldVal = field } -> ((elem, field), Nothing)
         Nothing -> ((elem, BadIntro { badIntroPos = pos }), Just fname)
 
-    (binds, maybeerrs) = unzip (map mapfun elems)
-  in
-    case catMaybes maybeerrs of
-      [] -> return binds
-      fnames ->
-        do
-          missingFields (map fieldSym fnames) (basicPosition pos)
-          return binds
+    (binds, maybeerrs) = unzip (map mapfun (HashMap.toList elems))
+  in case catMaybes maybeerrs of
+    [] -> return binds
+    fnames ->
+      do
+        missingFields (map fieldSym fnames) (basicPosition pos)
+        return binds
 
 -- | Match up a record type against tuple fields.
 matchTupleFields :: (MonadMessages Message m, MonadSymbols m,
@@ -130,7 +157,7 @@ matchTupleFields :: (MonadMessages Message m, MonadSymbols m,
                     Position
                  -- ^ Position of the record value (used for error reporting).
                  -> [Element Symbol Symbol]
-                 -- ^ Record type elements.
+
                  -> Array Word (Intro Symbol Symbol)
                  -- ^ The fields of the tuple value.
                  -> m [(Element Symbol Symbol, Intro Symbol Symbol)]

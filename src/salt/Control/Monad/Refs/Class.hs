@@ -34,6 +34,7 @@
 -- after resolution.  Prior to resolution, these symbols will be
 -- carried forward through the pipeline in a 'Refs' structure.
 module Control.Monad.Refs.Class(
+       MonadFieldNames(..),
        MonadRefs(..)
        ) where
 

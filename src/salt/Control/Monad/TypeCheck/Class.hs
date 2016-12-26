@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2016 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -36,11 +36,29 @@ module Control.Monad.TypeCheck.Class(
        MonadIntroCheck(..)
        ) where
 
+import Bound
+import Control.Monad.TypeRanks.Class
 import Data.Symbol
 import Language.Salt.Core.Syntax
 import Language.Salt.Message
 
-class Monad m => MonadTypeCheck m where
+class MonadTypeRanks m => MonadTypeCheck m where
+  -- | Assert a less-than relationship between two type rank
+  -- variables.
+  rankLess :: RankID
+           -- ^ The lower 'RankID'.
+           -> RankID
+           -- ^ The higher 'RankID'.
+           -> m ()
+
+  -- | Assert a less-than-or-equal relationship between two type rank
+  -- variables.
+  rankLessEqual :: RankID
+                -- ^ The lower 'RankID'.
+                -> RankID
+                -- ^ The higher 'RankID'.
+                -> m ()
+
   -- | Synthesize the type of an 'Elim' terms.  These terms produce a
   -- type during type checking, as opposed to 'Intro' terms, which
   -- require a type against which to check.
@@ -57,6 +75,11 @@ class Monad m => MonadTypeCheck m where
              -> Intro Symbol Symbol
              -- ^ The type against which to check.
              -> m ()
+
+  checkElementTypes :: [Element Symbol Symbol]
+                    -> Maybe (Scope Symbol (Intro Symbol) Symbol)
+                    -> Intro Symbol Symbol
+                    -> m ()
 
   checkFields :: [(Element Symbol Symbol, Intro Symbol Symbol)]
               -> m ()
@@ -157,12 +180,41 @@ class MonadTypeCheck m => MonadElimSynth m where
   synthVar :: m (Intro Symbol Symbol)
            -- ^ The type of the 'Var' term.
 
+-- | Monad class providing the type-checking rules for 'Intro' terms.
 class MonadTypeCheck m => MonadIntroCheck m where
-  -- | Apply the checkRefine rule to check that a refinement type's
-  -- inner type is a type of lesser rank than its own type, and that
-  -- the cases all match the inner type and produce a prop.  This will
-  -- cause an internal error if the goal is anything other than
-  -- checking a 'PropType' against 'Type'.
+  -- | Apply the checkFuncType rule to the current goal state.  This
+  -- will check that a function type's arguments and return type are
+  -- all well-formed types of the same rank as the function type.
+  -- This will cause an internal error if the goal is anything other
+  -- than checking a 'RecordType' against 'Type'.
+  --
+  -- Corresponds to the following type rule:
+  --
+  -- >       E |- [field_i : ty_i] <= type(n)
+  -- >    E, [field_i : ty_i] |- retty <= type(n)
+  -- > ---------------------------------------------
+  -- >  E |- Pi([field_i : ty_i], retty) <= type(n)
+  checkFuncType :: m ()
+
+  -- | Apply the checkRecord rule to the current goal state.  This
+  -- will check that the goal term's fields are all well-formed types
+  -- of the same rank as the goal type.  This will cause an internal
+  -- error if the goal is anything other than checking a 'RecordType'
+  -- against 'Type'.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >   E |- [fname_i : ty_i] <= type(n)
+  -- > ------------------------------------
+  -- >  E |- ([fname_i : ty_i]) <= type(n)
+  checkRecordType :: m ()
+
+  -- | Apply the checkRefine rule to the current goal state.  This
+  -- will check that a refinement type's inner type is a type of
+  -- lesser rank than its own type, and that the cases all match the
+  -- inner type and produce a prop.  This will cause an internal error
+  -- if the goal is anything other than checking a 'RefineType' against
+  -- 'Type'.
   --
   -- The formal statement of the type rule is as follows:
   --
@@ -170,6 +222,19 @@ class MonadTypeCheck m => MonadIntroCheck m where
   -- > --------------------------------------------------------------------
   -- >                E |- { innerty | [case_i] } <= type(m)
   checkRefine :: m ()
+
+  -- | Apply the checkCompType rule to the current goal state.  This
+  -- will check that a computation type's result type is a type of
+  -- lesser rank, and that the cases all match the result type and
+  -- produce a @spec@.  This will cause an internal error if the goal
+  -- is anything other than checking a 'CompType' against 'Type'.
+  --
+  -- The formal statement of the type rule is as follows:
+  --
+  -- >  E |- resty <= type(n)   m >= n   E |- case_i <= Pi(resty, spec)
+  -- > -----------------------------------------------------------------
+  -- >                E |- Comp(resty, spec) <= type(m)
+  checkCompType :: m ()
 
   -- | Apply the checkType rule to the current goal state.  This is an
   -- axiomatic rule that discharges the goal of proving that a @type@
