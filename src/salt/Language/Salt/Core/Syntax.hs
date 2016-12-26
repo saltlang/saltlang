@@ -330,17 +330,6 @@ data Intro bound free =
       -- | The position in source from which this originates.
       lambdaPos :: !Position
     }
-
-    -- | An eta expansion.  This is present for type checking only.
-    -- This represents a "frozen" substitution.
-
-    -- XXX Quite possibly this will be removed
-  | Eta {
-      etaTerm :: Elim bound free,
-      etaType :: Intro bound free,
-      -- | The position in source from which this originates.
-      etaPos :: !Position
-    }
     -- | A record.  Records can be named or ordered in the surface
     -- syntax.  Ordered records are transliterated into named
     -- records, with the fields "1", "2", and so on.
@@ -562,7 +551,6 @@ instance DWARFPositionElement [Symbol] [Symbol] (Intro bound free) where
   debugPosition Type { typePos = pos } = pos
   debugPosition PropType { propPos = pos } = pos
   debugPosition Quantified { quantPos = pos } = pos
-  debugPosition Eta { etaPos = pos } = pos
   debugPosition Lambda { lambdaPos = pos } = pos
   debugPosition Record { recPos = pos } = pos
   debugPosition Tuple { tuplePos = pos } = pos
@@ -644,9 +632,6 @@ instance Eq b => Eq1 (Intro b) where
       kind1 == kind2 && ty1 ==# ty2 && cases1 ==# cases2
   Lambda { lambdaCases = cases1 } ==# Lambda { lambdaCases = cases2 } =
     cases1 == cases2
-  Eta { etaTerm = term1, etaType = ty1 } ==#
-    Eta { etaTerm = term2, etaType = ty2 } =
-      term1 ==# term2 && ty1 ==# ty2
   Record { recFields = vals1 } ==# Record { recFields = vals2 } = vals1 == vals2
   Tuple { tupleFields = vals1 } ==# Tuple { tupleFields = vals2 } =
     elems vals1 ==# elems vals2
@@ -790,13 +775,6 @@ instance Ord b => Ord1 (Intro b) where
       out -> out
   compare1 Quantified {} _ = GT
   compare1 _ Quantified {} = LT
-  compare1 Eta { etaTerm = term1, etaType = ty1 }
-           Eta { etaTerm = term2, etaType = ty2 } =
-    case compare1 term1 term2 of
-      EQ -> compare ty1 ty2
-      out -> out
-  compare1 Eta {} _ = GT
-  compare1 _ Eta {} = LT
   compare1 Lambda { lambdaCases = cases1 } Lambda { lambdaCases = cases2 } =
     compare1 cases1 cases2
   compare1 Lambda {} _ = GT
@@ -937,25 +915,23 @@ instance (Hashable b, Ord b) => Hashable1 (Intro b) where
   hashWithSalt1 s Quantified { quantKind = Exists, quantType = ty,
                                quantCases = cases } =
     s `hashWithSalt` (8 :: Int) `hashWithSalt1` ty `hashWithSalt1` cases
-  hashWithSalt1 s Eta { etaTerm = term, etaType = ty } =
-    s `hashWithSalt` (9 :: Int) `hashWithSalt1` term `hashWithSalt1` ty
   hashWithSalt1 s Lambda { lambdaCases = cases } =
-    s `hashWithSalt` (10 :: Int) `hashWithSalt1` cases
+    s `hashWithSalt` (9 :: Int) `hashWithSalt1` cases
   hashWithSalt1 s Record { recFields = vals } =
-    s `hashWithSalt` (11 :: Int) `hashWithSalt1`
+    s `hashWithSalt` (10 :: Int) `hashWithSalt1`
     sortBy keyOrd (HashMap.toList vals)
   hashWithSalt1 s Tuple { tupleFields = vals } =
-    s `hashWithSalt` (12 :: Int) `hashWithSalt1` elems vals
+    s `hashWithSalt` (11 :: Int) `hashWithSalt1` elems vals
   hashWithSalt1 s Fix { fixSym = sym, fixTerm = term } =
-    (s `hashWithSalt` (13 :: Int) `hashWithSalt` sym) `hashWithSalt1` term
+    (s `hashWithSalt` (12 :: Int) `hashWithSalt` sym) `hashWithSalt1` term
   hashWithSalt1 s Comp { compBody = body } =
-    s `hashWithSalt` (14 :: Int) `hashWithSalt1` body
+    s `hashWithSalt` (13 :: Int) `hashWithSalt1` body
   hashWithSalt1 s Elim { elimTerm = term } =
-    s `hashWithSalt` (15 :: Int) `hashWithSalt1` term
+    s `hashWithSalt` (14 :: Int) `hashWithSalt1` term
   hashWithSalt1 s Literal { literalVal = term } =
-    s `hashWithSalt` (16 :: Int) `hashWithSalt` term
+    s `hashWithSalt` (15 :: Int) `hashWithSalt` term
   hashWithSalt1 s Constructor { constructorSym = sym } =
-    s `hashWithSalt` (17 :: Int) `hashWithSalt` sym
+    s `hashWithSalt` (16 :: Int) `hashWithSalt` sym
   hashWithSalt1 s BadIntro {} = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable b, Ord b) => Hashable1 (Elim b) where
@@ -1085,8 +1061,6 @@ instance Monad (Intro b) where
   t @ Comp { compBody = body } >>= f = t { compBody = compSubstIntro f body }
   Elim { elimTerm = Var { varSym = sym } } >>= f = f sym
   t @ Elim { elimTerm = term } >>= f = t { elimTerm = elimSubstIntro f term }
-  t @ Eta { etaTerm = term, etaType = ty } >>= f =
-    t { etaTerm = elimSubstIntro f term, etaType = ty >>= f }
   Literal { literalVal = lit, literalPos = p } >>= _ =
     Literal { literalVal = lit, literalPos = p }
   Constructor { constructorSym = sym, constructorPos = p } >>= _ =
@@ -1143,8 +1117,6 @@ introSubstElim f t @ Fix { fixTerm = term } = t { fixTerm = term >>>= Elim . f }
 introSubstElim f t @ Comp { compBody = body } =
   t { compBody = compSubstElim f body }
 introSubstElim f Elim { elimTerm = term } = Elim { elimTerm = term >>= f }
-introSubstElim f t @ Eta { etaTerm = term, etaType = ty } =
-  t { etaTerm = term >>= f, etaType = introSubstElim f ty }
 introSubstElim _ Literal { literalVal = lit, literalPos = p } =
   Literal { literalVal = lit, literalPos = p }
 introSubstElim _ Constructor { constructorSym = sym, constructorPos = p } =
@@ -1301,7 +1273,6 @@ formatMCompList =
 instance (MonadPositions m, MonadSymbols m, FormatM m bound,
           FormatM m free, Default bound, Eq bound) =>
          FormatM m (Intro bound free) where
-  formatM Eta {} = error "Eta is going away"
   formatM FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
     do
       argdocs <- mapM formatMBind (HashMap.toList args)
@@ -1914,7 +1885,6 @@ instance (GenericXMLString tag, Show tag,
       picker Constructor {} = 13
       picker Literal {} = 14
       picker BadIntro {} = 15
-      picker Eta {} = error "Eta not supported"
     in
       xpAlt picker [ funcTypePickler, recordTypePickler, refineTypePickler,
                      compTypePickler, typePickler, propPickler,
