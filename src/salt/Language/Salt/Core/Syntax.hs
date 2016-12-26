@@ -135,10 +135,18 @@ data Quantifier =
 -- | A pattern binding.  Represents how to deconstruct a value and
 -- bind it to variables.
 data Pattern bound =
+    -- | An option pattern.  Matches the first option given, and all
+    -- options must bind the same names.
+    Option {
+      -- | The option patterns
+      optionPats :: ![Pattern bound],
+      -- | The position in source from which this arises.
+      optionPos :: !Position
+    }
     -- | A deconstruction.  Takes a type apart.  Some types have
     -- constructors; nameless record types don't (they should use the
     -- "unused" symbol).
-    Deconstruct {
+  | Deconstruct {
       -- | The type constructor.  For nameless records, use the
       -- "unused" symbol.
       deconstructConstructor :: !bound,
@@ -529,6 +537,7 @@ instance Enum RankID where
   fromEnum = rankID
 
 instance DWARFPositionElement [Symbol] [Symbol] (Pattern bound) where
+  debugPosition Option { optionPos = pos } = pos
   debugPosition Deconstruct { deconstructPos = pos } = pos
   debugPosition As { asPos = pos } = pos
   debugPosition Name { namePos = pos } = pos
@@ -587,6 +596,8 @@ instance PositionElement (Elim bound free) where position = positionDefault
 instance PositionElement (Cmd bound free) where position = positionDefault
 
 instance Eq1 Pattern where
+  Option { optionPats = pats1 } ==# Option { optionPats = pats2 } =
+    pats1 ==# pats2
   Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                 deconstructConstructor = constructor1 } ==#
     Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -685,6 +696,10 @@ keyOrd :: Ord a => (a, b) -> (a, b) -> Ordering
 keyOrd (a1, _) (a2, _) = compare a1 a2
 
 instance Ord1 Pattern where
+  compare1 Option { optionPats = pats1 } Option { optionPats = pats2 } =
+    compare1 pats1 pats2
+  compare1 Option {} _ = LT
+  compare1 _ Option {} = GT
   compare1 Deconstruct { deconstructBinds = binds1, deconstructStrict = strict1,
                          deconstructConstructor = constructor1 }
            Deconstruct { deconstructBinds = binds2, deconstructStrict = strict2,
@@ -960,17 +975,19 @@ instance (Hashable b, Ord b) => Hashable1 (Comp b) where
   hashWithSalt1 s (BadComp _) = s `hashWithSalt` (0 :: Int)
 
 instance (Hashable b, Ord b) => Hashable (Pattern b) where
+  hashWithSalt s Option { optionPats = pats } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` pats
   hashWithSalt s Deconstruct { deconstructConstructor = constructor,
-                                deconstructBinds = binds,
-                                deconstructStrict = strict } =
-    (s `hashWithSalt` (1 :: Int) `hashWithSalt` constructor `hashWithSalt`
+                               deconstructBinds = binds,
+                               deconstructStrict = strict } =
+    (s `hashWithSalt` (2 :: Int) `hashWithSalt` constructor `hashWithSalt`
      strict) `hashWithSalt` sortBy keyOrd (HashMap.toList binds)
   hashWithSalt s As { asName = sym, asBind = bind } =
-    (s `hashWithSalt` (2 :: Int) `hashWithSalt` sym) `hashWithSalt` bind
+    (s `hashWithSalt` (3 :: Int) `hashWithSalt` sym) `hashWithSalt` bind
   hashWithSalt s Name { nameSym = sym } =
-    s `hashWithSalt` (3 :: Int) `hashWithSalt` sym
+    s `hashWithSalt` (4 :: Int) `hashWithSalt` sym
   hashWithSalt s Exact { exactLiteral = c } =
-    s `hashWithSalt` (4 :: Int) `hashWithSalt` c
+    s `hashWithSalt` (5 :: Int) `hashWithSalt` c
 
 instance (Hashable b, Hashable s, Ord b) => Hashable (Case b s) where
   hashWithSalt = hashWithSalt1
@@ -1193,6 +1210,10 @@ instance (MonadPositions m, MonadSymbols m, FormatM m valty) =>
 instance (MonadPositions m, MonadSymbols m,
           FormatM m bound, Default bound, Eq bound) =>
          FormatM m (Pattern bound) where
+  formatM Option { optionPats = pats } =
+    do
+      patdocs <- mapM formatM pats
+      return (optionsDoc patdocs)
   formatM Deconstruct { deconstructConstructor = sym, deconstructBinds = binds }
     | sym == def =
       do
@@ -1430,6 +1451,23 @@ mapPickler entname =
   xpWrap (HashMap.fromList, HashMap.toList)
          (xpList (xpElem (gxFromString entname) xpickle xpickle))
 
+optionPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [NodeG [] tag text] bound,
+                  XmlPickler [(tag, text)] bound,
+                  Eq bound, Hashable bound) =>
+                 PU [NodeG [] tag text] (Pattern bound)
+optionPickler =
+  let
+    revfunc Option { optionPats = pats, optionPos = pos } = (pats, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(pats, pos) -> Option { optionPats = pats,
+                                     optionPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Option")
+                        (xpPair (xpElemNodes (gxFromString "patterns") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
 deconstructPickler :: (GenericXMLString tag, Show tag,
                        GenericXMLString text, Show text,
                        XmlPickler [(tag, text)] bound,
@@ -1506,12 +1544,13 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
          XmlPickler [NodeG [] tag text] (Pattern bound) where
   xpickle =
     let
-      picker Deconstruct {} = 0
-      picker As {} = 1
-      picker Name {} = 2
-      picker Exact {} = 3
+      picker Option {} = 0
+      picker Deconstruct {} = 1
+      picker As {} = 2
+      picker Name {} = 3
+      picker Exact {} = 4
     in
-      xpAlt picker [ deconstructPickler, asPickler,
+      xpAlt picker [ optionPickler, deconstructPickler, asPickler,
                      namePickler, constantPickler ]
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,

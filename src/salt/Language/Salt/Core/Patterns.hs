@@ -39,6 +39,7 @@ module Language.Salt.Core.Patterns(
 --       patternTypes
        ) where
 
+import Control.Applicative
 import Data.Default
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
@@ -52,6 +53,9 @@ patternMatchTail :: (Default bound, Eq bound, Hashable bound) =>
                     Pattern bound ->
                     Intro bound free ->
                     Maybe (HashMap bound (Intro bound free))
+-- For an option, try each one in order, take the first.
+patternMatchTail result Option { optionPats = pats } term =
+  foldr ((<|>) . flip (patternMatchTail result) term) Nothing pats
 patternMatchTail result Deconstruct { deconstructConstructor = constructor,
                                       deconstructBinds = binds } term
   -- The default value is the unused symbol, which means there is no
@@ -116,58 +120,3 @@ patternMatch :: (Default bound, Eq bound, Hashable bound) =>
              -> Maybe (HashMap bound (Intro bound free))
              -- ^ A list of bindings from the pattern, or Nothing.
 patternMatch = patternMatchTail HashMap.empty
-{-
-patternTypesTail :: (Default sym, Eq sym, Ord sym) =>
-                    HashMap sym (Intro sym sym) ->
-                    Pattern sym (Intro sym) sym ->
-                    Intro sym sym -> Maybe (HashMap sym (Intro sym sym))
-patternTypesTail result Deconstruct { deconstructConstructor = constructor,
-                                      deconstructBinds = binds } term
-  | constructor == def =
-    case term of
-      Record { recFields = fields } ->
-        let
-          foldfun accum sym bind =
-            do
-              justaccum <- accum
-              field <- HashMap.lookup sym fields
-              patternTypesTail accum bind field
-        in
-          HashMap.foldlWithKey' foldfun result binds
-      _ -> Nothing
-  | otherwise =
-    case term of
-      Call { callFunc = Var { varSym = func }, callArgs = args } ->
-        if func == constructor
-        then let
-            foldfun accum sym bind =
-              do
-                justaccum <- accum
-                arg <- HashMap.lookup sym args
-                patternTypesTail accum bind arg
-          in
-            HashMap.foldlWithKey' foldfun result binds
-        else Nothing
-      _ -> Nothing
--- As bindings bind the current term and then continue
-patternTypesTail result As { asName = name, asBind = bind } t =
-  patternTypesTail (HashMap.insert name t result) bind t
--- Name patterns bind the type to the pattern
-patternTypesTail result Name { nameSym = sym } t =
-  Just $! HashMap.insert sym t result
--- Constants don't bind any symbols
-patternTypesTail result (Constant _) t2 = Just result
-
--- | Take a pattern and a type and extract the typings for all the
--- variables bound by this pattern.  Note: this is only guaranteed to
--- work for well-typed patterns; if the pattern does not have the
--- given type, it may fail.
-patternTypes :: (Default sym, Eq sym, Ord sym) =>
-                Pattern sym (Intro sym) sym
-             -- ^ The pattern being matched.
-             -> Intro sym sym
-             -- ^ The type given to the pattern.
-             -> Maybe (HashMap sym (Intro sym sym))
-             -- ^ A list of bindings from the pattern, or Nothing.
-patternTypes = patternTypesTail HashMap.empty
--}

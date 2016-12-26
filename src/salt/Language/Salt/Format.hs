@@ -42,6 +42,7 @@ module Language.Salt.Format(
        blockDoc,
        stmsDoc,
        casesDoc,
+       optionsDoc,
        nestLevel
        ) where
 
@@ -210,5 +211,16 @@ casesDoc cases =
     breakopts = [ alignOffset (-1) breaks,
                   nest nestLevel (hardline <> string "  " <> breaks) ]
   in case flatten nobreaks of
-    Just nolines -> choose (parens nolines : breakopts)
+    Just nolines -> choose (nolines : breakopts)
     Nothing -> choose breakopts
+
+optionsDoc :: [Doc]
+           -- ^ The options.
+           -> Doc
+optionsDoc opts =
+  let
+    nobreaks = hsep (punctuate (string " | ") opts)
+    breaks = vsep (punctuate (string " |") opts)
+  in case flatten nobreaks of
+    Just nolines -> choose [ nolines, breaks ]
+    Nothing -> breaks
