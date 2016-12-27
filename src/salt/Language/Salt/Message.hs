@@ -43,6 +43,9 @@
 module Language.Salt.Message(
        Message,
 
+       -- ** Internal Compiler Error
+       internalError,
+
        -- ** Lexer Messages
        badChars,
        badEscape,
@@ -60,19 +63,18 @@ module Language.Salt.Message(
        -- ** Parser Messages
        parseError,
 
+       -- ** Collect Messages
        duplicateField,
-       namelessField,
        duplicateTruth,
        duplicateSyntax,
+       duplicateBuilder,
+
+       namelessField,
        undefSymbol,
        noTopLevelDef,
        namelessUninitDef,
-       duplicateBuilder,
        badComponentName,
        importNestedScope,
-       internalError,
-       callNonFunc,
-       noMatch,
        expectedFuncType,
        cyclicImport,
        cyclicInherit,
@@ -95,9 +97,13 @@ module Language.Salt.Message(
        cannotCreateFile,
        cannotCreateArtifact,
 
-       -- ** Type Check Errors
+       -- ** Type Check Messages
        missingFields,
-       tupleMismatch
+       tupleMismatch,
+
+       -- ** Normalization Messages
+       callNonFunc,
+       noMatch,
 ) where
 
 import Control.Monad.Messages
@@ -1005,7 +1011,7 @@ callNonFunc term pos =
 -- | Report an unmatched value in a pattern match.
 noMatch :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
             FormatM m bound, FormatM m free, Default bound, Eq bound) =>
-           Elim bound free
+           Intro bound free
         -- ^ The unmatched term.
         -> DWARFPosition defty tydefty
         -- ^ The position at which the match occurs.
