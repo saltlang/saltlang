@@ -36,9 +36,10 @@
 -- from a pattern and a term.
 module Language.Salt.Core.Patterns(
        patternMatch,
---       patternTypes
+       caseMatch
        ) where
 
+import Bound
 import Control.Applicative
 import Data.Default
 import Data.Hashable
@@ -120,3 +121,18 @@ patternMatch :: (Default bound, Eq bound, Hashable bound) =>
              -> Maybe (HashMap bound (Intro bound free))
              -- ^ A list of bindings from the pattern, or Nothing.
 patternMatch = patternMatchTail HashMap.empty
+
+-- | Attempt to match a case.  If the match is successful, the body
+-- will be instantiated with all the matched values.
+caseMatch :: (Default bound, Hashable bound, Eq bound) =>
+             Intro bound free
+          -- ^ The term to match and bind.
+          -> Case bound free
+          -- ^ The case to match and execute.
+          -> Maybe (Intro bound free)
+          -- ^ A (non-normalized) term obtained from the resulting
+          -- substitution, or @Nothing@.
+caseMatch term Case { casePat = pat, caseBody = body } =
+  case patternMatch pat term of
+    Nothing -> Nothing
+    Just binds -> Just $! instantiate (binds HashMap.!) body

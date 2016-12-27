@@ -560,6 +560,7 @@ checkLiteralRule term @ Literal { literalVal = lit } ty =
 checkLiteralRule term _ =
   internalError "Improper use of checkLiteral rule" [position term]
 
+
 -- >  E |- Sigma(ubinds) :> Sigma(sbinds)   E |- sretty :> uretty
 -- > -------------------------------------------------------------
 -- >     E |- term : Pi(sbinds, sretty) :> Pi(ubinds, uretty)

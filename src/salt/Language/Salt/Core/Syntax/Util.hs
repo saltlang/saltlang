@@ -31,10 +31,14 @@
 {-# LANGUAGE FlexibleContexts, OverloadedStrings #-}
 
 module Language.Salt.Core.Syntax.Util(
+--       getField,
        emptyPattern,
        funcType,
        matchRecordFields,
-       matchTupleFields
+       matchTupleFields,
+       convertTuple,
+       convertArg,
+       baseType
        ) where
 
 import Bound
@@ -56,7 +60,7 @@ import Prelude hiding (elem)
 
 import qualified Data.Array as Array
 import qualified Data.HashMap.Strict as HashMap
-
+{-
 getField :: MonadMessages Message m =>
             Intro bound free
          -- ^ The base term.
@@ -80,7 +84,7 @@ getField Record { recFields = fields } RecordType {} field pos =
       do
         internalError "No such field in record" [basicPosition pos]
         return BadIntro { badIntroPos = pos }
-
+-}
 -- | Make an empty pattern that matches anything.
 emptyPattern :: Default bound =>
                 Position
@@ -177,3 +181,95 @@ matchTupleFields debugpos elems fields =
     -- Check that the tuple length matches the number of fields
     unless (elemlen == fieldlen) (tupleMismatch elemlen fieldlen pos)
     return (map mapfun elems)
+
+-- | Convert a tuple into a record
+convertTuple :: MonadMessages Message m =>
+                HashMap FieldName (Element bound free)
+             -- ^ The fields of the record type to which to convert.
+             -> Array Word (Intro bound free)
+             -- ^ The tuple fields.
+             -> Position
+             -- ^ The position at which the conversion takes place.
+             -> m (Intro bound free)
+             -- ^ The tuple converted into a record.
+convertTuple recfields tuplefields pos =
+  let
+    msgpos = basicPosition pos
+    reclen = fromIntegral (HashMap.size recfields)
+    (fieldstart, fieldlen) = Array.bounds tuplefields
+
+    mapfun Element { elemTupleIdx = idx }
+      | idx + fieldstart <= fieldlen =
+        let
+          val = tuplefields ! (idx + fieldstart)
+        in
+          Field { fieldVal = val, fieldPos = debugPosition val }
+      | otherwise = Field { fieldVal = BadIntro { badIntroPos = pos },
+                            fieldPos = pos }
+  in do
+    -- The starting indexes should always be 0
+    unless (fieldstart == 0) (internalError "Start index is not 0" [msgpos])
+    -- Check that the tuple length matches the number of fields
+    unless (reclen == fieldlen) (tupleMismatch reclen fieldlen msgpos)
+    return Record { recFields = fmap mapfun recfields, recPos = pos }
+
+-- | Convert an argument value into an argument based on the parameter types.
+-- This will do different things based on the argument type:
+--
+-- * Record values are left alone
+-- * Tuple values will be converted into records
+-- * If there is a single parameter, and the argument is not a record
+--   or a tuple, then it will be converted into a record having a single
+--   field matching the parameter name.
+-- * Otherwise, the argument will be left alone
+convertArg :: MonadMessages Message m =>
+              HashMap FieldName (Element bound free)
+           -- ^ The parameters and types.
+           -> Intro bound free
+           -- ^ The argument value.
+           -> m (Intro bound free)
+           -- ^ The converted argument value.
+-- If the argument is a record, then use it directly.
+convertArg _ arg @ Record {} = return arg
+-- If the argument is a tuple, then convert it into a record.
+convertArg argtys Tuple { tupleFields = fields, tuplePos = pos } =
+  convertTuple argtys fields pos
+convertArg argtys arg =
+  case HashMap.keys argtys of
+    -- If there's a single argument that's not a record, and the
+    -- parameter type has a single field, then convert the argument
+    -- into a record of that type.
+    [argname] ->
+      let
+        pos = debugPosition arg
+        boxedargs = HashMap.singleton argname Field { fieldVal = arg,
+                                                      fieldPos = pos }
+      in
+        return Record { recFields = boxedargs, recPos = pos }
+    -- If there are multiple arguments, then don't auto-convert.
+    _ -> return arg
+
+baseType :: MonadMessages Message m =>
+            Intro bound free
+         -> Position
+         -> m (Intro bound free)
+-- Return raw types
+baseType ty @ FuncType {} _ = return ty
+baseType ty @ RecordType {} _ = return ty
+baseType ty @ CompType {} _ = return ty
+baseType ty @ PropType {} _ = return ty
+baseType ty @ Type {} _ = return ty
+-- Recurse on elim-typed cycles
+baseType Elim { elimTerm = Typed { typedTerm = inner } } pos =
+  baseType inner pos
+-- Recurse on refinement types
+baseType RefineType { refineType = inner } pos = baseType inner pos
+-- These are error conditions
+baseType Elim { elimTerm = Var {} } pos =
+  do
+    internalError "Shouldn't see Vars in normalized terms" [basicPosition pos]
+    return BadIntro { badIntroPos = pos }
+baseType _ pos =
+  do
+    internalError "Getting base type of non-type" [basicPosition pos]
+    return BadIntro { badIntroPos = pos }
