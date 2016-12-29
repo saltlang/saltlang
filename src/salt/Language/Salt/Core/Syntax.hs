@@ -210,6 +210,10 @@ data Element bound free =
   Element {
     -- | The index of this element in a tuple.
     elemTupleIdx :: !Word,
+    -- | The position of this element in the binding order.  This
+    -- determines the sequence in which the elements' types are
+    -- instantiated with actual values.
+    elemBindOrder :: !Word,
     -- | The binding pattern of the element.
     elemPat :: Pattern bound,
     -- | The type of the element.
@@ -247,8 +251,7 @@ data Intro bound free =
 
     -- | Dependent product type.  This is the type given to functions.
     FuncType {
-      -- | The binding order for arguments.  This is used to determine
-      -- the order in which to evaluate scopes.
+      -- | The arguments for the function.
       funcTypeArgs :: !(HashMap FieldName (Element bound free)),
       -- | The return type of the function, which can reference the
       -- value of any argument by their binding name.
@@ -617,9 +620,11 @@ instance Eq b => Eq1 (Case b) where
     pat1 ==# pat2 && body1 ==# body2
 
 instance Eq b => Eq1 (Element b) where
-  Element { elemType = ty1, elemTupleIdx = idx1, elemPat = pat1 } ==#
-    Element { elemType = ty2, elemTupleIdx = idx2, elemPat = pat2 } =
-      idx1 == idx2 && ty1 ==# ty2 && pat1 ==# pat2
+  Element { elemType = ty1, elemTupleIdx = idx1,
+            elemBindOrder = ord1, elemPat = pat1 } ==#
+    Element { elemType = ty2, elemTupleIdx = idx2,
+              elemBindOrder = ord2, elemPat = pat2 } =
+      idx1 == idx2 && ord1 == ord2 && ty1 ==# ty2 && pat1 ==# pat2
 
 instance Eq1 Field where
   Field { fieldVal = val1 } ==# Field { fieldVal = val2 } = val1 == val2
@@ -734,11 +739,15 @@ instance Ord b => Ord1 (Case b) where
       out -> out
 
 instance Ord b => Ord1 (Element b) where
-  compare1 Element { elemTupleIdx = idx1, elemPat = pat1, elemType = ty1 }
-           Element { elemTupleIdx = idx2, elemPat = pat2, elemType = ty2 } =
+  compare1 Element { elemTupleIdx = idx1, elemBindOrder = ord1,
+                     elemPat = pat1, elemType = ty1 }
+           Element { elemTupleIdx = idx2, elemBindOrder = ord2,
+                     elemPat = pat2, elemType = ty2 } =
     case compare idx1 idx2 of
-      EQ -> case compare1 ty1 ty2 of
-        EQ -> compare1 pat1 pat2
+      EQ -> case compare ord1 ord2 of
+        EQ -> case compare1 ty1 ty2 of
+          EQ -> compare1 pat1 pat2
+          out -> out
         out -> out
       out -> out
 
@@ -904,8 +913,10 @@ instance (Hashable b, Ord b) => Hashable1 (Case b) where
     (s `hashWithSalt` pat) `hashWithSalt1` body
 
 instance (Hashable b, Ord b) => Hashable1 (Element b) where
-  hashWithSalt1 s Element { elemTupleIdx = idx, elemPat = pat, elemType = ty } =
-    (s `hashWithSalt` pat `hashWithSalt` idx) `hashWithSalt1` ty
+  hashWithSalt1 s Element { elemTupleIdx = idx, elemBindOrder = ord,
+                            elemPat = pat, elemType = ty } =
+    (s `hashWithSalt` pat `hashWithSalt`
+     idx `hashWithSalt` ord) `hashWithSalt1` ty
 
 instance Hashable1 Field where
   hashWithSalt1 s = hashWithSalt s . fieldVal
@@ -1576,14 +1587,15 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           Hashable bound, Eq bound) =>
          XmlPickler [NodeG [] tag text] (Element bound free) where
   xpickle =
-    xpWrap (\(idx, (pat, ty, pos)) ->
-             Element { elemTupleIdx = idx, elemPat = pat,
+    xpWrap (\((idx, ord), (pat, ty, pos)) ->
+             Element { elemTupleIdx = idx, elemBindOrder = ord, elemPat = pat,
                        elemType = ty, elemPos = pos },
-            \Element { elemTupleIdx = idx, elemPat = pat,
+            \Element { elemTupleIdx = idx, elemBindOrder = ord, elemPat = pat,
                        elemType = ty, elemPos = pos } ->
-            (idx, (pat, ty, pos)))
+            ((idx, ord), (pat, ty, pos)))
            (xpElem (gxFromString "Element")
-                   (xpAttr (gxFromString "tuple-index") xpPrim)
+                   (xpPair (xpAttr (gxFromString "tuple-index") xpPrim)
+                           (xpAttr (gxFromString "bind-order") xpPrim))
                    (xpTriple (xpElemNodes (gxFromString "pattern") xpickle)
                              (xpElemNodes (gxFromString "body") xpickle)
                              (xpElemNodes (gxFromString "pos") xpickle)))

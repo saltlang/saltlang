@@ -1171,7 +1171,7 @@ expectedRef pos = message ExpectedRef { expectedRefPos = pos }
 -- | Report missing fields in a record.
 missingFields :: (MonadMessages Message m, MonadSymbols m) =>
                  [Symbol]
-              -- ^ The extra binding symbol.
+              -- ^ The missing field symbols.
               -> Position
               -- ^ The position at which the extra symbol occurs.
               -> m ()

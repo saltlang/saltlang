@@ -38,28 +38,37 @@ module Language.Salt.Core.Syntax.Util(
        matchTupleFields,
        convertTuple,
        convertArg,
-       baseType
+       baseType,
+       bindOrdering,
+       instantiateFieldTypes,
+       instantiateParamRetTypes
        ) where
 
 import Bound
 import Control.Monad
 import Control.Monad.Messages
+import Control.Monad.Positions
 import Control.Monad.Refs.Class
 import Control.Monad.Symbols
 import Control.Monad.TypeCheck.Class
 import Data.Array(Array, (!))
 import Data.Default
+import Data.Hashable
 import Data.HashMap.Strict(HashMap)
+import Data.List(sortBy)
 import Data.Maybe
 import Data.Position.DWARFPosition
 import Data.PositionElement
 import Data.Symbol
+import Language.Salt.Core.Patterns
 import Language.Salt.Core.Syntax
 import Language.Salt.Message
 import Prelude hiding (elem)
+import Text.Format
 
 import qualified Data.Array as Array
 import qualified Data.HashMap.Strict as HashMap
+import qualified Data.HashSet as HashSet
 {-
 getField :: MonadMessages Message m =>
             Intro bound free
@@ -119,6 +128,7 @@ funcType argty retty =
         argname <- getArgField
         return (HashMap.singleton argname Element { elemPat = emptyPattern pos,
                                                     elemTupleIdx = 1,
+                                                    elemBindOrder = 1,
                                                     elemType = argscope,
                                                     elemPos = pos })
   in do
@@ -160,8 +170,8 @@ matchTupleFields :: (MonadMessages Message m, MonadSymbols m,
                      MonadTypeCheck m) =>
                     Position
                  -- ^ Position of the record value (used for error reporting).
-                 -> [Element Symbol Symbol]
-
+                 -> HashMap FieldName (Element Symbol Symbol)
+                 -- ^ Record type elements.
                  -> Array Word (Intro Symbol Symbol)
                  -- ^ The fields of the tuple value.
                  -> m [(Element Symbol Symbol, Intro Symbol Symbol)]
@@ -180,7 +190,7 @@ matchTupleFields debugpos elems fields =
     unless (fieldstart == 0) (internalError "Start index is not 0" [pos])
     -- Check that the tuple length matches the number of fields
     unless (elemlen == fieldlen) (tupleMismatch elemlen fieldlen pos)
-    return (map mapfun elems)
+    return (map mapfun (HashMap.elems elems))
 
 -- | Convert a tuple into a record
 convertTuple :: MonadMessages Message m =>
@@ -273,3 +283,112 @@ baseType _ pos =
   do
     internalError "Getting base type of non-type" [basicPosition pos]
     return BadIntro { badIntroPos = pos }
+
+bindOrdering :: HashMap FieldName (Element bound free)
+             -> [(FieldName, Element bound free)]
+bindOrdering =
+  let
+    sortfunc (_, Element { elemBindOrder = ord1 })
+             (_, Element { elemBindOrder = ord2 }) = compare ord1 ord2
+  in
+    sortBy sortfunc . HashMap.toList
+
+instantiateElementTypes :: (MonadMessages Message m, MonadSymbols m,
+                            MonadPositions m,
+                            FormatM m bound, FormatM m free,
+                            Eq bound, Hashable bound, Default bound) =>
+                           HashMap FieldName (Element bound free)
+                        -- ^ Record type elements.
+                        -> HashMap FieldName (Field (Intro bound free))
+                        -- ^ The fields of the record value.
+                        -> Position
+                        -> m (HashMap FieldName (Element bound free),
+                              HashMap bound (Intro bound free))
+instantiateElementTypes fieldtys fieldvals pos =
+  let
+    bindlist = bindOrdering fieldtys
+
+    foldfun (accum, subst, missing) (fname, elem @ Element { elemType = ty,
+                                                             elemPat = pat }) =
+      let
+        -- Apply the substitution we have to this element's type
+        substty = instantiate (subst HashMap.!) ty
+        -- Abstract again to make the types line up, but we don't
+        -- actually abstract anything here
+        absty = abstract (const Nothing) substty
+
+        badbinds badval names = HashMap.fromList (map (\bind -> (bind, badval))
+                                                 (HashSet.toList names))
+      in
+        -- Look up this field in the values
+        case HashMap.lookup fname fieldvals of
+          Just Field { fieldVal = fieldval } ->
+            -- Try to pattern match it with the bindings for the field type
+            case patternMatch pat fieldval of
+              -- If we succeed, add the bindings to the substitutions
+              -- going forward
+              Just newbinds ->
+                return (HashMap.insert fname elem { elemType = absty } accum,
+                        HashMap.union subst newbinds,
+                        missing)
+              -- If we fail, substitute bad terms and report the failure
+              Nothing ->
+                let
+                  badval = BadIntro { badIntroPos = debugPosition fieldval }
+                in do
+                  names <- patternNames pat
+                  noMatch fieldval pos
+                  return (HashMap.insert fname elem { elemType = absty } accum,
+                          HashMap.union subst (badbinds badval names),
+                          missing)
+          -- If there's no such field, then report a missing field and
+          -- substitute bad terms
+          Nothing ->
+            let
+              badval = BadIntro { badIntroPos = pos }
+            in do
+              names <- patternNames pat
+              return (HashMap.insert fname elem { elemType = absty } accum,
+                      HashMap.union subst (badbinds badval names),
+                      fname : missing)
+  in do
+    (newfieldtys, subst, missing) <-
+      foldM foldfun (HashMap.empty, HashMap.empty, []) bindlist
+    -- Report missing fields
+    unless (null missing) (missingFields (map fieldSym missing)
+                                          (basicPosition pos))
+    return (newfieldtys, subst)
+
+instantiateFieldTypes :: (MonadMessages Message m, MonadSymbols m,
+                          MonadPositions m,
+                          FormatM m bound, FormatM m free,
+                          Eq bound, Hashable bound, Default bound) =>
+                         HashMap FieldName (Element bound free)
+                      -- ^ Record type elements.
+                      -> HashMap FieldName (Field (Intro bound free))
+                      -- ^ The fields of the record value.
+                      -> Position
+                      -> m (HashMap FieldName (Element bound free))
+instantiateFieldTypes fieldtys fields pos =
+  do
+    (newfieldtys, _) <- instantiateElementTypes fieldtys fields pos
+    return newfieldtys
+
+instantiateParamRetTypes :: (MonadMessages Message m, MonadSymbols m,
+                             MonadPositions m,
+                             FormatM m bound, FormatM m free,
+                             Eq bound, Hashable bound, Default bound) =>
+                            HashMap FieldName (Element bound free)
+                         -- ^ Parameter type elements.
+                         -> HashMap FieldName (Field (Intro bound free))
+                         -- ^ The argument values.
+                         -> Scope bound (Intro bound) free
+                         -- ^ The return type.
+                         -> Position
+                         -> m (HashMap FieldName (Element bound free),
+                               Scope bound (Intro bound) free)
+instantiateParamRetTypes paramtys params retty pos =
+  do
+    (newparamtys, subst) <- instantiateElementTypes paramtys params pos
+    return (newparamtys,
+            abstract (const Nothing) (instantiate (subst HashMap.!) retty))

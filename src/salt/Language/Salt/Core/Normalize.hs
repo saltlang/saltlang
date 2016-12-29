@@ -40,6 +40,8 @@ import Bound.Scope
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Messages
+import Control.Monad.Positions
+import Control.Monad.Symbols
 import Data.Array(Array, (!))
 import Data.Default
 import Data.Hashable
@@ -52,6 +54,7 @@ import Language.Salt.Core.Syntax.Util
 import Language.Salt.Core.Patterns
 import Language.Salt.Message
 import Prelude hiding (mapM)
+import Text.Format
 
 import qualified Data.Array as Array
 import qualified Data.HashMap.Strict as HashMap
@@ -63,69 +66,36 @@ class Monad m => Normalize m ty where
             -> m ty
             -- ^ The normalized term.
 
-  -- | Only normalize a term enough such that the top-level
-  -- constructor (head) is in normal form.
-  normalizeHead :: ty
-                -- ^ The term to normalize.
-                -> m ty
-                -- ^ The normalized term.
-
-unfoldIntro :: (MonadMessages Message m, Applicative m, Eq bound) =>
+unfoldIntro :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
+                Applicative m, FormatM m bound, FormatM m free,
+                Default bound, Hashable bound, Eq bound) =>
                 Intro bound free
             -> m (Intro bound free)
 unfoldIntro t @ Fix { fixTerm = term } = unfoldIntro (instantiate1 t term)
 unfoldIntro Elim { elimTerm = Typed { typedTerm = term } } = unfoldIntro term
 unfoldIntro term = normalize term
 
-instance (MonadMessages Message m, Applicative m, Eq bound) =>
-         Normalize m (Case bound free) where
-  normalize c @ Case { caseBody = body } =
-    do
-      body' <- transverseScope normalize body
-      return c { caseBody = body' }
-
-instance (MonadMessages Message m, Applicative m, Eq bound) =>
-         Normalize m (Element bound free) where
-  normalize e @ Element { elemType = ty } =
-    do
-      ty' <- transverseScope normalize ty
-      return e { elemType = ty' }
-
-instance (MonadMessages Message m, Applicative m, Eq bound) =>
+instance (MonadMessages Message m, MonadSymbols m, MonadPositions m,
+          Applicative m, FormatM m bound, FormatM m free,
+          Default bound, Hashable bound, Eq bound) =>
          Normalize m (Intro bound free) where
-  normalize t @ Fix { fixTerm = term } =
-    do
-      term' <- transverseScope normalize term
-      return t { fixTerm = term' }
   -- These cases are entirely compositional
-  normalize t @ FuncType { funcTypeArgs = args, funcTypeRetTy = retty } =
-    do
-      args' <- mapM normalize args
-      retty' <- transverseScope normalize retty
-      return t { funcTypeArgs = args', funcTypeRetTy = retty' }
-  normalize t @ RecordType { recTypeBody = body } =
-    do
-      body' <- mapM normalize body
-      return t { recTypeBody = body' }
-  normalize t @ RefineType { refineType = ty, refineCases = cases } =
+  normalize t @ RefineType { refineType = ty } =
     do
       ty' <- normalize ty
-      cases' <- mapM normalize cases
-      return t { refineType = ty', refineCases = cases' }
-  normalize t @ CompType { compType = ty, compCases = cases } =
+      return t { refineType = ty' }
+  normalize t @ CompType { compType = ty } =
     do
       ty' <- normalize ty
-      cases' <- mapM normalize cases
-      return t { compType = ty', compCases = cases' }
-  normalize t @ Quantified { quantType = ty, quantCases = cases } =
+      return t { compType = ty' }
+  normalize t @ Quantified { quantType = ty } =
     do
       ty' <- normalize ty
-      cases' <- mapM normalize cases
-      return t { compType = ty', compCases = cases' }
-  normalize t @ Lambda { lambdaCases = cases } =
+      return t { compType = ty' }
+  normalize t @ Tuple { tupleFields = fields } =
     do
-      cases' <- mapM normalize cases
-      return t { lambdaCases = cases' }
+      fields' <- mapM normalize fields
+      return t { tupleFields = fields' }
   normalize t @ Record { recFields = fields } =
     do
       fields' <- mapM (mapM normalize) fields
@@ -137,20 +107,62 @@ instance (MonadMessages Message m, Applicative m, Eq bound) =>
   -- Everything else is already normalized
   normalize t = return t
 
-  normalizeHead t @ Elim { elimTerm = term } =
-    do
-      term' <- normalizeHead term
-      return t { elimTerm = term }
-  -- Everything else is already normalized
-  normalizeHead t = return t
+normalizeCall :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
+                  Applicative m, FormatM m bound, FormatM m free,
+                  Default bound, Hashable bound, Eq bound) =>
+                 Elim bound free
+              -> Intro bound free
+              -> Position
+              -> m (Elim bound free)
+-- Preserve the badness
+normalizeCall bad @ BadElim {} _ _ = return bad
+normalizeCall _ BadIntro { badIntroPos = pos } _ =
+  return BadElim { badElimPos = pos }
+-- Normalize constructor calls
+-- XXX Expand this to intrinsics generally
+normalizeCall func @ Typed { typedType = FuncType { funcTypeArgs = argtys,
+                                                    funcTypeRetTy = retty },
+                             typedTerm = Constructor {} } arg pos =
+  do
+    -- Convert the argument to the correct type
+    converted <- convertArg argtys arg
+    -- Make sure the converted argument isn't bad
+    case converted of
+      BadIntro {} -> return BadElim { badElimPos = pos }
+      _ -> return Call { callFunc = func, callArg = converted, callPos = pos }
+-- Evalute calls to lambda terms
+normalizeCall Typed { typedType = FuncType { funcTypeArgs = argtys,
+                                             funcTypeRetTy = retty },
+                      typedTerm = Lambda { lambdaCases = cases } } arg pos =
+  do
+    -- Convert the argument to the correct type
+    converted <- convertArg argtys arg
+    -- Use the args to try each case
+    case foldl1 (<|>) (map (caseMatch converted) cases) of
+      Just res ->
+        do
+          (instparamtys, instretty) <- instantiateParamRetTypes argtys
+          return Typed { typedTerm = res, typedType = instretty,
+                         typedPos = pos }
+      Nothing ->
+        do
+          noMatch arg pos
+          return BadElim { badElimPos = pos }
+-- Anything else is an evaluation error
+normalizeCall func _ pos =
+  do
+    callNonFunc func pos
+    return BadElim { badElimPos = pos }
 
-instance (MonadMessages Message m, Applicative m, Eq bound) =>
+instance (MonadMessages Message m, MonadSymbols m, MonadPositions m,
+          Applicative m, FormatM m bound, FormatM m free,
+          Default bound, Hashable bound, Eq bound) =>
          Normalize m (Elim bound free) where
   normalize t @ Call { callFunc = func, callArg = arg, callPos = pos } =
     do
-      -- Head-normalize to do the actual call.
-      res <- normalizeHead t { callFunc = func, callArg = arg }
-      -- Then normalize the result
+      normfunc <- normalize func
+      normarg <- normalize arg
+      res <- normalizeCall normfunc normarg pos
       normalize res
   normalize t @ Typed { typedTerm = term, typedType = ty, typedPos = pos } =
     do
@@ -165,72 +177,13 @@ instance (MonadMessages Message m, Applicative m, Eq bound) =>
          RecordType { recTypeBody = fieldtys }) ->
           do
             converted <- convertTuple fieldtys fields pos
-            return t { typedTerm = converted }
+            normalize t { typedTerm = converted }
+        (Record { recFields = fields, recPos = pos },
+         ty @ RecordType { recTypeBody = fieldtys }) ->
+          do
+            newfieldtys <- instantiateFieldTypes fieldtys fields pos
+            return t { typedType = ty { recTypeBody = newfieldtys } }
         -- Eliminate a typed-elim cycle
         (Elim { elimTerm = inner }, _) -> return inner
   -- Anything else is already normal
   normalize t = return t
-
-  normalizeHead t @ Call { callFunc = func, callArg = arg, callPos = pos } =
-    do
-      normfunc <- normalizeHead func
-      normarg <- normalize arg
-      case (normfunc, normarg) of
-        -- Preserve the badness
-        (BadElim {}, _) -> return normfunc
-        (_, BadIntro { badIntroPos = badpos }) ->
-          return BadElim { badElimPos = badpos }
-        -- XXX Placeholder for constructors and intrinsics
-        (Var {}, _) -> error "Implement intrinsics"
-        (Typed { typedType = FuncType { funcTypeArgs = argtys,
-                                        funcTypeRetTy = retty },
-                 typedTerm = Constructor {} }, _) ->
-          do
-            -- Convert the argument to the correct type
-            converted <- convertArg argtys normarg
-            -- Make sure the converted argument isn't bad
-            case converted of
-              BadIntro {} -> return BadElim { badElimPos = pos }
-              _ -> return t { callFunc = normfunc, callArg = converted }
-        -- Evalute calls to lambda terms
-        (Typed { typedType = FuncType { funcTypeArgs = argtys,
-                                        funcTypeRetTy = retty },
-                 typedTerm = Lambda { lambdaCases = cases } }, _) ->
-          do
-            -- Convert the argument to the correct type
-            converted <- convertArg argtys normarg
-            -- Use the args to try each case
-            case foldl1 (<|>) (map (caseMatch converted) cases) of
-              Just res ->
-                let
-                  retty' = _
-                in
-                  return Typed { typedTerm = res, typedType = retty',
-                                 typedPos = pos }
-              Nothing ->
-                do
-                  noMatch normarg pos
-                  return BadElim { badElimPos = pos }
-        -- Anything else is an evaluation error.
-        _ ->
-          do
-            callNonFunc func pos
-            return BadElim { badElimPos = pos }
-  normalizeHead t @ Typed { typedTerm = term, typedType = ty, typedPos = pos } =
-    do
-      normterm <- normalizeHead term
-      normtype <- normalizeHead ty
-      case (normterm, normtype) of
-        -- Preserve badness
-        (BadIntro {}, _) -> return BadElim { badElimPos = pos }
-        (_, BadIntro {}) -> return BadElim { badElimPos = pos }
-        -- Rewrite a tuple as a record
-        (Tuple { tupleFields = fields, tuplePos = pos },
-         RecordType { recTypeBody = fieldtys }) ->
-          do
-            converted <- convertTuple fieldtys fields pos
-            return t { typedTerm = converted }
-        -- Eliminate a typed-elim cycle
-        (Elim { elimTerm = inner }, _) -> return inner
-  -- Anything else is already normal
-  normalizeHead t = return t

@@ -28,6 +28,7 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
+{-# LANGUAGE FlexibleContexts, OverloadedStrings #-}
 
 -- | Pattern matching implementation.  This module contains a single
 -- function which implements the pattern matching functionality.
@@ -35,18 +36,63 @@
 -- The single function in this module attempts to create a unifier
 -- from a pattern and a term.
 module Language.Salt.Core.Patterns(
+       patternNames,
        patternMatch,
        caseMatch
        ) where
 
 import Bound
+import Control.Monad
 import Control.Applicative
+import Control.Monad.Messages
 import Data.Default
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
+import Data.HashSet(HashSet)
+import Data.Position.DWARFPosition
 import Language.Salt.Core.Syntax
+import Language.Salt.Message
 
+import qualified Data.HashSet as HashSet
 import qualified Data.HashMap.Strict as HashMap
+
+patternNamesTail :: (MonadMessages Message m,
+                     Default bound, Eq bound, Hashable bound) =>
+                    HashSet bound ->
+                    Pattern bound ->
+                    m (HashSet bound)
+patternNamesTail result Option { optionPats = opts, optionPos = pos } =
+  do
+    optnames <- mapM (patternNamesTail result) opts
+    case optnames of
+      first : rest
+        | all (== first) rest -> return first
+        | otherwise ->
+          do
+            internalError "Options don't bind the same names"
+                          [basicPosition pos]
+            return first
+      [] ->
+        do
+          internalError "Empty options list" [basicPosition pos]
+          return HashSet.empty
+patternNamesTail result Deconstruct { deconstructBinds = binds } =
+  foldM (\r -> patternNamesTail r . fieldVal) result (HashMap.elems binds)
+patternNamesTail result As { asName = name, asBind = bind } =
+  patternNamesTail (HashSet.insert name result) bind
+patternNamesTail result Name { nameSym = sym } =
+  return (HashSet.insert sym result)
+-- Constants must be equal
+patternNamesTail result Exact {} = return result
+
+-- | Get all the names bound by a pattern.
+patternNames :: (MonadMessages Message m,
+                 Default bound, Eq bound, Hashable bound) =>
+                Pattern bound
+             -- ^ The pattern for which to get names.
+             -> m (HashSet bound)
+             -- ^ A 'HashSet' of all names bound by the pattern.
+patternNames = patternNamesTail HashSet.empty
 
 -- | Tail-recursive work function for pattern matching
 patternMatchTail :: (Default bound, Eq bound, Hashable bound) =>
