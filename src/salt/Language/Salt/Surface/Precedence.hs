@@ -31,9 +31,11 @@
 {-# LANGUAGE OverloadedStrings, FlexibleContexts, FlexibleInstances,
              MultiParamTypeClasses #-}
 
--- | Precedence parsing.  This is a simple pass that applies the
--- syntax directives in each scope to parse 'Seq'-based expressions
--- into 'Apply'-based forms.
+-- |
+-- = Precedence parsing.
+--
+-- This is a simple pass that applies the syntax directives in each
+-- scope to parse 'Seq'-based expressions into 'Apply'-based forms.
 --
 -- The basic grammar for expressions looks like this:
 --
@@ -543,10 +545,6 @@ doExp :: (MonadMessages Message m, MonadSymbols m,
 -- Calls invoke the parser
 doExp Call { callInfo = info } = parseExp info
 -- Everything else is constructive
-doExp c @ Compound { compoundBody = body } =
-  do
-    newbody <- mapM (mapM doExp) body
-    return c { compoundBody = newbody }
 doExp a @ Abs { absCases = cases } =
   do
     newcases <- mapM (mapM doExp) cases
@@ -592,7 +590,9 @@ doExp a @ Anon { anonSuperTypes = supers, anonParams = params } =
     newsupers <- mapM doExp supers
     newparams <- mapM doExp params
     return a { anonSuperTypes = newsupers, anonParams = newparams }
--- These two have nothing to convert
+-- These three have nothing to convert
+doExp Compound { compoundScope = scope, compoundPos = pos } =
+    return Compound { compoundScope = scope, compoundPos = pos }
 doExp Sym { symRef = ref, symPos = pos } =
   return Sym { symRef = ref, symPos = pos }
 doExp Literal { literalVal = val } = return Literal { literalVal = val }

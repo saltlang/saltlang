@@ -128,6 +128,7 @@ data TempSaltScope expty =
     tempScopeDefs :: ![(Syntax.DefID, Syntax.Def expty)],
     tempScopeID :: !ScopeID,
     tempScopeEnclosing :: !(Maybe ScopeID),
+    tempScopeEval :: [Syntax.Compound expty],
     tempScopePos :: !Position
   }
 
@@ -141,7 +142,8 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                tempScopeTruths = HashMap.empty, tempScopeSyntax = HashMap.empty,
                tempScopeDefs = [], tempScopeProofs = [], tempScopePos = pos,
                tempScopeImports = [], tempScopeNames = namesarr,
-               tempScopeID = scopeid, tempScopeEnclosing = Nothing
+               tempScopeID = scopeid, tempScopeEnclosing = Nothing,
+               tempScopeEval = []
              }
   createSubscope pos scopeid (TempSaltScope { tempScopeID = enclosing } : _) =
     do
@@ -151,7 +153,8 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                tempScopeTruths = HashMap.empty, tempScopeSyntax = HashMap.empty,
                tempScopeDefs = [], tempScopeProofs = [], tempScopePos = pos,
                tempScopeImports = [], tempScopeNames = namesarr,
-               tempScopeID = scopeid, tempScopeEnclosing = Just enclosing
+               tempScopeID = scopeid, tempScopeEnclosing = Just enclosing,
+               tempScopeEval = []
              }
 
   finalizeScope TempSaltScope {
@@ -160,7 +163,7 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                   tempScopeImports = imports, tempScopeNames = names,
                   tempScopeDefs = defs, tempScopeDefID = defid,
                   tempScopeID = scopeid, tempScopeEnclosing = enclosing,
-                  tempScopePos = pos
+                  tempScopeEval = eval, tempScopePos = pos
                 } =
     let
       -- These functions turn lists of definitions into single
@@ -218,7 +221,8 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                                       Syntax.scopeImports = imports,
                                       Syntax.scopeDefs = defarr,
                                       Syntax.scopeNames = namesarr,
-                                      Syntax.scopeEnclosing = enclosing })
+                                      Syntax.scopeEnclosing = enclosing,
+                                      Syntax.scopeEval = eval })
 
 type CollectT m =
   ReaderT Table (ScopeBuilderT (TempSaltScope SyntaxExp)
@@ -351,7 +355,7 @@ addDef def @ Syntax.Def {} =
     alterScope addDef'
 
 -- | Add names that refer to a given 'DefID'
-addNames ::  (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
+addNames :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
             Visibility
          -- ^ The visibility of the names.
          -> [Symbol]
@@ -372,6 +376,20 @@ addNames vis syms defid =
   in do
     currscope <- getScope
     addNames' currscope
+
+-- | Add a 'Proof' to the current scope.
+addEval :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
+            [Syntax.Compound SyntaxExp]
+         -- ^ The 'Proof' definition.
+         -> CollectT m ()
+addEval newevals =
+  let
+    addEval' :: TempSaltScope SyntaxExp ->
+                TempSaltScope SyntaxExp
+    addEval' scope @ TempSaltScope { tempScopeEval = evals } =
+      scope { tempScopeEval = evals ++ newevals }
+  in
+    updateScope addEval'
 
 -- | Collect a pattern.  Also collect all the names that it binds.
 collectPattern :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
@@ -645,10 +663,14 @@ collectExp :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
            -- ^ Collected expression.
 -- For a compound statement, construct a sub-scope
 collectExp AST.Compound { AST.compoundBody = body, AST.compoundPos = pos } =
-  do
-    (collectedBody, scopeid) <- makeScope pos (foldM collectCompound [] body)
+  let
+    collectCompounds =
+      do
+        evals <- foldM collectCompound [] body
+        addEval evals
+  in do
+    (_, scopeid) <- makeScope pos collectCompounds
     return Syntax.Compound { Syntax.compoundScope = scopeid,
-                             Syntax.compoundBody = reverse collectedBody,
                              Syntax.compoundPos = pos }
 -- For record values, gather up all the bindings into a HashMap.
 collectExp AST.Record { AST.recordType = False, AST.recordFields = fields,
@@ -849,12 +871,22 @@ collectCase :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
             -- ^ The collected case.
 collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
                        AST.casePos = pos } =
-  do
-    (collectedPat, binds) <- collectPattern pat
-    collectedBody <- collectExp body
-    return Syntax.Case { Syntax.casePat = collectedPat,
-                         Syntax.caseBinds = binds,
-                         Syntax.caseBody = collectedBody,
+  let
+    caseScope :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+                 CollectT m Syntax.DefID
+    caseScope =
+      do
+        -- Add the body as the scope's evaluation term
+        collectedBody <- collectExp body
+        addEval [Syntax.Exp { Syntax.expVal = collectedBody }]
+        -- Add the pattern as a definition
+        (collectedPat, _) <- collectPattern pat
+        addDef Syntax.Def { Syntax.defPattern = collectedPat,
+                            Syntax.defInit = Nothing,
+                            Syntax.defPos = pos }
+  in do
+    (defid, scopeid) <- makeScope pos caseScope
+    return Syntax.Case { Syntax.casePatDef = defid, Syntax.caseScope = scopeid,
                          Syntax.casePos = pos }
 
 

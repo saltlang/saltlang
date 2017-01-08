@@ -105,7 +105,6 @@ import Control.Monad.Symbols
 import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
-import Data.HashSet(HashSet)
 import Data.IntMap(IntMap)
 import Data.List(sort)
 import Data.PositionElement
@@ -120,7 +119,6 @@ import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
 import qualified Data.HashMap.Strict as HashMap
-import qualified Data.HashSet as HashSet
 import qualified Data.IntMap as IntMap
 
 -- | Unique ID for initializers.
@@ -178,7 +176,10 @@ data Scope expty =
     -- | Imports in this scope.
     scopeImports :: ![Import expty],
     -- | The enclosing scope, if one exists.
-    scopeEnclosing :: !(Maybe ScopeID)
+    scopeEnclosing :: !(Maybe ScopeID),
+    -- | A compound expression to which this scope evaluates, or @[]@
+    -- for scopes that have no value.
+    scopeEval :: ![Compound expty]
   }
   deriving (Eq, Functor, Foldable, Traversable)
 
@@ -371,10 +372,10 @@ data Exp callty refty =
     -- directives and proofs are moved out-of-line, while truths,
     -- builders, and regular definitions remain in-line.
     Compound {
-      -- | Scope containing definitions in this compound block.
+      -- | Scope containing definitions in this compound block.  This
+      -- scope's 'scopeEval' field will contain the value for the
+      -- expression.
       compoundScope :: !ScopeID,
-      -- | The body of the compound block.
-      compoundBody :: ![Compound (Exp callty refty)],
       -- | The position in source from which this arises.
       compoundPos :: !Position
     }
@@ -513,12 +514,12 @@ data Field valty =
 -- | A case in a match statement or a function definition.
 data Case expty =
   Case {
-    -- | The pattern to match for this case.
-    casePat :: !(Pattern expty),
-    -- | All symbols bound by the pattern.
-    caseBinds :: ![Symbol],
-    -- | The expression to execute for this case.
-    caseBody :: !expty,
+    -- | The 'ScopeID' for the scope containing the body of the case.
+    -- This scope's 'scopeEval' field contains the value of this
+    -- case.
+    caseScope :: !ScopeID,
+    -- | The 'DefID' for the pattern binding for the arguments.
+    casePatDef :: !DefID,
     -- | The position in source from which this arises.
     casePos :: !Position
   }
@@ -654,9 +655,8 @@ instance Eq expty => Eq (Pattern expty) where
   _ == _ = False
 
 instance (Eq (callty refty), Eq refty) => Eq (Exp callty refty) where
-  Compound { compoundBody = body1, compoundScope = scope1 } ==
-    Compound { compoundBody = body2, compoundScope = scope2 } =
-      scope1 == scope2 && body1 == body2
+  Compound { compoundScope = scope1 } == Compound { compoundScope = scope2 } =
+      scope1 == scope2
   Abs { absKind = kind1, absCases = cases1 } ==
     Abs { absKind = kind2, absCases = cases2 } =
       kind1 == kind2 && cases1 == cases2
@@ -702,9 +702,9 @@ instance Eq expty => Eq (Field expty) where
   Field { fieldVal = val1 } == Field { fieldVal = val2 } = val1 == val2
 
 instance Eq expty => Eq (Case expty) where
-  Case { casePat = pat1, caseBody = body1 } ==
-    Case { casePat = pat2, caseBody = body2 } =
-      pat1 == pat2 && body1 == body2
+  Case { caseScope = scope1, casePatDef = pat1 } ==
+    Case { caseScope = scope2, casePatDef = pat2 } =
+      scope1 == scope2 && pat1 == pat2
 
 instance Ord Component where
   compare Component { compExpected = expected1, compScope = scope1 }
@@ -730,11 +730,13 @@ instance Ord expty => Ord (Scope expty) where
   compare Scope { scopeBuilders = builders1, scopeSyntax = syntax1,
                   scopeTruths = truths1, scopeDefs = defs1,
                   scopeProofs = proofs1, scopeImports = imports1,
-                  scopeNames = names1, scopeEnclosing = enclosing1 }
+                  scopeNames = names1, scopeEnclosing = enclosing1,
+                  scopeEval = value1 }
           Scope { scopeBuilders = builders2, scopeSyntax = syntax2,
                   scopeTruths = truths2, scopeDefs = defs2,
                   scopeProofs = proofs2, scopeImports = imports2,
-                  scopeNames = names2, scopeEnclosing = enclosing2 } =
+                  scopeNames = names2, scopeEnclosing = enclosing2,
+                  scopeEval = value2 } =
     let
       mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
 
@@ -748,13 +750,15 @@ instance Ord expty => Ord (Scope expty) where
       namelist2 = map mapfun (assocs names2)
     in
       case compare enclosing1 enclosing2 of
-        EQ -> case compare builderlist1 builderlist2 of
-          EQ -> case compare syntaxlist1 syntaxlist2 of
-            EQ -> case compare truthlist1 truthlist2 of
-              EQ -> case compare defs1 defs2 of
-                EQ -> case compare proofs1 proofs2 of
-                  EQ -> case compare imports1 imports2 of
-                    EQ -> compare namelist1 namelist2
+        EQ -> case compare value1 value2 of
+          EQ -> case compare builderlist1 builderlist2 of
+            EQ -> case compare syntaxlist1 syntaxlist2 of
+              EQ -> case compare truthlist1 truthlist2 of
+                EQ -> case compare defs1 defs2 of
+                  EQ -> case compare proofs1 proofs2 of
+                    EQ -> case compare imports1 imports2 of
+                      EQ -> compare namelist1 namelist2
+                      out -> out
                     out -> out
                   out -> out
                 out -> out
@@ -862,11 +866,8 @@ instance Ord expty => Ord (Pattern expty) where
     compare lit1 lit2
 
 instance (Ord (callty refty), Ord refty) => Ord (Exp callty refty) where
-  compare Compound { compoundBody = body1, compoundScope = scope1 }
-          Compound { compoundBody = body2, compoundScope = scope2 } =
-    case compare scope1 scope2 of
-      EQ -> compare body1 body2
-      out -> out
+  compare Compound { compoundScope = scope1 }
+          Compound { compoundScope = scope2 } = compare scope1 scope2
   compare Compound {} _ = LT
   compare _ Compound {} = GT
   compare Abs { absKind = kind1, absCases = cases1 }
@@ -968,10 +969,10 @@ instance Ord expty => Ord (Field expty) where
     compare val1 val2
 
 instance Ord expty => Ord (Case expty) where
-  compare Case { casePat = pat1, caseBody = body1 }
-          Case { casePat = pat2, caseBody = body2 } =
-    case compare pat1 pat2 of
-      EQ -> compare body1 body2
+  compare Case { caseScope = scope1, casePatDef = pat1 }
+          Case { caseScope = scope2, casePatDef = pat2 } =
+    case compare scope1 scope2 of
+      EQ -> compare pat1 pat2
       out -> out
 
 instance Hashable DefID where
@@ -999,7 +1000,8 @@ instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
   hashWithSalt s Scope { scopeBuilders = builders, scopeSyntax = syntax,
                          scopeTruths = truths, scopeDefs = defs,
                          scopeProofs = proofs, scopeImports = imports,
-                         scopeNames = names, scopeEnclosing = enclosing } =
+                         scopeNames = names, scopeEnclosing = enclosing,
+                         scopeEval = value } =
     let
       mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
       builderlist = sort (HashMap.toList builders)
@@ -1010,7 +1012,8 @@ instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
       s `hashWithSalt` builderlist `hashWithSalt`
       syntaxlist `hashWithSalt` truthlist `hashWithSalt`
       elems defs `hashWithSalt` proofs `hashWithSalt`
-      imports `hashWithSalt` namelist `hashWithSalt` enclosing
+      imports `hashWithSalt` namelist `hashWithSalt`
+      enclosing `hashWithSalt` value
 
 instance (Hashable expty, Ord expty) => Hashable (Builder expty) where
   hashWithSalt s Builder { builderKind = kind, builderVisibility = vis,
@@ -1068,8 +1071,8 @@ instance (Hashable expty, Ord expty) => Hashable (Pattern expty) where
 instance (Hashable (callty refty), Hashable refty,
           Ord (callty refty), Ord refty) =>
          Hashable (Exp callty refty) where
-  hashWithSalt s Compound { compoundBody = body, compoundScope = scope } =
-    s `hashWithSalt` (1 :: Int) `hashWithSalt` scope `hashWithSalt` body
+  hashWithSalt s Compound { compoundScope = scope } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` scope
   hashWithSalt s Abs { absKind = kind, absCases = cases } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` kind `hashWithSalt` cases
   hashWithSalt s Match { matchVal = val, matchCases = cases } =
@@ -1114,8 +1117,8 @@ instance (Hashable expty, Ord expty) => Hashable (Field expty) where
   hashWithSalt s = hashWithSalt s . fieldVal
 
 instance (Hashable expty, Ord expty) => Hashable (Case expty) where
-  hashWithSalt s Case { casePat = pat, caseBody = body } =
-    s `hashWithSalt` pat `hashWithSalt` body
+  hashWithSalt s Case { casePatDef = pat, caseScope = scope } =
+    s `hashWithSalt` pat `hashWithSalt` scope
 
 {-
 precDot :: MonadSymbols m => (Ordering, Exp) -> StateT Word m (Doc, String)
@@ -1464,15 +1467,12 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
 instance (MonadPositions m, MonadSymbols m, FormatM m refty,
           FormatM m (callty refty)) =>
          FormatM m (Exp callty refty) where
-  formatM Compound { compoundBody = body, compoundScope = scope,
-                     compoundPos = pos } =
+  formatM Compound { compoundScope = scope, compoundPos = pos } =
     do
       posdoc <- formatM pos
-      bodydoc <- mapM formatM body
       return (compoundApplyDoc (string "Compound")
                              [(string "pos", posdoc),
-                              (string "scope", format scope),
-                              (string "body", listDoc bodydoc)])
+                              (string "scope", format scope)])
   formatM Abs { absKind = kind, absCases = cases, absPos = pos } =
     do
       posdoc <- formatM pos
@@ -1595,15 +1595,14 @@ instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Case expty) where
-  formatM Case { casePat = pat, caseBody = body, casePos = pos } =
+  formatM Case { casePatDef = pat, caseScope = scope, casePos = pos } =
     do
       posdoc <- formatM pos
       patdoc <- formatM pat
-      bodydoc <- formatM body
       return (compoundApplyDoc (string "Case")
                              [(string "pos", posdoc),
                               (string "pattern", patdoc),
-                              (string "body", bodydoc)])
+                              (string "scope", format scope)])
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
@@ -1721,17 +1720,19 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
          XmlPickler [NodeG [] tag text] (Scope expty) where
   xpickle =
     xpWrap (\((builders, syntax, truths, enclosing),
-              (defs, names, proofs, imports)) ->
+              (defs, names, proofs, imports, value)) ->
              Scope { scopeBuilders = builders, scopeSyntax = syntax,
                      scopeTruths = truths, scopeNames = names,
                      scopeProofs = proofs, scopeImports = imports,
-                     scopeDefs = defs, scopeEnclosing = enclosing },
+                     scopeDefs = defs, scopeEnclosing = enclosing,
+                     scopeEval = value },
             \Scope { scopeBuilders = builders, scopeSyntax = syntax,
                      scopeTruths = truths, scopeNames = names,
                      scopeProofs = proofs, scopeImports = imports,
-                     scopeDefs = defs, scopeEnclosing = enclosing } ->
+                     scopeDefs = defs, scopeEnclosing = enclosing,
+                     scopeEval = value } ->
             ((builders, syntax, truths, enclosing),
-             (defs, names, proofs, imports)))
+             (defs, names, proofs, imports, value)))
            (xpElemNodes (gxFromString "Scope")
                         (xpPair (xp4Tuple (xpElemNodes (gxFromString "builders")
                                                        mapPickler)
@@ -1742,13 +1743,15 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                                           (xpOption (xpElemAttrs
                                                       (gxFromString "enclosing")
                                                       xpickle)))
-                                (xp4Tuple (xpElemNodes (gxFromString "defs")
+                                (xp5Tuple (xpElemNodes (gxFromString "defs")
                                                        defsPickler)
                                           (xpElemNodes (gxFromString "names")
                                                        namesPickler)
                                           (xpElemNodes (gxFromString "proofs")
                                                        (xpList xpickle))
                                           (xpElemNodes (gxFromString "imports")
+                                                       (xpList xpickle))
+                                          (xpElemNodes (gxFromString "eval")
                                                        (xpList xpickle)))))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
@@ -2009,17 +2012,13 @@ compoundPickler :: (GenericXMLString tag, Show tag,
                    PU [NodeG [] tag text] (Exp callty refty)
 compoundPickler =
   let
-    revfunc Compound { compoundBody = body, compoundScope = scope,
-                       compoundPos = pos } = (scope, (body, pos))
+    revfunc Compound { compoundScope = scope, compoundPos = pos } = (scope, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(scope, (body, pos)) -> Compound { compoundBody = body,
-                                                compoundScope = scope,
-                                                compoundPos = pos }, revfunc)
+    xpWrap (\(scope, pos) -> Compound { compoundScope = scope,
+                                        compoundPos = pos }, revfunc)
            (xpElem (gxFromString "Compound") xpickle
-                   (xpPair (xpElemNodes (gxFromString "body")
-                                        (xpList xpickle))
-                           (xpElemNodes (gxFromString "pos") xpickle)))
+                   (xpElemNodes (gxFromString "pos") xpickle))
 
 absPickler :: (GenericXMLString tag, Show tag,
                GenericXMLString text, Show text,
@@ -2307,29 +2306,9 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Case expty) where
   xpickle =
-    let
-      binds :: Pattern expty -> [Symbol]
-      binds =
-        let
-          binds' :: Pattern expty -> HashSet Symbol
-          binds' Option { optionPats = pats } = mconcat (map binds' pats)
-          binds' Deconstruct { deconstructPat = pat } = binds' pat
-          binds' Split { splitFields = fields } =
-            foldMap (binds' . fieldVal) fields
-          binds' Typed { typedPat = pat } = binds' pat
-          binds' As { asName = sym, asPat = pat } =
-            HashSet.insert sym (binds' pat)
-          binds' Name { nameSym = sym } = HashSet.singleton sym
-          binds' Exact {} = HashSet.empty
-        in
-          HashSet.toList . binds'
-    in
-      xpWrap (\(pat, body, pos) -> Case { casePat = pat, caseBinds = binds pat,
-                                          caseBody = body, casePos = pos },
-              \Case { casePat = pat, caseBody = body, casePos = pos } ->
-              (pat, body, pos))
-             (xpElemNodes (gxFromString "Case")
-                          (xpTriple (xpElemNodes (gxFromString "pattern")
-                                                 xpickle)
-                                    (xpElemNodes (gxFromString "body") xpickle)
-                                    (xpElemNodes (gxFromString "pos") xpickle)))
+    xpWrap (\((pat, scope), pos) ->
+             Case { caseScope = scope, casePatDef = pat, casePos = pos },
+            \Case { caseScope = scope, casePatDef = pat, casePos = pos } ->
+            ((pat, scope), pos))
+           (xpElem (gxFromString "Case") (xpPair xpickle xpickle)
+                   (xpElemNodes (gxFromString "pos") xpickle))
