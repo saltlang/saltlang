@@ -177,6 +177,8 @@ data Scope expty =
     scopeImports :: ![Import expty],
     -- | The enclosing scope, if one exists.
     scopeEnclosing :: !(Maybe ScopeID),
+    -- | The scopes from which this one inherits definitions.
+    scopeInherits :: ![expty],
     -- | A compound expression to which this scope evaluates, or @[]@
     -- for scopes that have no value.
     scopeEval :: ![Compound expty]
@@ -475,12 +477,10 @@ data Exp callty refty =
   | Anon {
       -- | The type of entity the builder represents.
       anonKind :: !BuilderKind,
-      -- | The declared supertypes for this builder entity.
-      anonSuperTypes :: ![Exp callty refty],
       -- | The parameters of the builder entity.
       anonParams :: !(Fields (Exp callty refty)),
       -- | The entities declared by the builder.
-      anonContent :: !ScopeID,
+      anonScope :: !ScopeID,
       -- | The position in source from which this arises.
       anonPos :: !Position
     }
@@ -684,12 +684,9 @@ instance (Eq (callty refty), Eq refty) => Eq (Exp callty refty) where
   Where { whereVal = val1, whereProp = prop1 } ==
     Where { whereVal = val2, whereProp = prop2 } =
       val1 == val2 && prop1 == prop2
-  Anon { anonKind = kind1, anonSuperTypes = supers1,
-         anonParams = fields1, anonContent = content1 } ==
-    Anon { anonKind = kind2, anonSuperTypes = supers2,
-           anonParams = fields2, anonContent = content2 } =
-      kind1 == kind2 && supers1 == supers2 &&
-      fields1 == fields2 && content1 == content2
+  Anon { anonKind = kind1, anonParams = fields1, anonScope = content1 } ==
+    Anon { anonKind = kind2, anonParams = fields2, anonScope = content2 } =
+      kind1 == kind2 && fields1 == fields2 && content1 == content2
   Literal lit1 == Literal lit2 = lit1 == lit2
   _ == _ = False
 
@@ -731,12 +728,12 @@ instance Ord expty => Ord (Scope expty) where
                   scopeTruths = truths1, scopeDefs = defs1,
                   scopeProofs = proofs1, scopeImports = imports1,
                   scopeNames = names1, scopeEnclosing = enclosing1,
-                  scopeEval = value1 }
+                  scopeInherits = inherits1, scopeEval = value1 }
           Scope { scopeBuilders = builders2, scopeSyntax = syntax2,
                   scopeTruths = truths2, scopeDefs = defs2,
                   scopeProofs = proofs2, scopeImports = imports2,
                   scopeNames = names2, scopeEnclosing = enclosing2,
-                  scopeEval = value2 } =
+                  scopeInherits = inherits2, scopeEval = value2 } =
     let
       mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
 
@@ -751,13 +748,15 @@ instance Ord expty => Ord (Scope expty) where
     in
       case compare enclosing1 enclosing2 of
         EQ -> case compare value1 value2 of
-          EQ -> case compare builderlist1 builderlist2 of
-            EQ -> case compare syntaxlist1 syntaxlist2 of
-              EQ -> case compare truthlist1 truthlist2 of
-                EQ -> case compare defs1 defs2 of
-                  EQ -> case compare proofs1 proofs2 of
-                    EQ -> case compare imports1 imports2 of
-                      EQ -> compare namelist1 namelist2
+          EQ -> case compare inherits1 inherits2 of
+            EQ -> case compare builderlist1 builderlist2 of
+              EQ -> case compare syntaxlist1 syntaxlist2 of
+                EQ -> case compare truthlist1 truthlist2 of
+                  EQ -> case compare defs1 defs2 of
+                    EQ -> case compare proofs1 proofs2 of
+                      EQ -> case compare imports1 imports2 of
+                        EQ -> compare namelist1 namelist2
+                        out -> out
                       out -> out
                     out -> out
                   out -> out
@@ -936,15 +935,11 @@ instance (Ord (callty refty), Ord refty) => Ord (Exp callty refty) where
       out -> out
   compare Where {} _ = LT
   compare _ Where {} = GT
-  compare Anon { anonKind = kind1, anonSuperTypes = supers1,
-                 anonParams = fields1, anonContent = content1 }
-          Anon { anonKind = kind2, anonSuperTypes = supers2,
-                 anonParams = fields2, anonContent = content2 } =
+  compare Anon { anonKind = kind1, anonParams = fields1, anonScope = content1 }
+          Anon { anonKind = kind2, anonParams = fields2, anonScope = content2 } =
     case compare kind1 kind2 of
-      EQ -> case compare supers1 supers2 of
-        EQ -> case compare fields1 fields2 of
-          EQ -> compare content1 content2
-          out -> out
+      EQ -> case compare fields1 fields2 of
+        EQ -> compare content1 content2
         out -> out
       out -> out
   compare Anon {} _ = LT
@@ -1001,7 +996,7 @@ instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
                          scopeTruths = truths, scopeDefs = defs,
                          scopeProofs = proofs, scopeImports = imports,
                          scopeNames = names, scopeEnclosing = enclosing,
-                         scopeEval = value } =
+                         scopeInherits = inherits, scopeEval = value } =
     let
       mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
       builderlist = sort (HashMap.toList builders)
@@ -1013,7 +1008,7 @@ instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
       syntaxlist `hashWithSalt` truthlist `hashWithSalt`
       elems defs `hashWithSalt` proofs `hashWithSalt`
       imports `hashWithSalt` namelist `hashWithSalt`
-      enclosing `hashWithSalt` value
+      enclosing `hashWithSalt` inherits `hashWithSalt` value
 
 instance (Hashable expty, Ord expty) => Hashable (Builder expty) where
   hashWithSalt s Builder { builderKind = kind, builderVisibility = vis,
@@ -1099,9 +1094,9 @@ instance (Hashable (callty refty), Hashable refty,
   hashWithSalt s Where { whereVal = val, whereProp = prop } =
     s `hashWithSalt` (12 :: Int) `hashWithSalt` val `hashWithSalt` prop
   hashWithSalt s Anon { anonKind = cls, anonParams = params,
-                        anonSuperTypes = supers, anonContent = body } =
+                        anonScope = body } =
     s `hashWithSalt` (13 :: Int) `hashWithSalt` cls `hashWithSalt`
-    params `hashWithSalt` supers `hashWithSalt` body
+    params `hashWithSalt` body
   hashWithSalt s (Literal lit) =
     s `hashWithSalt` (14 :: Int) `hashWithSalt` lit
   hashWithSalt s Bad {} = s `hashWithSalt` (0 :: Int)
@@ -1557,18 +1552,16 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty,
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "prop", propdoc)])
-  formatM Anon { anonKind = cls, anonParams = params, anonContent = body,
-                 anonSuperTypes = supers, anonPos = pos } =
+  formatM Anon { anonKind = cls, anonParams = params, anonScope = body,
+                 anonPos = pos } =
 
     do
       posdoc <- formatM pos
-      superdocs <- mapM formatM supers
       paramdocs <- formatM params
       return (compoundApplyDoc (string "Anon")
                              [(string "pos", posdoc),
                               (string "kind", format cls),
                               (string "params", paramdocs),
-                              (string "supers", listDoc superdocs),
                               (string "body", format body)])
   formatM Literal { literalVal = l } = formatM l
   formatM Bad {} = return (string "<bad>")
@@ -1720,19 +1713,19 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
          XmlPickler [NodeG [] tag text] (Scope expty) where
   xpickle =
     xpWrap (\((builders, syntax, truths, enclosing),
-              (defs, names, proofs, imports, value)) ->
+              (defs, names, proofs, inherits, imports, value)) ->
              Scope { scopeBuilders = builders, scopeSyntax = syntax,
                      scopeTruths = truths, scopeNames = names,
                      scopeProofs = proofs, scopeImports = imports,
                      scopeDefs = defs, scopeEnclosing = enclosing,
-                     scopeEval = value },
+                     scopeInherits = inherits, scopeEval = value },
             \Scope { scopeBuilders = builders, scopeSyntax = syntax,
                      scopeTruths = truths, scopeNames = names,
                      scopeProofs = proofs, scopeImports = imports,
                      scopeDefs = defs, scopeEnclosing = enclosing,
-                     scopeEval = value } ->
+                     scopeInherits = inherits, scopeEval = value } ->
             ((builders, syntax, truths, enclosing),
-             (defs, names, proofs, imports, value)))
+             (defs, names, proofs, inherits, imports, value)))
            (xpElemNodes (gxFromString "Scope")
                         (xpPair (xp4Tuple (xpElemNodes (gxFromString "builders")
                                                        mapPickler)
@@ -1743,11 +1736,13 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                                           (xpOption (xpElemAttrs
                                                       (gxFromString "enclosing")
                                                       xpickle)))
-                                (xp5Tuple (xpElemNodes (gxFromString "defs")
+                                (xp6Tuple (xpElemNodes (gxFromString "defs")
                                                        defsPickler)
                                           (xpElemNodes (gxFromString "names")
                                                        namesPickler)
                                           (xpElemNodes (gxFromString "proofs")
+                                                       (xpList xpickle))
+                                          (xpElemNodes (gxFromString "inherits")
                                                        (xpList xpickle))
                                           (xpElemNodes (gxFromString "imports")
                                                        (xpList xpickle))
@@ -2211,17 +2206,16 @@ anonPickler :: (GenericXMLString tag, Show tag,
                PU [NodeG [] tag text] (Exp callty refty)
 anonPickler =
   let
-    revfunc Anon { anonKind = kind, anonParams = params, anonContent = body,
-                   anonSuperTypes = supers, anonPos = pos } =
-      (kind, (params, supers, body, pos))
+    revfunc Anon { anonKind = kind, anonParams = params, anonScope = body,
+                   anonPos = pos } =
+      (kind, (params, body, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(kind, (params, supers, body, pos)) ->
-             Anon { anonKind = kind, anonParams = params, anonContent = body,
-                    anonSuperTypes = supers, anonPos = pos }, revfunc)
+    xpWrap (\(kind, (params, body, pos)) ->
+             Anon { anonKind = kind, anonParams = params, anonScope = body,
+                    anonPos = pos }, revfunc)
            (xpElem (gxFromString "Anon") xpickle
-                   (xp4Tuple (xpElemNodes (gxFromString "params") xpickle)
-                             (xpElemNodes (gxFromString "supers") xpickle)
+                   (xpTriple (xpElemNodes (gxFromString "params") xpickle)
                              (xpElemNodes (gxFromString "body") xpickle)
                              (xpElemNodes (gxFromString "pos") xpickle)))
 

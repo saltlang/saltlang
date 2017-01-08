@@ -129,6 +129,7 @@ data TempSaltScope expty =
     tempScopeID :: !ScopeID,
     tempScopeEnclosing :: !(Maybe ScopeID),
     tempScopeEval :: [Syntax.Compound expty],
+    tempScopeInherits :: [expty],
     tempScopePos :: !Position
   }
 
@@ -143,7 +144,7 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                tempScopeDefs = [], tempScopeProofs = [], tempScopePos = pos,
                tempScopeImports = [], tempScopeNames = namesarr,
                tempScopeID = scopeid, tempScopeEnclosing = Nothing,
-               tempScopeEval = []
+               tempScopeInherits = [], tempScopeEval = []
              }
   createSubscope pos scopeid (TempSaltScope { tempScopeID = enclosing } : _) =
     do
@@ -154,7 +155,7 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                tempScopeDefs = [], tempScopeProofs = [], tempScopePos = pos,
                tempScopeImports = [], tempScopeNames = namesarr,
                tempScopeID = scopeid, tempScopeEnclosing = Just enclosing,
-               tempScopeEval = []
+               tempScopeInherits = [], tempScopeEval = []
              }
 
   finalizeScope TempSaltScope {
@@ -163,7 +164,8 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                   tempScopeImports = imports, tempScopeNames = names,
                   tempScopeDefs = defs, tempScopeDefID = defid,
                   tempScopeID = scopeid, tempScopeEnclosing = enclosing,
-                  tempScopeEval = eval, tempScopePos = pos
+                  tempScopeInherits = inherits, tempScopeEval = eval,
+                  tempScopePos = pos
                 } =
     let
       -- These functions turn lists of definitions into single
@@ -222,6 +224,7 @@ instance (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
                                       Syntax.scopeDefs = defarr,
                                       Syntax.scopeNames = namesarr,
                                       Syntax.scopeEnclosing = enclosing,
+                                      Syntax.scopeInherits = inherits,
                                       Syntax.scopeEval = eval })
 
 type CollectT m =
@@ -317,6 +320,20 @@ addImport import' =
       scope { tempScopeImports = import' : imports }
   in
     updateScope addImport'
+
+-- | Add an inheritance to the current scope.
+addInherits :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
+               [SyntaxExp]
+            -- ^ The 'Import' structure.
+            -> CollectT m ()
+addInherits newinherits =
+  let
+    addInherits' :: TempSaltScope SyntaxExp ->
+                    TempSaltScope SyntaxExp
+    addInherits' scope @ TempSaltScope { tempScopeInherits = inherits } =
+      scope { tempScopeInherits = inherits ++ newinherits }
+  in
+    updateScope addInherits'
 
 -- | Add a syntax directive to the current scope.
 addSyntax :: (MonadSymbols m, MonadMessages Message m, MonadIO m) =>
@@ -797,11 +814,10 @@ collectExp AST.Anon { AST.anonKind = kind, AST.anonSuperTypes = supers,
   do
     collectedSupers <- mapM collectExp supers
     collectedParams <- collectFields params pos
-    collectedContent <- collectScope pos content
+    collectedContent <- collectScope pos collectedSupers content
     return Syntax.Anon { Syntax.anonKind = kind,
                          Syntax.anonParams = collectedParams,
-                         Syntax.anonSuperTypes = collectedSupers,
-                         Syntax.anonContent = collectedContent,
+                         Syntax.anonScope = collectedContent,
                          Syntax.anonPos = pos }
 collectExp (AST.Literal lit) = return (Syntax.Literal lit)
 
@@ -911,7 +927,7 @@ collectElement vis AST.Builder { AST.builderName = sym,
     case content of
         AST.Body body ->
           do
-            collectedBody <- collectScope pos body
+            collectedBody <- collectScope pos collectedSupers body
             addBuilder sym Syntax.Builder {
                              Syntax.builderKind = kind,
                              Syntax.builderVisibility = vis,
@@ -921,8 +937,7 @@ collectElement vis AST.Builder { AST.builderName = sym,
                                Syntax.Anon {
                                  Syntax.anonKind = kind,
                                  Syntax.anonParams = collectedParams,
-                                 Syntax.anonSuperTypes = collectedSupers,
-                                 Syntax.anonContent = collectedBody,
+                                 Syntax.anonScope = collectedBody,
                                  Syntax.anonPos = pos },
                              Syntax.builderPos = pos
                            }
@@ -1022,9 +1037,12 @@ collectElement _ AST.Proof { AST.proofName = pname, AST.proofBody = body,
 -- parsed and used to update definitions.
 collectScope :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                 Position
+             -> [SyntaxExp]
+             -- ^ The inherited scope expressions, if there are any.
              -> AST.Scope
+             -- ^ The scope body.
              -> CollectT m ScopeID
-collectScope pos groups =
+collectScope pos inherits groups =
   let
     -- | Collect a group.  This rolls all elements of the group into the
     -- temporary scope, with the group's visibility.
@@ -1035,8 +1053,13 @@ collectScope pos groups =
     collectGroup AST.Group { AST.groupVisibility = vis,
                              AST.groupElements = elems } =
       mapM_ (collectElement vis) elems
+
+    collectScope' =
+      do
+        addInherits inherits
+        mapM_ collectGroup groups
   in do
-    (_, scopeid) <- makeScope pos (mapM_ collectGroup groups)
+    (_, scopeid) <- makeScope pos collectScope'
     return scopeid
 
 -- | Collect a single AST.  This does not resolve or load use directives.

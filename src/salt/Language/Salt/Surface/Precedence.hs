@@ -585,12 +585,11 @@ doExp w @ Where { whereVal = val, whereProp = prop } =
     newval <- doExp val
     newprop <- doExp prop
     return w { whereVal = newval, whereProp = newprop }
-doExp a @ Anon { anonSuperTypes = supers, anonParams = params } =
+doExp a @ Anon { anonParams = params } =
   do
-    newsupers <- mapM doExp supers
     newparams <- mapM doExp params
-    return a { anonSuperTypes = newsupers, anonParams = newparams }
--- These three have nothing to convert
+    return a { anonParams = newparams }
+-- These have nothing to convert
 doExp Compound { compoundScope = scope, compoundPos = pos } =
     return Compound { compoundScope = scope, compoundPos = pos }
 doExp Sym { symRef = ref, symPos = pos } =
