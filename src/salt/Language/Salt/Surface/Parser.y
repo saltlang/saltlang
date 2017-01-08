@@ -46,6 +46,8 @@
 -- "Language.Salt.Surface.Token".  It produces the 'AST' defined in
 -- "Language.Salt.Surface.AST".  Operator precedence parsing is
 -- defined in "Language.Salt.Surface.Precedence".
+{-# LANGUAGE FlexibleContexts #-}
+
 module Language.Salt.Surface.Parser(
        parserWithTokens,
        parser
@@ -54,6 +56,7 @@ module Language.Salt.Surface.Parser(
 import Control.Monad.Except
 import Control.Monad.Genpos
 import Control.Monad.Gensym
+import Control.Monad.Messages
 import Control.Monad.SourceBuffer hiding (linebreak)
 import Control.Monad.Trans
 import Data.ByteString(ByteString)
@@ -64,6 +67,7 @@ import Data.Semigroup((<>))
 import Data.Symbol(Symbol)
 import Data.Typeable
 import Language.Salt.Frontend
+import Language.Salt.Message(Message)
 import Language.Salt.Surface.AST
 import Language.Salt.Surface.Common
 import Language.Salt.Surface.Lexer hiding (lexer)
@@ -83,10 +87,10 @@ import qualified Language.Salt.Message as Message
 }
 
 %name parse top_level
-%name parseStms stm_list
+--%name parseStms stm_list
 %tokentype { Token }
 %error { parseError }
-%monad { Parser }
+%monad { (MonadFrontend m) } { Parser m }
 %lexer { lexer } { Token.EOF }
 %token ID { Token.Id _ _ }
        NUM { Token.Num _ _ }
@@ -1025,7 +1029,7 @@ match_list :: { [Entry] }
 
 {
 
-  type Parser = ExceptT () (Lexer Frontend)
+type Parser m = ExceptT () (Lexer m)
 
 buildExp :: [Exp] -> Exp
 buildExp [] = error "Empty expression sequence, shouldn't happen"
@@ -1037,13 +1041,13 @@ buildExp revexps =
   in
     Seq { seqExps = exps, seqPos = pos }
 
-parseError :: Token-> Parser a
+parseError :: MonadMessages Message m => Token-> Parser m a
 parseError tok =
   do
     Message.parseError tok
     throwError ()
 
-lexer :: (Token -> Parser a) -> Parser a
+lexer :: MonadFrontend m => (Token -> Parser m a) -> Parser m a
 lexer = (lift lex >>=)
 
 name :: Token -> Symbol
@@ -1062,19 +1066,23 @@ str :: Token -> Strict.ByteString
 str (Token.String str _) = str
 str _ = error "Cannot get str of token"
 
+parse :: (MonadFrontend m) => Parser m AST
+
 -- | Parse input from a file into an 'AST'.  Also produce the token
 -- stream from the file.
-parserWithTokens :: Position.Filename
+parserWithTokens :: (MonadFrontend m) =>
+                    Position.Filename
                  -- ^ Name of the file being parsed.
                  -> Lazy.ByteString
                  -- ^ Content of the file being parsed
-                 -> Frontend (Maybe AST, [Token])
+                 -> m (Maybe AST, [Token])
                  -- ^ The 'AST' produced from the contents, if the
                  -- parse succeeded, as well as the tokens produced
                  -- from the contents.
 parserWithTokens name input =
   let
-    run :: Lexer Frontend (Maybe AST)
+    run :: (MonadFrontend m) =>
+           Lexer m (Maybe AST)
     run =
       do
         res <- runExceptT parse
@@ -1088,16 +1096,18 @@ parserWithTokens name input =
     runLexerWithTokens run name input
 
 -- | Parse input from a file into an 'AST'.
-parser :: Position.Filename
+parser :: (MonadFrontend m) =>
+          Position.Filename
        -- ^ Name of the file being parsed.
        -> Lazy.ByteString
        -- ^ Content of the file being parsed
-       -> Frontend (Maybe AST)
+       -> m (Maybe AST)
        -- ^ The 'AST' produced from the contents, if the parse
        -- succeeded.
 parser name input =
   let
-    run :: Lexer Frontend (Maybe AST)
+    run :: (MonadFrontend m) =>
+           Lexer m (Maybe AST)
     run =
       do
         res <- runExceptT parse
