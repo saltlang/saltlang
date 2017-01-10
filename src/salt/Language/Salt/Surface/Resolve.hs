@@ -33,8 +33,12 @@ module Language.Salt.Surface.Resolve(
        resolve
        ) where
 
-import Data.Array
+import Control.Monad.Reader
+import Data.Array(Array, Ix)
+import Data.Array.BitArray(BitArray)
+import Data.Array.BitArray.IO(IOBitArray)
 import Data.Array.IO(IOArray)
+import Data.Foldable
 import Data.HashSet(HashSet)
 import Data.HashMap.Strict(HashMap)
 import Data.Position.BasicPosition
@@ -42,12 +46,16 @@ import Data.ScopeID
 import Data.Symbol
 import Language.Salt.Surface.Syntax
 
+import qualified Data.Array as Array
 import qualified Data.Array.IO as IOArray
+import qualified Data.Array.Unsafe as IOArray
+import qualified Data.Array.BitArray as BitArray
+import qualified Data.Array.BitArray.IO as IOBitArray
 import qualified Data.HashSet as HashSet
 import qualified Data.HashMap.Strict as HashMap
 
 -- | State of a resolved symbol.
-data Resolution =
+data Access =
     -- | A valid resolution result.
     Valid {
       -- | The ID of the scope in which the result is defined.
@@ -61,67 +69,253 @@ data Resolution =
       illegalScope :: !ScopeID
     }
     -- | Access to an out-of-context element.
-  | Context {
+  | Inaccessible {
       -- | True for object context, false for local.
-      contextObject :: !Bool,
+      inaccessibleObject :: !Bool,
       -- | The scope in which the result is defined.
-      contextScope :: !ScopeID
+      inaccessibleScope :: !ScopeID
     }
-    -- | Undefined symbol result.
-  | Undef
+    deriving (Eq, Ord)
 
-data ResolveState =
-  ResoveState {
-    rstateUnresolved :: !(IOArray ScopeID (HashMap Symbol [BasicPosition])),
-    rstateResolved :: !(IOArray ScopeID (HashMap Symbol Resolution))
+data Resolution =
+    -- | Locally-defined symbol.  This is always valid, so no need for
+    -- validity.
+    Direct
+    -- | An inconsistent resolution.
+  | Inconsistent
+    -- | A definition imported from another scope.
+  | Imported {
+      -- | The set of scopes from which this definition is imported.
+      importedScopes :: !(HashMap ScopeID Word)
+    }
+    -- | An inherited definition.
+  | Inherited {
+      -- | The set of scopes from which the definition is inherited.
+      inheritedScopes :: !(HashMap ScopeID Word)
+    }
+    -- | An undefined symbol.
+  | Undefined
+    deriving (Eq)
+
+-- What we want to do is go through the source scopes and pluck out
+-- all the 'Exp's that we want to resolve, starting from the leaves
+-- down.  We generate placeholder names (TempRef's) for these, which
+-- serve as the ref type.
+--
+-- Once resolution is done, we should have terms that we can sub in
+-- for every TempRef.  First, we'll convert all the terms we're
+-- resolving into their resolved forms, then, we'll convert the
+-- scopes.
+
+
+newtype TempRef = TempRef { tempRefID :: Word }
+  deriving (Eq, Ord, Ix)
+
+instance Enum TempRef where
+  fromEnum = fromEnum . tempRefID
+  toEnum = TempRef . toEnum
+
+data TempScope =
+  TempScope {
+    tempScopeBuilders :: !(HashMap Symbol (Builder (Exp Seq TempRef))),
+    tempScopeSyntax :: !(HashMap Symbol (Syntax (Exp Seq TempRef))),
+    tempScopeTruths :: !(HashMap Symbol (Truth (Exp Seq TempRef))),
+    tempScopeDefs :: !(Array DefID (Def (Exp Seq TempRef))),
+    tempScopeProofs :: ![Proof (Exp Seq TempRef)],
+    tempScopeEval :: ![Compound (Exp Seq TempRef)],
+    -- | Symbols that need to be resolved.
+    tempScopeSyms :: !(HashMap Symbol Resolution),
+    -- | The enclosed scope.
+    tempScopeEnclosed :: ![ScopeID]
   }
 
-builderInitialState :: ([BasicPosition], Resolution)
-                  -> (ScopeID, Scope (Exp Symbol))
-                  -> ([(Symbol, [BasicPosition])], [(Symbol, Resolution)])
+-- | Resolution state.
+data ResolveState =
+  ResolveState {
+    -- | The current resolution state of all scopes.
+    resolveStateScopes :: !(Array ScopeID TempScope),
+    -- | The scopes that need to be recalculated.
+    resolveStateWorkset :: !(BitArray ScopeID),
+    -- | The workset for the next round.
+    resolveStateNextWorkset :: !(IOBitArray ScopeID)
+  }
 
+type ResolveT m = ReaderT ResolveState m
 
--- | Foldable function, build up the initial state for a scope
-scopeInitialState :: ([(Symbol, [BasicPosition])], [(Symbol, Resolution)])
-                  -> (ScopeID, Scope (Exp Symbol))
-                  -> ([(Symbol, [BasicPosition])], [(Symbol, Resolution)])
-scopeInitialState (resolvedarr, unresolvedarr)
-                  (idx, Scope { scopeImports = imports, scopeTruths = truths,
-                                scopeBuilders = builders, scopeSyntax = syntax,
-                                scopeDefs = defs, scopeProofs = proofs }) =
-  _
-
-
-
-initialState :: Surface (Exp Symbol) -> ResolveState
-initialState Surface { surfScopes = scopes } =
+-- | Resolve all references in a 'Surface' syntax structure and link
+-- all scopes together.
+resolve :: (MonadIO m) =>
+           Surface (Scope (Exp Seq Symbol))
+        -- ^ The syntax structure to resolve.
+        -> m (Surface (Resolved (Exp Seq Ref)))
+        -- ^ The resolved syntax structure.
+resolve surface @ Surface { surfaceScopes = scopes } =
   let
-    arrbounds = bounds scopes
+    arrbounds = Array.bounds scopes
 
-    mapfun resolvedarr unresolvedarr
-           (idx, Scope { scopeDefs = defs, scopeTruths = truths,
-                         scopeBuilders = builders }) =
+    -- Create the initial state for resolution
+    initialState :: (MonadIO m) =>
+                    m (Array ScopeID TempScope)
+    initialState =
       let
-        foldfun (resolved, unresolved) sym
-          | HashMap.member sym defs || HashMap.member sym truths ||
-            HashMap.member sym builders =
-            ((sym, Valid { validScope = idx }) : resolved, unresolved)
-          | otherwise =
-            (resolved, HashMap.insertWith (++) sym [])
+        mapfun :: (MonadIO m) =>
+                  IOArray ScopeID [ScopeID]
+               -> (ScopeID, Scope (Exp Seq Symbol))
+               -> m (ScopeID, HashMap Symbol Resolution)
+        mapfun enclosedarr (scopeid, scope) =
+          let
+            -- Gather up all the references
+            syms = foldl (foldl (flip HashSet.insert)) HashSet.empty scope
+            -- Make everything undefined initially
+            ents = zip (HashSet.toList syms) (repeat Undefined)
+          in do
+            case scope of
+              Scope { scopeEnclosing = Just enclosing } ->
+                do
+                  enclosed <- liftIO (IOArray.readArray enclosedarr enclosing)
+                  liftIO (IOArray.writeArray enclosedarr enclosing
+                                             (scopeid : enclosed))
+              _ -> return ()
+            return (scopeid, HashMap.fromList ents)
+
+        -- Create the 'TempScope's out of their components
+        makeTempScopes :: Array ScopeID [ScopeID]
+                       -> [(ScopeID, HashMap Symbol Resolution)]
+                       -> Array ScopeID TempScope
+        makeTempScopes enclosedarr =
+          let
+            -- Map function
+            makeTempScope (scopeid, syms) =
+              let
+                -- Lookup the enclosed scopes
+                enclosed = enclosedarr Array.! scopeid
+              in
+                (scopeid, TempScope { tempScopeSyms = syms,
+                                      tempScopeEnclosed = enclosed })
+          in
+            Array.array arrbounds . map makeTempScope
 
       in do
+        -- Run through the scopes, extract the referenced symbols,
+        -- link up the encloded scopes.
+        enclosedarr <- liftIO (IOArray.newArray arrbounds [])
+        tempscopes <- mapM (mapfun enclosedarr) (Array.assocs scopes)
+        frozenenclosed <- liftIO (IOArray.unsafeFreeze enclosedarr)
+        return (makeTempScopes frozenenclosed tempscopes)
 
+    -- | Core resolution algorithm.
+    resolveScopes :: (MonadIO m) =>
+                     Array ScopeID TempScope
+                  -- ^ The current scope state
+                  -> BitArray ScopeID
+                  -- ^ The current workset
+                  -> IOBitArray ScopeID
+                  -- ^ The array into which to accumulate the next workset
+                  -> m (Array ScopeID TempScope)
+    resolveScopes tempscopes workset nextworkset =
+      let
+        resolveScope :: (MonadIO m) =>
+                        (ScopeID, TempScope)
+                     -> m (ScopeID, TempScope)
+        -- Skip this scope if it's not in the workset
+        resolveScope elem @ (idx, _) | workset BitArray.! idx = return elem
+        resolveScope curr @ (scopeid,
+                             TempScope { tempScopeSyms = resolutions }) =
+          let
+            syms = HashMap.keys resolutions
+
+            -- | Resolve one symbol
+            resolveSymbol :: (MonadIO m) =>
+                             Symbol
+                          -- ^ The symbol to resolve
+                          -> m (Symbol, Resolution)
+            resolveSymbol sym = _
+
+            finishScope :: (MonadIO m) =>
+                           HashMap Symbol Resolution
+                        -> m (ScopeID, TempScope)
+            finishScope newresolutions
+              | resolutions == newresolutions = return curr
+              | otherwise =
+                do
+                  -- Use the new resolutions to resolve all imports
+
+                  -- Use the new resoultions to resolve all inherits
+
+                  -- Propagate this change to all the scopes that
+                  -- depend on this one
+                  _
+          in do
+            -- Resolve all symbols using the previous scope
+            newresolutions <- mapM resolveSymbol syms
+            finishScope (HashMap.fromList newresolutions)
+
+        resolveRound :: (MonadIO m) =>
+                        m (Array ScopeID TempScope)
+        resolveRound =
+          do
+            -- Attempt to resolve all the external symbols
+            newtempscopes <- mapM resolveScope (Array.assocs tempscopes)
+            return (Array.array arrbounds newtempscopes)
+      in do
+        -- Clear the next workset array
+        liftIO (IOBitArray.fill nextworkset False)
+        -- Run one round
+        newtempscopes <- resolveRound
+        -- Check to see if we're done
+        done <- liftIO (IOBitArray.and nextworkset)
+        if done
+          -- If the next workset is empty, then we're done
+          then return newtempscopes
+          -- Otherwise, recurse
+          else do
+            -- Make the next workset
+            newworkset <- liftIO (IOBitArray.freeze nextworkset)
+            -- Recurse with the new tempscopes and workset array
+            resolveScopes newtempscopes newworkset nextworkset
+
+    initworkset = (BitArray.true arrbounds)
+
+    -- | Convert a 'TempScope' into a 'Resolved' scope.
+    finishScope :: (MonadIO m) =>
+                   (ScopeID, TempScope)
+                -> m (ScopeID, Resolved (Exp Seq Ref))
+    finishScope (scopeid, TempScope { tempScopeBuilders = builders,
+                                      tempScopeSyntax = syntax,
+                                      tempScopeTruths = truths,
+                                      tempScopeDefs = defs,
+                                      tempScopeProofs = proofs,
+                                      tempScopeEval = eval }) =
+      let
+        Scope { scopeEnclosing = enclosing,
+                scopeNames = names } = scopes Array.! scopeid
+
+        subst tmprefvals = (>>= (tmprefvals Array.!))
+      in do
+        tmprefvals <- _
+        return (scopeid,
+                Resolved {
+                  resolvedBuilders = fmap (fmap (subst tmprefvals)) builders,
+                  resolvedSyntax = fmap (fmap (subst tmprefvals)) syntax,
+                  resolvedTruths = fmap (fmap (subst tmprefvals)) truths,
+                  resolvedDefs = fmap (fmap (subst tmprefvals)) defs,
+                  resolvedProofs = fmap (fmap (subst tmprefvals)) proofs,
+                  resolvedEval = fmap (fmap (subst tmprefvals)) eval,
+                  resolvedNames = names,
+                  resolvedImports = _,
+                  resolvedInherits = _,
+                  resolvedEnclosing = enclosing
+                })
   in do
-    resolved <- IOArray.newArray_ arrbounds
-    unresolved <- IOArray.newArray_ arrbounds
+    -- Set up the initial state
+    nextworkset <- liftIO (IOBitArray.newArray arrbounds True)
+    initscopes <- initialState
+    -- Run resolution
+    finalscopes <- resolveScopes initscopes initworkset nextworkset
+    -- Finalize the results and report errors
+    resolvedscopes <- mapM finishScope (Array.assocs finalscopes)
+    return surface { surfaceScopes = Array.array arrbounds resolvedscopes }
 
-resolve :: (Monad m) =>
-           Surface (Exp Symbol)
-        -> Surface (Exp Ref)
-resolve Surface { surfScopes = scopes } =
-  do
-    init <- initialState scopes
-    _
 {-
 import Control.Monad.Messages
 import Control.Monad.Reader
