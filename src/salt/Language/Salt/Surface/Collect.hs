@@ -762,7 +762,7 @@ collectExp AST.Tuple { AST.tupleFields = fields, AST.tuplePos = pos } =
                           Syntax.tuplePos = pos }
 -- The remainder of these are straightforward
 collectExp AST.Sym { AST.symName = sym, AST.symPos = pos } =
-  return Syntax.Sym { Syntax.symRef = sym, Syntax.symPos = pos }
+  return Syntax.Id { Syntax.idRef = sym, Syntax.idPos = pos }
 collectExp AST.Abs { AST.absKind = kind, AST.absCases = cases,
                      AST.absPos = pos } =
   do

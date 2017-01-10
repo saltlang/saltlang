@@ -179,7 +179,7 @@ production :: (MonadIO m, MonadReader ParserData m) =>
               Exp Apply Ref
            -> m Production
 -- For a 'Sym', look up the syntax directive
-production ex @ Sym { symRef = ref, symPos = pos } =
+production ex @ Id { idRef = ref, idPos = pos } =
   do
     ParserData { parserFixities = fixities } <- ask
     res <- liftIO (HashTable.lookup fixities ref)
@@ -269,7 +269,7 @@ compareNodes left right =
 -- | Parse a Seq into an Apply-based structure
 parseExp :: (MonadMessages Message m, MonadSymbols m,
              MonadRefs Ref m, MonadIO m) =>
-            Seq Ref
+            Seq (Exp Seq Ref)
          -> ParserDataT m (Exp Apply Ref)
 -- Report errors for empty and singleton lists
 parseExp Seq { seqExps = [], seqPos = seqpos } =
@@ -293,8 +293,8 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
         tuple = Tuple { tupleFields = fields, tuplePos = pos }
       in do
         compref <- getComposeRef
-        return Call { callInfo = Apply { applyFunc = Sym { symRef = compref,
-                                                           symPos = pos },
+        return Call { callInfo = Apply { applyFunc = Id { idRef = compref,
+                                                           idPos = pos },
                                          applyArg = tuple, applyPos = pos } }
 
     -- | Reduce the top of the stack, then contiune parsing
@@ -312,7 +312,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
                   rest) =
       let
         pos = position left <> position right
-        func = Sym { symRef = ref, symPos = sympos }
+        func = Id { idRef = ref, idPos = sympos }
         fields = IntMap.fromDistinctAscList [(1, left), (2, right)]
         tuple = Tuple { tupleFields = fields, tuplePos = pos }
         apply = Apply { applyFunc = func, applyArg = tuple, applyPos = pos }
@@ -330,7 +330,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
         pos = oppos <> position left
         fields = IntMap.singleton 1 oldleft
         tuple = Tuple { tupleFields = fields, tuplePos = oldpos }
-        func = Sym { symRef = oldref, symPos = oldpos }
+        func = Id { idRef = oldref, idPos = oldpos }
         with = With { withVal = func, withArgs = tuple, withPos = oldpos }
         val = PartialLeft { leftBefores = with : befores, leftOp = ref,
                             leftArg = left, leftPos = pos }
@@ -346,7 +346,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
         pos = position right <> oppos
         fields = IntMap.singleton 2 oldright
         tuple = Tuple { tupleFields = fields, tuplePos = oldpos }
-        func = Sym { symRef = oldref, symPos = oldpos }
+        func = Id { idRef = oldref, idPos = oldpos }
         with = With { withVal = func, withArgs = tuple, withPos = oldpos }
         val = PartialRight { rightAfters = with : afters, rightOp = ref,
                              rightArg = right, rightPos = pos }
@@ -357,7 +357,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
                   (Val { valExp = arg }, prev) :
                   rest) =
       let
-        func = Sym { symRef = ref, symPos = pos }
+        func = Id { idRef = ref, idPos = pos }
         apply = Apply { applyFunc = func, applyArg = arg,
                         applyPos = pos <> position arg }
         call = Call { callInfo = apply }
@@ -403,7 +403,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
 
         fields = IntMap.singleton 2 right
         tuple = Tuple { tupleFields = fields, tuplePos = pos }
-        func = Sym { symRef = ref, symPos = pos }
+        func = Id { idRef = ref, idPos = pos }
         with = With { withVal = func, withArgs = tuple, withPos = pos }
         complist = with : afters
       in do
@@ -417,7 +417,7 @@ parseExp Seq { seqExps = exps, seqPos = seqpos } =
       let
         fields = IntMap.singleton 1 left
         tuple = Tuple { tupleFields = fields, tuplePos = pos }
-        func = Sym { symRef = ref, symPos = pos }
+        func = Id { idRef = ref, idPos = pos }
         with = With { withVal = func, withArgs = tuple, withPos = pos }
       in do
         composed <- foldM composition with (reverse befores)
@@ -592,8 +592,7 @@ doExp a @ Anon { anonParams = params } =
 -- These have nothing to convert
 doExp Compound { compoundScope = scope, compoundPos = pos } =
     return Compound { compoundScope = scope, compoundPos = pos }
-doExp Sym { symRef = ref, symPos = pos } =
-  return Sym { symRef = ref, symPos = pos }
+doExp Id { idRef = ref, idPos = pos } = return Id { idRef = ref, idPos = pos }
 doExp Literal { literalVal = val } = return Literal { literalVal = val }
 doExp Bad { badPos = pos } = return Bad { badPos = pos }
 
@@ -649,7 +648,7 @@ scanScope equivs edgetab fixities
 
         -- We expect to see a reference, or else one of the default
         -- precedence levels.
-        scanPrec Prec { precLevel = Level { levelRef = Sym { symRef = ref } },
+        scanPrec Prec { precLevel = Level { levelRef = Id { idRef = ref } },
                         precOrd = EQ, precPos = pos } =
           let
             lvl = Level { levelRef = ref }
@@ -673,7 +672,7 @@ scanScope equivs edgetab fixities
 
         -- We expect to see a reference, or else one of the default
         -- precedence levels.
-        scanPrec Prec { precLevel = Level { levelRef = Sym { symRef = ref } },
+        scanPrec Prec { precLevel = Level { levelRef = Id { idRef = ref } },
                         precOrd = LT, precPos = pos } =
           let
             lvl = Level { levelRef = ref }
@@ -705,7 +704,7 @@ scanScope equivs edgetab fixities
 
         -- We expect to see a reference, or else one of the default
         -- precedence levels.
-        scanPrec Prec { precLevel = Level { levelRef = Sym { symRef = ref } },
+        scanPrec Prec { precLevel = Level { levelRef = Id { idRef = ref } },
                         precOrd = GT, precPos = pos } =
           let
             lvl = Level { levelRef = ref }
