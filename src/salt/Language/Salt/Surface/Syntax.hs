@@ -120,6 +120,7 @@ import Text.Format hiding ((<$>))
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
+import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.IntMap as IntMap
 
@@ -1208,6 +1209,43 @@ instance (Hashable expty, Ord expty) => Hashable (Field expty) where
 instance (Hashable expty, Ord expty) => Hashable (Case expty) where
   hashWithSalt s Case { casePatDef = pat, caseScope = scope } =
     s `hashWithSalt` pat `hashWithSalt` scope
+
+instance Functor callty => Applicative (Exp callty) where
+  pure = return
+  (<*>) = ap
+
+injectpos :: Position
+injectpos = Synthetic { synthDesc = Strict.fromString "Monad return" }
+
+instance Functor callty => Monad (Exp callty) where
+  return ref = Id { idRef = ref, idPos = injectpos }
+
+  Compound { compoundScope = scope, compoundPos = pos } >>= _ =
+    Compound { compoundScope = scope, compoundPos = pos }
+  a @ Abs { absCases = cases } >>= f =
+    a { absCases = fmap (fmap (>>= f)) cases }
+  m @ Match { matchVal = val, matchCases = cases } >>= f =
+    m { matchVal = val >>= f, matchCases = fmap (fmap (>>= f)) cases }
+  a @ Ascribe { ascribeVal = val, ascribeType = ty } >>= f =
+    a { ascribeVal = val >>= f, ascribeType = ty >>= f }
+  c @ Call { callInfo = info } >>= f =
+    c { callInfo = fmap (>>= f) info }
+  r @ Record { recordFields = fields } >>= f =
+    r { recordFields = fmap (>>= f) fields }
+  r @ RecordType { recordTypeFields = fields } >>= f =
+    r { recordTypeFields = fmap (>>= f) fields }
+  t @ Tuple { tupleFields = fields } >>= f =
+    t { tupleFields = fmap (>>= f) fields }
+  p @ Project { projectVal = val } >>= f = p { projectVal = val >>= f }
+  Id { idRef = sym } >>= f = f sym
+  w @ With { withVal = val, withArgs = args } >>= f =
+    w { withVal = val >>= f, withArgs = args >>= f }
+  w @ Where { whereVal = val, whereProp = prop } >>= f =
+    w { whereVal = val >>= f, whereProp = prop >>= f }
+  a @ Anon { anonParams = params } >>= f =
+    a { anonParams = fmap (>>= f) params }
+  Literal { literalVal = lit } >>= _ = Literal { literalVal = lit }
+  Bad { badPos = pos } >>= _ = Bad { badPos = pos }
 
 {-
 precDot :: MonadSymbols m => (Ordering, Exp) -> StateT Word m (Doc, String)
