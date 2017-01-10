@@ -68,6 +68,7 @@ module Language.Salt.Surface.Syntax(
 
        -- ** Scopes
        Scope(..),
+       Resolved(..),
        Syntax(..),
        Truth(..),
        Proof(..),
@@ -137,10 +138,10 @@ data Ref =
   deriving (Ord, Eq)
 
 -- | Top-level surface syntax structure.
-data Surface expty =
+data Surface scopety =
   Surface {
     -- | Table of all scopes in the program.
-    surfaceScopes :: !(Array ScopeID (Scope expty)),
+    surfaceScopes :: !(Array ScopeID scopety),
     -- | List of all components in the program.
     surfaceComponents :: ![Component]
   }
@@ -156,7 +157,7 @@ data Component =
     compScope :: !ScopeID
   }
 
--- | A static scope.  Elements are split up by kind, into builder definitions,
+-- | A basic scope.  Elements are split up by kind, into builder definitions,
 -- syntax directives, truths, proofs, and regular definitions.
 data Scope expty =
   Scope {
@@ -182,6 +183,33 @@ data Scope expty =
     -- | A compound expression to which this scope evaluates, or @[]@
     -- for scopes that have no value.
     scopeEval :: ![Compound expty]
+  }
+  deriving (Eq, Functor, Foldable, Traversable)
+
+data Resolved expty =
+  Resolved {
+    -- | All the builders defined in this scope.
+    resolvedBuilders :: !(HashMap Symbol (Builder expty)),
+    -- | The syntax directives for this scope.
+    resolvedSyntax :: !(HashMap Symbol (Syntax expty)),
+    -- | The truth environment for this scope.  This contains all
+    -- theorems, axioms, and invariants.
+    resolvedTruths :: !(HashMap Symbol (Truth expty)),
+    -- | An array mapping 'DefID's to all local definitions in the scope.
+    resolvedDefs :: !(Array DefID (Def expty)),
+    -- | A map from names to definition IDs.
+    resolvedNames :: !(Array Visibility (HashMap Symbol [DefID])),
+    -- | Proofs given in this scope.
+    resolvedProofs :: ![Proof expty],
+    -- | Imports in this scope.
+    resolvedImports :: ![Import ScopeID],
+    -- | The enclosing scope, if one exists.
+    resolvedEnclosing :: !(Maybe ScopeID),
+    -- | The scopes from which this one inherits definitions.
+    resolvedInherits :: ![ScopeID],
+    -- | A compound expression to which this scope evaluates, or @[]@
+    -- for scopes that have no value.
+    resolvedEval :: ![Compound expty]
   }
   deriving (Eq, Functor, Foldable, Traversable)
 
@@ -284,7 +312,7 @@ data Seq refty =
     -- | The position in source from which this arises.
     seqPos :: !Position
   }
-  deriving (Eq, Ord)
+  deriving (Eq, Ord, Functor, Foldable, Traversable)
 
 -- | An apply, decomposed into the called function and its arguments.
 data Apply refty =
@@ -296,7 +324,7 @@ data Apply refty =
     -- | The position in source from which this arises.
     applyPos :: !Position
   }
-  deriving (Eq)
+  deriving (Eq, Functor, Foldable, Traversable)
 
 -- | Compound expression elements.  These are either "ordinary"
 -- expressions, or declarations.
@@ -766,6 +794,49 @@ instance Ord expty => Ord (Scope expty) where
           out -> out
         out -> out
 
+instance Ord expty => Ord (Resolved expty) where
+  compare Resolved { resolvedBuilders = builders1, resolvedSyntax = syntax1,
+                     resolvedTruths = truths1, resolvedDefs = defs1,
+                     resolvedProofs = proofs1, resolvedImports = imports1,
+                     resolvedNames = names1, resolvedEnclosing = enclosing1,
+                     resolvedInherits = inherits1, resolvedEval = value1 }
+          Resolved { resolvedBuilders = builders2, resolvedSyntax = syntax2,
+                     resolvedTruths = truths2, resolvedDefs = defs2,
+                     resolvedProofs = proofs2, resolvedImports = imports2,
+                     resolvedNames = names2, resolvedEnclosing = enclosing2,
+                     resolvedInherits = inherits2, resolvedEval = value2 } =
+    let
+      mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
+
+      builderlist1 = sort (HashMap.toList builders1)
+      builderlist2 = sort (HashMap.toList builders2)
+      truthlist1 = sort (HashMap.toList truths1)
+      truthlist2 = sort (HashMap.toList truths2)
+      syntaxlist1 = sort (HashMap.toList syntax1)
+      syntaxlist2 = sort (HashMap.toList syntax2)
+      namelist1 = map mapfun (assocs names1)
+      namelist2 = map mapfun (assocs names2)
+    in
+      case compare enclosing1 enclosing2 of
+        EQ -> case compare value1 value2 of
+          EQ -> case compare inherits1 inherits2 of
+            EQ -> case compare builderlist1 builderlist2 of
+              EQ -> case compare syntaxlist1 syntaxlist2 of
+                EQ -> case compare truthlist1 truthlist2 of
+                  EQ -> case compare defs1 defs2 of
+                    EQ -> case compare proofs1 proofs2 of
+                      EQ -> case compare imports1 imports2 of
+                        EQ -> compare namelist1 namelist2
+                        out -> out
+                      out -> out
+                    out -> out
+                  out -> out
+                out -> out
+              out -> out
+            out -> out
+          out -> out
+        out -> out
+
 instance Ord expty => Ord (Builder expty) where
   compare Builder { builderKind = kind1, builderVisibility = vis1,
                     builderParams = params1, builderSuperTypes = supers1,
@@ -997,6 +1068,26 @@ instance (Hashable expty, Ord expty) => Hashable (Scope expty) where
                          scopeProofs = proofs, scopeImports = imports,
                          scopeNames = names, scopeEnclosing = enclosing,
                          scopeInherits = inherits, scopeEval = value } =
+    let
+      mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
+      builderlist = sort (HashMap.toList builders)
+      truthlist = sort (HashMap.toList truths)
+      syntaxlist = sort (HashMap.toList syntax)
+      namelist = map mapfun (assocs names)
+    in
+      s `hashWithSalt` builderlist `hashWithSalt`
+      syntaxlist `hashWithSalt` truthlist `hashWithSalt`
+      elems defs `hashWithSalt` proofs `hashWithSalt`
+      imports `hashWithSalt` namelist `hashWithSalt`
+      enclosing `hashWithSalt` inherits `hashWithSalt` value
+
+instance (Hashable expty, Ord expty) => Hashable (Resolved expty) where
+  hashWithSalt s Resolved { resolvedBuilders = builders, resolvedDefs = defs,
+                            resolvedTruths = truths, resolvedProofs = proofs,
+                            resolvedImports = imports, resolvedNames = names,
+                            resolvedEnclosing = enclosing, resolvedEval = value,
+                            resolvedInherits = inherits,
+                            resolvedSyntax = syntax } =
     let
       mapfun (idx, tab) = (idx, sort (HashMap.toList tab))
       builderlist = sort (HashMap.toList builders)
@@ -1727,6 +1818,47 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
             ((builders, syntax, truths, enclosing),
              (defs, names, proofs, inherits, imports, value)))
            (xpElemNodes (gxFromString "Scope")
+                        (xpPair (xp4Tuple (xpElemNodes (gxFromString "builders")
+                                                       mapPickler)
+                                          (xpElemNodes (gxFromString "syntax")
+                                                       mapPickler)
+                                          (xpElemNodes (gxFromString "truths")
+                                                       mapPickler)
+                                          (xpOption (xpElemAttrs
+                                                      (gxFromString "enclosing")
+                                                      xpickle)))
+                                (xp6Tuple (xpElemNodes (gxFromString "defs")
+                                                       defsPickler)
+                                          (xpElemNodes (gxFromString "names")
+                                                       namesPickler)
+                                          (xpElemNodes (gxFromString "proofs")
+                                                       (xpList xpickle))
+                                          (xpElemNodes (gxFromString "inherits")
+                                                       (xpList xpickle))
+                                          (xpElemNodes (gxFromString "imports")
+                                                       (xpList xpickle))
+                                          (xpElemNodes (gxFromString "eval")
+                                                       (xpList xpickle)))))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] expty) =>
+         XmlPickler [NodeG [] tag text] (Resolved expty) where
+  xpickle =
+    xpWrap (\((builders, syntax, truths, enclosing),
+              (defs, names, proofs, inherits, imports, value)) ->
+             Resolved { resolvedBuilders = builders, resolvedSyntax = syntax,
+                        resolvedTruths = truths, resolvedNames = names,
+                        resolvedProofs = proofs, resolvedImports = imports,
+                        resolvedDefs = defs, resolvedEnclosing = enclosing,
+                        resolvedInherits = inherits, resolvedEval = value },
+            \Resolved { resolvedBuilders = builders, resolvedSyntax = syntax,
+                        resolvedTruths = truths, resolvedNames = names,
+                        resolvedProofs = proofs, resolvedImports = imports,
+                        resolvedDefs = defs, resolvedEnclosing = enclosing,
+                        resolvedInherits = inherits, resolvedEval = value } ->
+            ((builders, syntax, truths, enclosing),
+             (defs, names, proofs, inherits, imports, value)))
+           (xpElemNodes (gxFromString "Resolved")
                         (xpPair (xp4Tuple (xpElemNodes (gxFromString "builders")
                                                        mapPickler)
                                           (xpElemNodes (gxFromString "syntax")

@@ -97,6 +97,7 @@ import qualified Language.Salt.Surface.Syntax as Syntax
 
 type Table = BasicHashTable [Symbol] (Maybe Syntax.Component)
 
+type SyntaxScope = Syntax.Scope SyntaxExp
 type SyntaxExp = Syntax.Exp Syntax.Seq Symbol
 type SyntaxPattern = Syntax.Pattern SyntaxExp
 
@@ -1206,7 +1207,7 @@ collectComponents :: (MonadLoader Strict.ByteString Lazy.ByteString m,
                   -- ^ The parsing function to use.
                   -> [(Position, [Symbol])]
                   -- ^ The names of the components to collect.
-                  -> m (Syntax.Surface SyntaxExp)
+                  -> m (Syntax.Surface SyntaxScope)
                   -- ^ Surface syntax of the collected components and
                   -- all their dependencies.
 collectComponents parsefunc files =
@@ -1291,7 +1292,7 @@ collectFiles :: (MonadLoader Strict.ByteString Lazy.ByteString m,
              -- ^ The parsing function to use.
              -> [(Position, Strict.ByteString)]
              -- ^ The names of the files to collect.
-             -> m (Syntax.Surface SyntaxExp)
+             -> m (Syntax.Surface SyntaxScope)
              -- ^ Surface syntax of the collected files and all their
              -- dependencies.
 collectFiles parsefunc files =

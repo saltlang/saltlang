@@ -606,10 +606,11 @@ scanScope :: (MonadMessages Message m, MonadIO m) =>
           -- ^ A hash table into which to gather up all the edges.
           -> BasicHashTable Ref Fixity
           -- ^ A hash table into which to gather up all fixities.
-          -> (ScopeID, Scope (Exp Seq Ref))
+          -> (ScopeID, Resolved (Exp Seq Ref))
           -- ^ The scope to scan.
           -> m ()
-scanScope equivs edgetab fixities (scopeid, Scope { scopeSyntax = syntax }) =
+scanScope equivs edgetab fixities
+          (scopeid, Resolved { resolvedSyntax = syntax }) =
   let
     -- | Scan all precedence directives for equalities, add those
     -- to the equivalence set.
@@ -750,9 +751,9 @@ scanScope equivs edgetab fixities (scopeid, Scope { scopeSyntax = syntax }) =
 -- syntax directives in each scope.
 precedence :: (MonadMessages Message m, MonadSymbols m,
                MonadRefs Ref m, MonadIO m) =>
-              Surface (Exp Seq Ref)
+              Surface (Resolved (Exp Seq Ref))
            -- ^ Surface syntax structure to transform.
-           -> m (Surface (Exp Apply Ref))
+           -> m (Surface (Resolved (Exp Apply Ref)))
            -- ^ Transformed surface syntax structure.
 precedence surface @ Surface { surfaceScopes = scopes } =
   let
@@ -869,4 +870,4 @@ precedence surface @ Surface { surfaceScopes = scopes } =
     parserinfo <- buildParserInfo
     -- Once we have the parsing data structure, descend through the
     -- structure and use it to parse all Seq's.
-    runParserDataT (mapM doExp surface) parserinfo
+    runParserDataT (mapM (mapM doExp) surface) parserinfo
