@@ -28,22 +28,29 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 {-# OPTIONS_GHC -funbox-strict-fields -Wall -Werror #-}
+{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
 
 module Language.Salt.Surface.Resolve(
        resolve
        ) where
 
+import Control.Monad.Messages.Class
 import Control.Monad.Reader
+import Control.Monad.State
 import Data.Array(Array, Ix)
 import Data.Array.BitArray(BitArray)
 import Data.Array.BitArray.IO(IOBitArray)
 import Data.Array.IO(IOArray)
+import Data.Default
 import Data.Foldable
+import Data.Hashable
 import Data.HashSet(HashSet)
 import Data.HashMap.Strict(HashMap)
+import Data.PositionElement
 import Data.Position.BasicPosition
 import Data.ScopeID
 import Data.Symbol
+import Language.Salt.Message
 import Language.Salt.Surface.Syntax
 
 import qualified Data.Array as Array
@@ -97,19 +104,15 @@ data Resolution =
   | Undefined
     deriving (Eq)
 
--- What we want to do is go through the source scopes and pluck out
--- all the 'Exp's that we want to resolve, starting from the leaves
--- down.  We generate placeholder names (TempRef's) for these, which
--- serve as the ref type.
---
--- Once resolution is done, we should have terms that we can sub in
--- for every TempRef.  First, we'll convert all the terms we're
--- resolving into their resolved forms, then, we'll convert the
--- scopes.
-
-
+-- | Placeholders for anything that might be a static expression.
+-- These are substituted into expressions in a manner similar to
+-- common subexpression elimination at the beginning of resolution,
+-- then the resolved values are substituted back in at the end.
 newtype TempRef = TempRef { tempRefID :: Word }
   deriving (Eq, Ord, Ix)
+
+instance Default TempRef where
+  def = TempRef { tempRefID = 0 }
 
 instance Enum TempRef where
   fromEnum = fromEnum . tempRefID
@@ -117,17 +120,42 @@ instance Enum TempRef where
 
 data TempScope =
   TempScope {
+    -- Unaltered content from the original scope.
+    tempScopeNames :: !(Array Visibility (HashMap Symbol [DefID])),
+    tempScopeEnclosing :: !(Maybe ScopeID),
+    -- Static expression-based content from the original scope.
+    tempScopeProofs :: ![Proof TempRef],
+    tempScopeImports :: ![Import TempRef],
+    tempScopeInherits :: ![TempRef],
+    -- Renamed expression-based content from the original Scope.
     tempScopeBuilders :: !(HashMap Symbol (Builder (Exp Seq TempRef))),
     tempScopeSyntax :: !(HashMap Symbol (Syntax (Exp Seq TempRef))),
     tempScopeTruths :: !(HashMap Symbol (Truth (Exp Seq TempRef))),
     tempScopeDefs :: !(Array DefID (Def (Exp Seq TempRef))),
-    tempScopeProofs :: ![Proof (Exp Seq TempRef)],
     tempScopeEval :: ![Compound (Exp Seq TempRef)],
-    -- | Symbols that need to be resolved.
+
+    -- | Expressions to resolve
+    tempScopeRenameTab :: !(Array TempRef TempExp),
+    -- | Local symbols that need to be resolved.
     tempScopeSyms :: !(HashMap Symbol Resolution),
     -- | The enclosed scope.
     tempScopeEnclosed :: ![ScopeID]
   }
+
+data TempExp =
+    TempExp {
+      tempExp :: !(Exp Seq TempRef)
+    }
+  | TempSym {
+      tempSym :: !Symbol
+    }
+    deriving (Eq, Ord)
+
+instance Hashable TempExp where
+  hashWithSalt s TempExp { tempExp = ex } =
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` ex
+  hashWithSalt s TempSym { tempSym = sym } =
+    s `hashWithSalt` (1 :: Int) `hashWithSalt` sym
 
 -- | Resolution state.
 data ResolveState =
@@ -142,9 +170,315 @@ data ResolveState =
 
 type ResolveT m = ReaderT ResolveState m
 
+data RenameState =
+  RenameState {
+    renameStateCurr :: !TempRef,
+    renameStateTab :: !(HashMap TempExp TempRef)
+  }
+
+type RenameT m = StateT RenameState m
+
+-- What we want to do is go through the source scopes and pluck out
+-- all the 'Exp's that we want to resolve, starting from the leaves
+-- down.  We generate placeholder names (TempRef's) for these, which
+-- serve as the ref type.
+--
+-- Once resolution is done, we should have terms that we can sub in
+-- for every TempRef.  First, we'll convert all the terms we're
+-- resolving into their resolved forms, then, we'll convert the
+-- scopes.
+
+renameSym :: (Monad m) =>
+             Symbol
+          -> RenameT m TempRef
+renameSym ref =
+  let
+    tempsym = TempSym { tempSym = ref }
+  in do
+    -- Check the renaming table to see if we've seen this one before
+    st @ RenameState { renameStateCurr = curr, renameStateTab = tab } <- get
+    case HashMap.lookup tempsym tab of
+      -- If we have, return its TempRef
+      Just tempref -> return tempref
+      -- Otherwise, generate a new one
+      Nothing ->
+        let
+          newidx = succ curr
+        in do
+          put st { renameStateTab = HashMap.insert tempsym newidx tab,
+                   renameStateCurr = succ newidx }
+          return newidx
+
+renameSubExp :: (Monad m) =>
+                Exp Seq TempRef
+             -> RenameT m TempRef
+renameSubExp subexp =
+  let
+    tempexp = TempExp { tempExp  = subexp }
+  in do
+    -- Check the renaming table to see if we've seen this one before
+    st @ RenameState { renameStateCurr = curr,
+                       renameStateTab = tab } <- get
+    case HashMap.lookup tempexp tab of
+      -- If we have, return its TempRef
+      Just tempref -> return tempref
+      -- Otherwise, generate a new one
+      Nothing ->
+        let
+          newidx = succ curr
+        in do
+          put st { renameStateTab = HashMap.insert tempexp newidx tab,
+                   renameStateCurr = newidx }
+          return newidx
+
+renameExp :: (Monad m) =>
+             Exp Seq Symbol
+          -> RenameT m (Exp Seq TempRef)
+-- Replace an Id's symbol with a TempRef
+renameExp i @ Id { idRef = ref } =
+  do
+    tempref <- renameSym ref
+    return i { idRef = tempref }
+-- Translate some Project's into temprefs
+renameExp p @ Project { projectVal = val, projectPos = pos } =
+  do
+    newval <- renameExp val
+    -- Check the value
+    case newval of
+      -- If we're projecting from an identifier, turn this expression
+      -- into an identifier too.
+      Id {} ->
+        do
+          tempref <- renameSubExp p { projectVal = newval }
+          return Id { idRef = tempref, idPos = pos }
+      -- Otherwise, it's just compositional
+      _ -> return p { projectVal = newval }
+-- These are compositional
+renameExp a @ Abs { absCases = cases } =
+  do
+    newcases <- mapM (mapM renameExp) cases
+    return a { absCases = newcases }
+renameExp m @ Match { matchVal = val, matchCases = cases } =
+  do
+    newval <- renameExp val
+    newcases <- mapM (mapM renameExp) cases
+    return m { matchVal = newval, matchCases = newcases }
+renameExp a @ Ascribe { ascribeVal = val, ascribeType = ty } =
+  do
+    newval <- renameExp val
+    newty <- renameExp ty
+    return a { ascribeVal = newval, ascribeType = newty }
+renameExp c @ Call { callInfo = info } =
+  do
+    newinfo <- mapM renameExp info
+    return c { callInfo = newinfo }
+renameExp r @ Record { recordFields = fields } =
+  do
+    newfields <- mapM renameExp fields
+    return r { recordFields = newfields }
+renameExp r @ RecordType { recordTypeFields = fields } =
+  do
+    newfields <- mapM renameExp fields
+    return r { recordTypeFields = newfields }
+renameExp t @ Tuple { tupleFields = fields } =
+  do
+    newfields <- mapM renameExp fields
+    return t { tupleFields = newfields }
+renameExp w @ With { withVal = val, withArgs = args } =
+  do
+    newval <- renameExp val
+    newargs <- renameExp args
+    return w { withVal = newval, withArgs = newargs }
+renameExp w @ Where { whereVal = val, whereProp = prop } =
+  do
+    newval <- renameExp val
+    newprop <- renameExp prop
+    return w { whereVal = newval, whereProp = newprop }
+renameExp a @ Anon { anonParams = params } =
+  do
+    newparams <- mapM renameExp params
+    return a { anonParams = newparams }
+-- These are an exact translation
+renameExp Compound { compoundScope = scopeid, compoundPos = pos } =
+  return Compound { compoundScope = scopeid, compoundPos = pos }
+renameExp Literal { literalVal = lit } = return Literal { literalVal = lit }
+renameExp Bad { badPos = pos } = return Bad { badPos = pos }
+
+renameScope :: (MonadMessages Message m) =>
+               Scope (Exp Seq Symbol)
+            -> m ([Proof TempRef],
+                  [Import TempRef],
+                  [TempRef],
+                  HashMap Symbol (Builder (Exp Seq TempRef)),
+                  HashMap Symbol (Syntax (Exp Seq TempRef)),
+                  HashMap Symbol (Truth (Exp Seq TempRef)),
+                  Array DefID (Def (Exp Seq TempRef)),
+                  [Compound (Exp Seq TempRef)],
+                  Array TempRef TempExp)
+renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
+                    scopeTruths = truths, scopeDefs = defs,
+                    scopeEval = eval, scopeProofs = proofs,
+                    scopeImports = imports, scopeInherits = inherits } =
+  let
+    -- Start with def, that way we never end up assigning it
+    initstate = RenameState { renameStateCurr = def,
+                              renameStateTab = HashMap.empty }
+
+    -- Imports, inherits, and proofs are static expressions.  These
+    -- should always be converted into TempRefs
+    renameStaticExp :: (MonadMessages Message m) =>
+                       Exp Seq Symbol
+                    -> RenameT m TempRef
+    renameStaticExp ex =
+      do
+        -- Do the renaming
+        renamed <- renameExp ex
+        -- We should always see an Id.  It's an internal error if we don't.
+        case renamed of
+          Id { idRef = ref } -> return ref
+          _ ->
+            do
+              internalError "Expected static expression here" [position ex]
+              -- Return the default symbol
+              return def
+
+    renameScope' =
+      let
+      in do
+        newproofs <- mapM (mapM renameStaticExp) proofs
+        newimports <- mapM (mapM renameStaticExp) imports
+        newinherits <- mapM renameStaticExp inherits
+        newbuilders <- mapM (mapM renameExp) builders
+        newsyntax <- mapM (mapM renameExp) syntax
+        newtruths <- mapM (mapM renameExp) truths
+        newdefs <- mapM (mapM renameExp) defs
+        neweval <- mapM (mapM renameExp) eval
+        return (newproofs, newimports, newinherits, newbuilders,
+                newsyntax, newtruths, newdefs, neweval)
+
+    renametab endidx tab =
+      let
+        elems = map (\(a, b) -> (b, a)) (HashMap.toList tab)
+        arr = Array.array (succ def, endidx) elems
+      in
+        arr
+  in do
+    ((proofs, imports, inherits, builders, syntax, truths, defs, eval),
+     RenameState { renameStateCurr = endidx, renameStateTab = tab }) <-
+      runStateT renameScope' initstate
+    return (proofs, imports, inherits, builders, syntax,
+            truths, defs, eval, renametab endidx tab)
+
+-- | Convert a 'TempScope' into a 'Resolved' scope.
+finishScope :: (MonadIO m) =>
+               (ScopeID, TempScope)
+            -> m (ScopeID, Resolved (Exp Seq Ref))
+finishScope (scopeid, TempScope { tempScopeBuilders = builders,
+                                  tempScopeSyntax = syntax,
+                                  tempScopeTruths = truths,
+                                  tempScopeDefs = defs,
+                                  tempScopeEval = eval,
+                                  tempScopeNames = names,
+                                  tempScopeEnclosing = enclosing,
+                                  tempScopeProofs = proofs }) =
+  let
+    subst tmprefvals = (>>= (tmprefvals Array.!))
+  in do
+    tmprefvals <- _
+    return (scopeid,
+            Resolved {
+              -- Names and enclosing scopes carry over directly
+              resolvedNames = names,
+              resolvedEnclosing = enclosing,
+
+              resolvedProofs = _,
+              resolvedImports = _,
+              resolvedInherits = _,
+              -- For the rest, substitute the expression back in
+              resolvedBuilders = fmap (fmap (subst tmprefvals)) builders,
+              resolvedSyntax = fmap (fmap (subst tmprefvals)) syntax,
+              resolvedTruths = fmap (fmap (subst tmprefvals)) truths,
+              resolvedDefs = fmap (fmap (subst tmprefvals)) defs,
+              resolvedEval = fmap (fmap (subst tmprefvals)) eval
+            })
+
+-- | Core resolution algorithm.
+resolveScopes :: (MonadIO m) =>
+                 Array ScopeID TempScope
+              -- ^ The current scope state
+              -> BitArray ScopeID
+              -- ^ The current workset
+              -> IOBitArray ScopeID
+              -- ^ The array into which to accumulate the next workset
+              -> m (Array ScopeID TempScope)
+resolveScopes tempscopes workset nextworkset =
+  let
+    arrbounds = Array.bounds tempscopes
+
+    resolveScope :: (MonadIO m) =>
+                    (ScopeID, TempScope)
+                 -> m (ScopeID, TempScope)
+    -- Skip this scope if it's not in the workset
+    resolveScope elem @ (idx, _) | workset BitArray.! idx = return elem
+    resolveScope curr @ (scopeid,
+                         TempScope { tempScopeSyms = resolutions }) =
+      let
+        syms = HashMap.keys resolutions
+
+        -- | Resolve one symbol
+        resolveSymbol :: (MonadIO m) =>
+                         Symbol
+                      -- ^ The symbol to resolve
+                      -> m (Symbol, Resolution)
+        resolveSymbol sym = _
+
+        finishScope :: (MonadIO m) =>
+                       HashMap Symbol Resolution
+                    -> m (ScopeID, TempScope)
+        finishScope newresolutions
+          | resolutions == newresolutions = return curr
+          | otherwise =
+            do
+              -- Resolve all symbols
+              -- Use the new resolutions to resolve all imports
+
+              -- Use the new resoultions to resolve all inherits
+
+              -- Propagate this change to all the scopes that
+              -- depend on this one
+              _
+      in do
+        -- Resolve all symbols using the previous scope
+        newresolutions <- mapM resolveSymbol syms
+        finishScope (HashMap.fromList newresolutions)
+
+    resolveRound :: (MonadIO m) =>
+                    m (Array ScopeID TempScope)
+    resolveRound =
+      do
+        -- Attempt to resolve all the external symbols
+        newtempscopes <- mapM resolveScope (Array.assocs tempscopes)
+        return (Array.array arrbounds newtempscopes)
+  in do
+    -- Clear the next workset array
+    liftIO (IOBitArray.fill nextworkset False)
+    -- Run one round
+    newtempscopes <- resolveRound
+    -- Check to see if we're done
+    done <- liftIO (IOBitArray.and nextworkset)
+    if done
+      -- If the next workset is empty, then we're done
+      then return newtempscopes
+      -- Otherwise, recurse
+      else do
+        -- Make the next workset
+        newworkset <- liftIO (IOBitArray.freeze nextworkset)
+        -- Recurse with the new tempscopes and workset array
+        resolveScopes newtempscopes newworkset nextworkset
+
 -- | Resolve all references in a 'Surface' syntax structure and link
 -- all scopes together.
-resolve :: (MonadIO m) =>
+resolve :: (MonadMessages Message m, MonadIO m) =>
            Surface (Scope (Exp Seq Symbol))
         -- ^ The syntax structure to resolve.
         -> m (Surface (Resolved (Exp Seq Ref)))
@@ -154,14 +488,21 @@ resolve surface @ Surface { surfaceScopes = scopes } =
     arrbounds = Array.bounds scopes
 
     -- Create the initial state for resolution
-    initialState :: (MonadIO m) =>
+    initialState :: (MonadMessages Message m, MonadIO m) =>
                     m (Array ScopeID TempScope)
     initialState =
       let
-        mapfun :: (MonadIO m) =>
+        mapfun :: (MonadMessages Message m, MonadIO m) =>
                   IOArray ScopeID [ScopeID]
                -> (ScopeID, Scope (Exp Seq Symbol))
-               -> m (ScopeID, HashMap Symbol Resolution)
+               -> m (ScopeID, HashMap Symbol Resolution,
+                     [Proof TempRef], [Import TempRef], [TempRef],
+                     HashMap Symbol (Builder (Exp Seq TempRef)),
+                     HashMap Symbol (Syntax (Exp Seq TempRef)),
+                     HashMap Symbol (Truth (Exp Seq TempRef)),
+                     Array DefID (Def (Exp Seq TempRef)),
+                     [Compound (Exp Seq TempRef)],
+                     Array TempRef TempExp)
         mapfun enclosedarr (scopeid, scope) =
           let
             -- Gather up all the references
@@ -176,24 +517,50 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                   liftIO (IOArray.writeArray enclosedarr enclosing
                                              (scopeid : enclosed))
               _ -> return ()
-            return (scopeid, HashMap.fromList ents)
+            (proofs, imports, inherits, builders,
+             syntax, truths, defs, eval, renametab) <- renameScope scope
+            return (scopeid, HashMap.fromList ents, proofs, imports, inherits,
+                    builders, syntax, truths, defs, eval, renametab)
 
         -- Create the 'TempScope's out of their components
-        makeTempScopes :: Array ScopeID [ScopeID]
-                       -> [(ScopeID, HashMap Symbol Resolution)]
-                       -> Array ScopeID TempScope
-        makeTempScopes enclosedarr =
+        makeTempScopes :: MonadIO m =>
+                          Array ScopeID [ScopeID]
+                       -> [(ScopeID, HashMap Symbol Resolution,
+                            [Proof TempRef], [Import TempRef], [TempRef],
+                            HashMap Symbol (Builder (Exp Seq TempRef)),
+                            HashMap Symbol (Syntax (Exp Seq TempRef)),
+                            HashMap Symbol (Truth (Exp Seq TempRef)),
+                            Array DefID (Def (Exp Seq TempRef)),
+                            [Compound (Exp Seq TempRef)],
+                            Array TempRef TempExp)]
+                       -> m (Array ScopeID TempScope)
+        makeTempScopes enclosedarr scopedata =
           let
             -- Map function
-            makeTempScope (scopeid, syms) =
+            makeTempScope (scopeid, syms, proofs, imports, inherits,
+                           builders, syntax, truths, defs, eval, renametab) =
               let
+                Scope { scopeEnclosing = enclosing,
+                        scopeNames = names } = scopes Array.! scopeid
                 -- Lookup the enclosed scopes
                 enclosed = enclosedarr Array.! scopeid
-              in
-                (scopeid, TempScope { tempScopeSyms = syms,
-                                      tempScopeEnclosed = enclosed })
-          in
-            Array.array arrbounds . map makeTempScope
+              in do
+                return (scopeid, TempScope { tempScopeNames = names,
+                                             tempScopeEnclosing = enclosing,
+                                             tempScopeProofs = proofs,
+                                             tempScopeImports = imports,
+                                             tempScopeInherits = inherits,
+                                             tempScopeBuilders = builders,
+                                             tempScopeSyntax = syntax,
+                                             tempScopeTruths = truths,
+                                             tempScopeDefs = defs,
+                                             tempScopeEval = eval,
+                                             tempScopeRenameTab = renametab,
+                                             tempScopeSyms = syms,
+                                             tempScopeEnclosed = enclosed })
+          in do
+            tempscopes <- mapM makeTempScope scopedata
+            return (Array.array arrbounds tempscopes)
 
       in do
         -- Run through the scopes, extract the referenced symbols,
@@ -201,111 +568,9 @@ resolve surface @ Surface { surfaceScopes = scopes } =
         enclosedarr <- liftIO (IOArray.newArray arrbounds [])
         tempscopes <- mapM (mapfun enclosedarr) (Array.assocs scopes)
         frozenenclosed <- liftIO (IOArray.unsafeFreeze enclosedarr)
-        return (makeTempScopes frozenenclosed tempscopes)
-
-    -- | Core resolution algorithm.
-    resolveScopes :: (MonadIO m) =>
-                     Array ScopeID TempScope
-                  -- ^ The current scope state
-                  -> BitArray ScopeID
-                  -- ^ The current workset
-                  -> IOBitArray ScopeID
-                  -- ^ The array into which to accumulate the next workset
-                  -> m (Array ScopeID TempScope)
-    resolveScopes tempscopes workset nextworkset =
-      let
-        resolveScope :: (MonadIO m) =>
-                        (ScopeID, TempScope)
-                     -> m (ScopeID, TempScope)
-        -- Skip this scope if it's not in the workset
-        resolveScope elem @ (idx, _) | workset BitArray.! idx = return elem
-        resolveScope curr @ (scopeid,
-                             TempScope { tempScopeSyms = resolutions }) =
-          let
-            syms = HashMap.keys resolutions
-
-            -- | Resolve one symbol
-            resolveSymbol :: (MonadIO m) =>
-                             Symbol
-                          -- ^ The symbol to resolve
-                          -> m (Symbol, Resolution)
-            resolveSymbol sym = _
-
-            finishScope :: (MonadIO m) =>
-                           HashMap Symbol Resolution
-                        -> m (ScopeID, TempScope)
-            finishScope newresolutions
-              | resolutions == newresolutions = return curr
-              | otherwise =
-                do
-                  -- Use the new resolutions to resolve all imports
-
-                  -- Use the new resoultions to resolve all inherits
-
-                  -- Propagate this change to all the scopes that
-                  -- depend on this one
-                  _
-          in do
-            -- Resolve all symbols using the previous scope
-            newresolutions <- mapM resolveSymbol syms
-            finishScope (HashMap.fromList newresolutions)
-
-        resolveRound :: (MonadIO m) =>
-                        m (Array ScopeID TempScope)
-        resolveRound =
-          do
-            -- Attempt to resolve all the external symbols
-            newtempscopes <- mapM resolveScope (Array.assocs tempscopes)
-            return (Array.array arrbounds newtempscopes)
-      in do
-        -- Clear the next workset array
-        liftIO (IOBitArray.fill nextworkset False)
-        -- Run one round
-        newtempscopes <- resolveRound
-        -- Check to see if we're done
-        done <- liftIO (IOBitArray.and nextworkset)
-        if done
-          -- If the next workset is empty, then we're done
-          then return newtempscopes
-          -- Otherwise, recurse
-          else do
-            -- Make the next workset
-            newworkset <- liftIO (IOBitArray.freeze nextworkset)
-            -- Recurse with the new tempscopes and workset array
-            resolveScopes newtempscopes newworkset nextworkset
+        makeTempScopes frozenenclosed tempscopes
 
     initworkset = (BitArray.true arrbounds)
-
-    -- | Convert a 'TempScope' into a 'Resolved' scope.
-    finishScope :: (MonadIO m) =>
-                   (ScopeID, TempScope)
-                -> m (ScopeID, Resolved (Exp Seq Ref))
-    finishScope (scopeid, TempScope { tempScopeBuilders = builders,
-                                      tempScopeSyntax = syntax,
-                                      tempScopeTruths = truths,
-                                      tempScopeDefs = defs,
-                                      tempScopeProofs = proofs,
-                                      tempScopeEval = eval }) =
-      let
-        Scope { scopeEnclosing = enclosing,
-                scopeNames = names } = scopes Array.! scopeid
-
-        subst tmprefvals = (>>= (tmprefvals Array.!))
-      in do
-        tmprefvals <- _
-        return (scopeid,
-                Resolved {
-                  resolvedBuilders = fmap (fmap (subst tmprefvals)) builders,
-                  resolvedSyntax = fmap (fmap (subst tmprefvals)) syntax,
-                  resolvedTruths = fmap (fmap (subst tmprefvals)) truths,
-                  resolvedDefs = fmap (fmap (subst tmprefvals)) defs,
-                  resolvedProofs = fmap (fmap (subst tmprefvals)) proofs,
-                  resolvedEval = fmap (fmap (subst tmprefvals)) eval,
-                  resolvedNames = names,
-                  resolvedImports = _,
-                  resolvedInherits = _,
-                  resolvedEnclosing = enclosing
-                })
   in do
     -- Set up the initial state
     nextworkset <- liftIO (IOBitArray.newArray arrbounds True)
