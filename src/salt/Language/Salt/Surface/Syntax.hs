@@ -120,6 +120,7 @@ import Text.Format hiding ((<$>))
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
 
+import qualified Data.Array as Array
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.IntMap as IntMap
@@ -1294,6 +1295,21 @@ instance Format DefID where
 instance Monad m => FormatM m DefID where
   formatM = return . format
 
+instance (MonadSymbols m, FormatM m scopety) =>
+         FormatM m (Surface scopety) where
+  formatM Surface { surfaceScopes = scopes, surfaceComponents = comps } =
+    let
+      formatEntry (key, ent) =
+        do
+          entdoc <- formatM ent
+          return $! tupleDoc [format key, entdoc]
+    in do
+      compdocs <- mapM formatM comps
+      scopedocs <- mapM formatEntry (Array.assocs scopes)
+      return $! compoundApplyDoc (string "Surface")
+                                 [(string "scopes", listDoc scopedocs),
+                                  (string "components", listDoc compdocs)]
+
 instance (MonadSymbols m) => FormatM m Ref where
   formatM Ref { refSymbol = sym, refScopeID = scopeid } =
     do
@@ -1389,7 +1405,7 @@ formatNames arr =
                               (string "protected", protecteddocs),
                               (string "public", publicdocs)]
 
-instance (MonadSymbols m, MonadPositions m) => FormatM m Component where
+instance (MonadSymbols m) => FormatM m Component where
   formatM Component { compExpected = Just expected, compScope = scope } =
     do
       expecteddoc <- formatM expected
@@ -1774,6 +1790,23 @@ listMapPickler = xpWrap (HashMap.fromList, HashMap.toList)
                         (xpElemNodes (gxFromString "Map")
                                      (xpList (xpElem (gxFromString "entry")
                                                      xpickle (xpList xpickle))))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] scopety) =>
+         XmlPickler [NodeG [] tag text] (Surface scopety)  where
+  xpickle =
+    xpWrap (\(scopes, comps) ->
+             Surface { surfaceScopes =
+                         Array.listArray (toEnum 0, toEnum (length scopes - 1))
+                                         scopes,
+                       surfaceComponents = comps },
+            \Surface { surfaceScopes = scopes, surfaceComponents = comps } ->
+             (Array.elems scopes, comps))
+           (xpElemNodes (gxFromString "Surface")
+                        (xpPair (xpElemNodes (gxFromString "scopes")
+                                             (xpList xpickle))
+                                (xpElemNodes (gxFromString "components")
+                                             (xpList xpickle))))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
          XmlPickler [NodeG [] tag text] DefID  where

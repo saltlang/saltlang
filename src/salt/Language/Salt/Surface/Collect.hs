@@ -58,6 +58,8 @@ module Language.Salt.Surface.Collect(
        collectFiles,
 
        -- * Utilities
+       loadFile,
+       loadComponent,
        componentFileName
        ) where
 
