@@ -70,6 +70,9 @@ module Language.Salt.Surface.Syntax(
        -- ** Scopes
        Scope(..),
        Resolved(..),
+       Elaborated(..),
+
+       -- *** Scope Elements
        Syntax(..),
        Truth(..),
        Proof(..),
@@ -212,6 +215,33 @@ data Resolved expty =
     -- | A compound expression to which this scope evaluates, or @[]@
     -- for scopes that have no value.
     resolvedEval :: ![Compound expty]
+  }
+  deriving (Eq, Functor, Foldable, Traversable)
+
+data Elaborated expty =
+  Elaborated {
+    elaboratedModules :: !(HashMap Symbol expty),
+    elaboratedSignatures :: !(HashMap Symbol expty),
+    elaboratedClasses :: !(HashMap Symbol expty),
+    elaboratedInterfaces :: !(HashMap Symbol expty),
+    elaboratedTypeclasses :: !(HashMap Symbol expty),
+    elaboratedInstances :: !(HashMap Symbol expty),
+    -- | The truth environment for this scope.  This contains all
+    -- theorems, axioms, and invariants.
+    elaboratedTruths :: !(HashMap Symbol (Truth expty)),
+    -- | An array mapping 'DefID's to all local definitions in the scope.
+    elaboratedDefs :: !(Array DefID (Def expty)),
+    -- | A map from names to definition IDs.
+    elaboratedNames :: !(Array Visibility (HashMap Symbol [DefID])),
+    -- | Proofs given in this scope.
+    elaboratedProofs :: ![Proof expty],
+    -- | The enclosing scope, if one exists.
+    elaboratedEnclosing :: !(Maybe ScopeID),
+    -- | The scopes from which this one inherits definitions.
+    elaboratedInherits :: ![ScopeID],
+    -- | A compound expression to which this scope evaluates, or @[]@
+    -- for scopes that have no value.
+    elaboratedEval :: ![Compound expty]
   }
   deriving (Eq, Functor, Foldable, Traversable)
 
