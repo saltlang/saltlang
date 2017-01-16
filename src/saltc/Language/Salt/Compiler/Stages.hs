@@ -33,15 +33,12 @@
 module Language.Salt.Compiler.Stages(
        lex,
        parse,
-       collect,
-       dumpSurface
+       collect
        ) where
 
 import Blaze.ByteString.Builder
 import Control.Monad
 import Control.Monad.Artifacts.Class
-import Control.Monad.Collect
-import Control.Monad.Components
 import Control.Monad.FileArtifacts
 import Control.Monad.Genpos
 import Control.Monad.Gensym
@@ -59,7 +56,7 @@ import Language.Salt.Surface.AST(AST, astDot)
 import Language.Salt.Surface.Collect
 import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
-import Language.Salt.Surface.Syntax(Component, Exp)
+import Language.Salt.Surface.Syntax(Surface)
 import Language.Salt.Surface.Token
 import Prelude hiding (lex)
 import System.IO.Error
@@ -70,6 +67,7 @@ import Text.XML.Expat.Pickle
 import qualified Data.ByteString as Strict hiding (drop, break)
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy as Lazy
+import qualified Language.Salt.Surface.Syntax as Surface
 import qualified Text.XML.Expat.Format as XML
 
 createArtifact :: (MonadMessages Message m,
@@ -100,8 +98,8 @@ tokensExt = Strict.fromString $! extSeparator : "tokens"
 astExt :: Strict.ByteString
 astExt = Strict.fromString $! extSeparator : "ast"
 
-surfaceExt :: Strict.ByteString
-surfaceExt = Strict.fromString $! extSeparator : "surface"
+collectedName :: Strict.ByteString
+collectedName = Strict.fromString $! extSeparator : "collected"
 
 xmlExt :: Strict.ByteString
 xmlExt = Strict.fromString $! extSeparator : "xml"
@@ -187,37 +185,37 @@ printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
     when savedot (printDotAST fstr ast)
     when savexml (printXMLAST fstr ast)
 
-printTextSurface :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
-                     MonadArtifacts Strict.ByteString m) =>
-                    Strict.ByteString -> Component (Exp Symbol) -> m ()
-printTextSurface fname scope =
-  let
-    surfacefile = Strict.append fname surfaceExt
-  in do
-    surfacedoc <- formatM scope
-    createArtifact surfacefile (buildGreedy 4 120 False surfacedoc)
+printTextCollected :: (MonadPositions m, MonadSymbols m,
+                       MonadMessages Message m,
+                       MonadArtifacts Strict.ByteString m) =>
+                      CollectedSurface -> m ()
+printTextCollected surface =
+  do
+    collecteddoc <- formatM surface
+    createArtifact collectedName (buildGreedy 4 120 False collecteddoc)
 
-printXMLSurface :: (MonadArtifacts Strict.ByteString m,
-                    MonadMessages Message m) =>
-                   Strict.ByteString -> Component (Exp Symbol) -> m ()
-printXMLSurface fname scope =
+printXMLCollected :: (MonadArtifacts Strict.ByteString m,
+                      MonadMessages Message m) =>
+                     CollectedSurface -> m ()
+printXMLCollected collected =
   let
-    xmlfile = Strict.concat [fname, surfaceExt, xmlExt]
-    pickler = xpRoot (xpElem (Strict.fromString "file")
-                             (xpAttrFixed (Strict.fromString "name") fname)
-                             xpickle)
-    xmltree = XML.indent 2 (pickleTree pickler ((), scope))
+    xmlfile = Strict.concat [collectedName, xmlExt]
+
+    pickler :: PU (Node Strict.ByteString Strict.ByteString) CollectedSurface
+    pickler = xpRoot xpickle
+
+    xmltree = XML.indent 2 (pickleTree pickler collected)
   in
     createLazyBytestringArtifact xmlfile (XML.format xmltree)
 
-printSurface :: (MonadIO m, MonadPositions m, MonadSymbols m,
-                 MonadMessages Message m, MonadArtifacts Strict.ByteString m) =>
-                Save -> Strict.ByteString -> Component (Exp Symbol) -> m ()
-printSurface Save { saveXML = savexml, saveText = savetxt }
-             fname ast =
+printCollected :: (MonadIO m, MonadPositions m, MonadSymbols m,
+                   MonadMessages Message m,
+                   MonadArtifacts Strict.ByteString m) =>
+                  Save -> CollectedSurface -> m ()
+printCollected Save { saveXML = savexml, saveText = savetxt } collected =
   do
-    when savetxt (printTextSurface fname ast)
-    when savexml (printXMLSurface fname ast)
+    when savetxt (printTextCollected collected)
+    when savexml (printXMLCollected collected)
 
 getComponentName :: MonadGensym m =>
                     Strict.ByteString -> m [Symbol]
@@ -258,7 +256,8 @@ lex Options { optStages = stages, optComponents = True }
             Nothing -> return ()
             Just (fname, content) ->
               do
-                (_, toks) <- lift (runLexer lexRemaining fname content)
+                (_, toks) <- lift (runLexerWithTokens lexRemaining
+                                                      fname content)
                 printTokens save fname toks
     in
       mapM_ lexOnlyFile
@@ -272,7 +271,7 @@ lex Options { optStages = stages, optComponents = True }
           case res of
             Nothing -> return ()
             Just (fname, content) ->
-              lift (runLexerNoTokens lexRemaining fname content)
+              lift (runLexer lexRemaining fname content)
     in
       mapM_ lexOnlyFile
 lex Options { optStages = stages, optComponents = False }
@@ -288,7 +287,8 @@ lex Options { optStages = stages, optComponents = False }
             Nothing -> return ()
             Just (fname, content) ->
               do
-                (_, toks) <- lift (runLexer lexRemaining fname content)
+                (_, toks) <- lift (runLexerWithTokens lexRemaining
+                                                      fname content)
                 printTokens save fname toks
     in
       mapM_ lexOnlyFile
@@ -301,7 +301,7 @@ lex Options { optStages = stages, optComponents = False }
           case res of
             Nothing -> return ()
             Just (fname, content) ->
-              lift (runLexerNoTokens lexRemaining fname content)
+              lift (runLexer lexRemaining fname content)
     in
       mapM_ lexOnlyFile
 
@@ -327,7 +327,7 @@ parse Options { optStages = stages, optComponents = True } names
             Nothing -> return Nothing
             Just (fname, content) ->
               do
-                (out, tokens) <- lift (parser fname content)
+                (out, tokens) <- lift (parserWithTokens fname content)
                 printTokens savetokens fname tokens
                 case out of
                   Just ast ->
@@ -351,7 +351,7 @@ parse Options { optStages = stages, optComponents = True } names
             Nothing -> return Nothing
             Just (fname, content) ->
               do
-                out <- lift (parserNoTokens fname content)
+                out <- lift (parser fname content)
                 case out of
                   Just ast ->
                     do
@@ -375,7 +375,7 @@ parse Options { optStages = stages, optComponents = False } names
             Nothing -> return Nothing
             Just (fname, content) ->
               do
-                (out, tokens) <- lift (parser fname content)
+                (out, tokens) <- lift (parserWithTokens fname content)
                 printTokens savetokens fname tokens
                 case out of
                   Just ast ->
@@ -398,7 +398,7 @@ parse Options { optStages = stages, optComponents = False } names
             Nothing -> return Nothing
             Just (fname, content) ->
               do
-                out <- lift (parserNoTokens fname content)
+                out <- lift (parser fname content)
                 case out of
                   Just ast ->
                     do
@@ -408,71 +408,66 @@ parse Options { optStages = stages, optComponents = False } names
     in
       mapM_ (parseFile CmdLine) names
 
-dumpSurface :: Options -> ComponentsT (Exp Symbol) (FileArtifactsT Frontend) ()
-dumpSurface Options { optStages = stages } =
-  let
-    savesurface = stages ! Collect
-
-    mapfun :: ([Symbol], Component (Exp Symbol)) ->
-              ComponentsT (Exp Symbol) (FileArtifactsT Frontend) ()
-    mapfun (cname, scope) =
-      do
-        fname <- componentFileName cname
-        printSurface savesurface fname scope
-  in
-    when (saveXML savesurface || saveText savesurface)
-      (do
-         comps <- components
-         mapM_ mapfun comps)
+type CollectedSurface = Surface CollectedScope
+type CollectedScope = Surface.Scope CollectedExp
+type CollectedExp = Surface.Exp Surface.Seq Symbol
 
 -- | Run the collect phase.
 collect :: Options
         -- ^ Compiler options
         -> [Strict.ByteString]
         -- ^ Inputs to parse.
-        -> CollectT (Exp Symbol) (FileArtifactsT Frontend) ()
+        -> FileArtifactsT Frontend ()
 collect Options { optStages = stages, optComponents = compnames } names
   | saveText (stages ! Lexer) || saveXML (stages ! Lexer) =
     let
       savetokens = stages ! Lexer
       saveast = stages ! Parser
+      savecollected = stages ! Collect
 
       parseFile :: Filename -> Lazy.ByteString ->
-                   CollectT (Exp Symbol) (FileArtifactsT Frontend) (Maybe AST)
+                   FileArtifactsT Frontend (Maybe AST)
       parseFile fname content =
         do
-          (out, tokens) <- lift (lift (parser fname content))
-          lift (printTokens savetokens fname tokens)
+          (out, tokens) <- lift (parserWithTokens fname content)
+          printTokens savetokens fname tokens
           case out of
             Just ast ->
               do
-                lift (printAST saveast fname ast)
+                printAST saveast fname ast
                 return out
             Nothing -> return out
     in
       if compnames
         then do
           cnames <- mapM getComponentName names
-          mapM_ (collectComponent parseFile CmdLine) cnames
-        else mapM_ (collectFile parseFile CmdLine) names
+          surface <- collectComponents parseFile (zip (repeat CmdLine) cnames)
+          printCollected savecollected surface
+        else do
+          surface <- collectFiles parseFile (zip (repeat CmdLine) names)
+          printCollected savecollected surface
   | otherwise =
     let
       saveast = stages ! Parser
+      savecollected = stages ! Collect
 
       parseFile :: Filename -> Lazy.ByteString ->
-                   CollectT (Exp Symbol) (FileArtifactsT Frontend) (Maybe AST)
+                   FileArtifactsT Frontend (Maybe AST)
       parseFile fname content =
         do
-          out <- lift (lift (parserNoTokens fname content))
+          out <- lift (parser fname content)
           case out of
             Just ast ->
               do
-                lift (printAST saveast fname ast)
+                printAST saveast fname ast
                 return out
             Nothing -> return out
     in do
       if compnames
         then do
           cnames <- mapM getComponentName names
-          mapM_ (collectComponent parseFile CmdLine) cnames
-        else mapM_ (collectFile parseFile CmdLine) names
+          surface <- collectComponents parseFile (zip (repeat CmdLine) cnames)
+          printCollected savecollected surface
+        else do
+          surface <- collectFiles parseFile (zip (repeat CmdLine) names)
+          printCollected savecollected surface

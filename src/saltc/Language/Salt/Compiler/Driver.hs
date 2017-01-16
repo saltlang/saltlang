@@ -33,7 +33,6 @@ module Language.Salt.Compiler.Driver(
        run
        ) where
 
-import Control.Monad.Collect
 import Control.Monad.FileArtifacts
 import Control.Monad.FileLoader
 import Control.Monad.Frontend
@@ -82,9 +81,7 @@ run opts @ Options { optInputs = inputs, optStages = stages,
         return ()
     (Lexer, Collect) ->
       let
-        artifacts = runCollectTComponentsT (collect opts inputs)
-                                           (const $! dumpSurface opts)
-        loader = runFileArtifactsT artifacts distdir
+        loader = runFileArtifactsT (collect opts inputs) distdir
         msgs = runFileLoaderT loader srcdirs
         front = putMessagesT stderr Error msgs
       in do
