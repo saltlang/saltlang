@@ -1,4 +1,4 @@
--- Copyright (c) 2015 Eric McCorkle.  All rights reserved.
+-- Copyright (c) 2017 Eric McCorkle.  All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
 -- modification, are permitted provided that the following conditions
@@ -28,11 +28,12 @@
 -- OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
 -- SUCH DAMAGE.
 
-module Tests.Language.Salt.Core(tests) where
+module Tests.Language.Salt.Core.Patterns(tests) where
 
 import Test.HUnitPlus.Base
 
-import qualified Tests.Language.Salt.Core.Syntax as Syntax
+testlist :: [Test]
+testlist = []
 
 tests :: Test
-tests = "Core" ~: [ Syntax.tests ]
+tests = "Patterns" ~: testlist
