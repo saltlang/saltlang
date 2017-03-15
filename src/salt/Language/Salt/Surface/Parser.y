@@ -705,13 +705,6 @@ static_exp :: { Exp }
                                                      namePos = idpos }],
                              projectPos = pos }
                }
-           | static_exp DOT LPAREN project_list RPAREN
-              { let
-                  pos = position $1 <> position $5
-                in
-                  Project { projectVal = $1, projectFields = reverse $4,
-                            projectPos = pos }
-              }
            | type_builder_kind args_opt extends
              LBRACE def_list group_list RBRACE
                { let
