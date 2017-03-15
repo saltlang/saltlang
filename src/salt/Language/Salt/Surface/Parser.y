@@ -436,11 +436,29 @@ open_def :: { Element }
                in
                  Proof { proofName = $2, proofBody = body, proofPos = pos }
              }
-         | IMPORT static_exp
+         | IMPORT static_exp DOT ident
+             { let
+                 (idsym, idpos) = $4
+                 pos = position $1 <> idpos
+                 names = [Name { nameSym = idsym, namePos = idpos }]
+               in
+                 Import { importExp = $2, importNames = names, importPos = pos }
+             }
+         | IMPORT static_exp DOT LPAREN project_list RPAREN
              { let
                  pos = position $1 <> position $2
+
+                 mapfun n @ Name { nameSym = FieldName { fieldSym = sym } } =
+                   n { nameSym = sym }
                in
-                 Import { importExp = $2, importPos = pos }
+                 Import { importExp = $2, importNames = map mapfun $5,
+                          importPos = pos }
+             }
+         | IMPORT static_exp DOT LPAREN ELLIPSIS RPAREN
+             { let
+                 pos = position $1 <> position $6
+               in
+                 Import { importExp = $2, importNames = [], importPos = pos }
              }
          | SYNTAX ident fixity precs
              { let
@@ -679,12 +697,21 @@ static_exp :: { Exp }
            | static_exp DOT ident
                { let
                    (idname, idpos) = $3
-                   pos = position $1 <>  idpos
+                   pos = position $1 <> idpos
+                   fname = FieldName { fieldSym = idname }
                  in
                    Project { projectVal = $1,
-                             projectFields = [FieldName { fieldSym = idname }],
+                             projectFields = [Name { nameSym = fname,
+                                                     namePos = idpos }],
                              projectPos = pos }
                }
+           | static_exp DOT LPAREN project_list RPAREN
+              { let
+                  pos = position $1 <> position $5
+                in
+                  Project { projectVal = $1, projectFields = reverse $4,
+                            projectPos = pos }
+              }
            | type_builder_kind args_opt extends
              LBRACE def_list group_list RBRACE
                { let
@@ -808,9 +835,11 @@ inner_exp :: { Exp }
              { let
                  (idname, idpos) = $3
                  pos = position $1 <> idpos
+                 fname = FieldName { fieldSym = idname }
                in
                  Project { projectVal = $1,
-                           projectFields = [FieldName { fieldSym = idname }],
+                           projectFields = [Name { nameSym = fname,
+                                                   namePos = idpos }],
                            projectPos = pos }
              }
           | inner_exp DOT LPAREN project_list RPAREN
@@ -830,18 +859,20 @@ inner_exp :: { Exp }
           | literal
              { Literal $1 }
 
-project_list :: { [FieldName] }
+project_list :: { [Name FieldName] }
              : project_list COMMA ident
                  { let
-                     (idname, _) = $3
+                     (idname, idpos) = $3
                    in
-                     FieldName { fieldSym = idname } : $1
+                     Name { nameSym = FieldName { fieldSym = idname },
+                            namePos = idpos } : $1
                  }
              | ident
                  { let
-                     (idname, _) = $1
+                     (idname, idpos) = $1
                    in
-                     [ FieldName { fieldSym = idname } ]
+                     [ Name { nameSym = FieldName { fieldSym = idname },
+                              namePos = idpos } ]
                  }
 
 abstraction_kind :: { (AbstractionKind, Position) }
@@ -991,7 +1022,7 @@ pattern :: { Pattern }
             { let
                 (idname, idpos) = $1
               in
-                Name { nameSym = idname, namePos = idpos }
+                Bind { bindSym = idname, bindPos = idpos }
             }
         | literal
             { Exact $1 }

@@ -68,6 +68,7 @@ module Language.Salt.Message(
        duplicateTruth,
        duplicateSyntax,
        duplicateBuilder,
+       duplicateName,
 
        namelessField,
        undefSymbol,
@@ -333,6 +334,11 @@ data Message =
       tupleMismatchActual :: !Word,
       tupleMismatchPos :: !Position
     }
+    -- | Duplicate name reference binding.
+  | DuplicateName {
+      duplicateElemName :: !Strict.ByteString,
+      duplicateNamePosList :: ![Position]
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -502,6 +508,9 @@ instance Hashable Message where
                                  tupleMismatchPos = pos } =
     s `hashWithSalt` (39 :: Int) `hashWithSalt`
     expected `hashWithSalt` actual `hashWithSalt` pos
+  hashWithSalt s DuplicateName { duplicateElemName = sym,
+                                 duplicateNamePosList = pos } =
+    s `hashWithSalt` (40 :: Int) `hashWithSalt` sym `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity HardTabs {} = Msg.Warning
@@ -587,6 +596,8 @@ instance Msg.Message Message where
                         tupleMismatchActual = actual }
     | expected < actual = string "Too many fields in tuple"
     | otherwise = string "Not enough fields in tuple"
+  brief DuplicateName { duplicateElemName = namestr } =
+    string "Duplicate name reference" <+> bytestring namestr
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -681,6 +692,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions ExpectedRef { expectedRefPos = pos } = [pos]
   positions MissingFields { missingFieldsPos = pos } = [pos]
   positions TupleMismatch { tupleMismatchPos = pos } = [pos]
+  positions DuplicateName { duplicateNamePosList = poslist } = poslist
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1193,3 +1205,16 @@ tupleMismatch expected actual pos =
   message TupleMismatch { tupleMismatchExpected = expected,
                           tupleMismatchActual = actual,
                           tupleMismatchPos = pos }
+
+-- | Report duplicate element names.
+duplicateName :: (MonadMessages Message m, MonadSymbols m) =>
+                 Symbol
+              -- ^ The duplicate field name.
+              -> [Position]
+              -- ^ The position at which the duplicated field occurs.
+              -> m ()
+duplicateName sym poslist =
+  do
+    str <- name sym
+    message DuplicateName { duplicateElemName = str,
+                            duplicateNamePosList = poslist }

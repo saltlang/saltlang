@@ -107,6 +107,7 @@ import Control.Monad.Symbols
 import Data.Array
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
+import Data.HashSet(HashSet)
 import Data.IntMap(IntMap)
 import Data.List(sort)
 import Data.PositionElement
@@ -123,6 +124,7 @@ import Text.XML.Expat.Tree(NodeG)
 import qualified Data.Array as Array
 import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.HashMap.Strict as HashMap
+import qualified Data.HashSet as HashSet
 import qualified Data.IntMap as IntMap
 
 -- | Unique ID for initializers.
@@ -298,8 +300,11 @@ data Import expty =
   Import {
     -- | The visibility of the truth.
     importVisibility :: !Visibility,
-    -- | The name(s) to import.
+    -- | The scope from which to import.
     importExp :: !expty,
+    -- | The definitions to import from the scope.  An empty set means
+    -- "import all definitions".
+    importNames :: !(HashSet Symbol),
     -- | The position in source from which this arises.
     importPos :: !Position
   }
@@ -474,7 +479,7 @@ data Exp callty refty =
       -- | The inner expression
       projectVal :: (Exp callty refty),
       -- | The name of the field being accessed.
-      projectFields :: ![FieldName],
+      projectFields :: !(HashSet FieldName),
       -- | The position in source from which this arises.
       projectPos :: !Position
     }
@@ -656,9 +661,9 @@ instance Eq expty => Eq (Def expty) where
       pat1 == pat2 && init1 == init2
 
 instance Eq expty => Eq (Import expty) where
-  Import { importVisibility = vis1, importExp = exp1 } ==
-    Import { importVisibility = vis2, importExp = exp2 } =
-      vis1 == vis2 && exp1 == exp2
+  Import { importVisibility = vis1, importExp = exp1, importNames = names1 } ==
+    Import { importVisibility = vis2, importExp = exp2, importNames = names2 } =
+      vis1 == vis2 && exp1 == exp2 && names1 == names2
 
 instance Eq expty => Eq (Compound expty) where
   Exp { expVal = exp1 } == Exp { expVal = exp2 } = exp1 == exp2
@@ -873,10 +878,17 @@ instance Ord expty => Ord (Def expty) where
       out -> out
 
 instance Ord expty => Ord (Import expty) where
-  compare Import { importVisibility = vis1, importExp = exp1 }
-          Import { importVisibility = vis2, importExp = exp2 } =
-    case compare vis1 vis2 of
-      EQ -> compare exp1 exp2
+  compare Import { importVisibility = vis1, importExp = exp1,
+                   importNames = names1 }
+          Import { importVisibility = vis2, importExp = exp2,
+                   importNames = names2 } =
+    let
+      sortednames1 = sort (HashSet.toList names1)
+      sortednames2 = sort (HashSet.toList names2)
+    in case compare vis1 vis2 of
+      EQ -> case compare exp1 exp2 of
+        EQ -> compare sortednames1 sortednames2
+        out -> out
       out -> out
 
 instance Ord expty => Ord (Apply expty) where
@@ -989,7 +1001,10 @@ instance (Ord (callty (Exp callty refty)), Ord refty) =>
   compare _ Tuple {} = GT
   compare Project { projectVal = val1, projectFields = names1 }
           Project { projectVal = val2, projectFields = names2 } =
-    case compare names1 names2 of
+    let
+      sortednames1 = sort (HashSet.toList names1)
+      sortednames2 = sort (HashSet.toList names2)
+    in case compare sortednames1 sortednames2 of
       EQ -> compare val1 val2
       out -> out
   compare Project {} _ = LT
@@ -1122,8 +1137,11 @@ instance (Hashable expty, Ord expty) => Hashable (Def expty) where
     s `hashWithSalt` pat `hashWithSalt` init
 
 instance (Hashable expty, Ord expty) => Hashable (Import expty) where
-  hashWithSalt s Import { importExp = exp } =
-    s `hashWithSalt` exp
+  hashWithSalt s Import { importExp = exp, importNames = names } =
+    let
+      sortednames = sort (HashSet.toList names)
+    in
+      s `hashWithSalt` exp `hashWithSalt` sortednames
 
 instance (Hashable expty, Ord expty) => Hashable (Compound expty) where
   hashWithSalt s Exp { expVal = exp } =
@@ -1181,8 +1199,11 @@ instance (Hashable (callty (Exp callty refty)), Hashable refty,
     s `hashWithSalt` (7 :: Int) `hashWithSalt` fields
   hashWithSalt s Tuple { tupleFields = fields } =
     s `hashWithSalt` (8 :: Int) `hashWithSalt` IntMap.toAscList fields
-  hashWithSalt s Project { projectVal = val, projectFields = sym } =
-    s `hashWithSalt` (9 :: Int) `hashWithSalt` sym `hashWithSalt` val
+  hashWithSalt s Project { projectVal = val, projectFields = names } =
+    let
+      sortednames = sort (HashSet.toList names)
+    in
+      s `hashWithSalt` (9 :: Int) `hashWithSalt` sortednames `hashWithSalt` val
   hashWithSalt s Id { idRef = sym } =
     s `hashWithSalt` (10 :: Int) `hashWithSalt` sym
   hashWithSalt s With { withVal = val, withArgs = args } =
@@ -1668,7 +1689,7 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty,
   formatM Project { projectVal = val, projectFields = fields,
                     projectPos = pos } =
     do
-      fielddocs <- mapM formatM fields
+      fielddocs <- mapM formatM (HashSet.toList fields)
       posdoc <- formatM pos
       valdoc <- formatM val
       return (compoundApplyDoc (string "Project")
@@ -2005,14 +2026,17 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Import expty) where
   xpickle =
-    xpWrap (\(vis, (exp, pos)) -> Import { importVisibility = vis,
-                                           importExp = exp,
-                                           importPos = pos },
+    xpWrap (\(vis, (exp, names, pos)) ->
+             Import { importVisibility = vis, importExp = exp,
+                      importNames = HashSet.fromList names, importPos = pos },
             \Import { importVisibility = vis, importExp = exp,
-                      importPos = pos } -> (vis, (exp, pos)))
+                      importNames = names, importPos = pos } ->
+            (vis, (exp, HashSet.toList names, pos)))
            (xpElem (gxFromString "Import") xpickle
-                   (xpPair (xpElemNodes (gxFromString "name") xpickle)
-                           (xpElemNodes (gxFromString "pos") xpickle)))
+                   (xpTriple (xpElemNodes (gxFromString "scope") xpickle)
+                             (xpElemNodes (gxFromString "names")
+                                          (xpList xpickle))
+                             (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] refty) =>
@@ -2344,15 +2368,16 @@ projectPickler :: (GenericXMLString tag, Show tag,
 projectPickler =
   let
     revfunc Project { projectFields = fields, projectVal = val,
-                      projectPos = pos } = (fields, val, pos)
+                      projectPos = pos } = (val, HashSet.toList fields, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(fields, val, pos) -> Project { projectFields = fields,
-                                             projectVal = val,
-                                             projectPos = pos }, revfunc)
+    xpWrap (\(val, fields, pos) ->
+             Project { projectFields = HashSet.fromList fields,
+                       projectVal = val, projectPos = pos }, revfunc)
            (xpElemNodes (gxFromString "Project")
                         (xpTriple (xpElemNodes (gxFromString "value") xpickle)
-                                  (xpElemNodes (gxFromString "fields") xpickle)
+                                  (xpElemNodes (gxFromString "fields")
+                                               (xpList xpickle))
                                   (xpElemNodes (gxFromString "pos") xpickle)))
 
 idPickler :: (GenericXMLString tag, Show tag,

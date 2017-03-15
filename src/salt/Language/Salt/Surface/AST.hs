@@ -57,6 +57,7 @@ module Language.Salt.Surface.AST(
        Exp(..),
        Compound(..),
        Field(..),
+       Name(..),
 
        -- ** Cases and Patterns
        Case(..),
@@ -208,8 +209,11 @@ data Element =
       proofPos :: !Position
     }
   | Import {
-      -- | The value to import.
+      -- | The scope from which to import.
       importExp :: !Exp,
+      -- | The definitions to import from the scope.  An empty set means
+      -- "import all definitions".
+      importNames :: ![Name Symbol],
       -- | The position in source from which this arises.
       importPos :: !Position
     }
@@ -284,11 +288,11 @@ data Pattern =
       asPos :: !Position
     }
     -- | A name binding.  Binds the given name to the contents.
-  | Name {
+  | Bind {
       -- | The name to bind.
-      nameSym :: !Symbol,
+      bindSym :: !Symbol,
       -- | The position in source from which this arises.
-      namePos :: !Position
+      bindPos :: !Position
     }
     -- | An exact pattern.  Matches only the given literal.
   | Exact { exactLit :: !Literal }
@@ -367,7 +371,7 @@ data Exp =
       -- | The inner expression
       projectVal :: !Exp,
       -- | The name(s) of the field(s) being accessed.
-      projectFields :: ![FieldName],
+      projectFields :: ![Name FieldName],
       -- | The position in source from which this arises.
       projectPos :: !Position
     }
@@ -439,6 +443,15 @@ data Field =
     fieldPos :: !Position
   }
 
+-- | A field in a record.
+data Name name =
+  Name {
+    -- | The name.
+    nameSym :: !name,
+    -- | The position in source from which this arises.
+    namePos :: !Position
+  }
+
 -- | A case in a match statement or a function definition.
 data Case =
   Case {
@@ -459,6 +472,9 @@ instance PositionElement Use where
 instance PositionElement Group where
   position Group { groupPos = pos } = pos
 
+instance PositionElement (Name n) where
+  position Name { namePos = pos } = pos
+
 instance PositionElement Element where
   position Builder { builderPos = pos } = pos
   position Def { defPos = pos } = pos
@@ -478,7 +494,7 @@ instance PositionElement Pattern where
   position Split { splitPos = pos } = pos
   position Typed { typedPos = pos } = pos
   position As { asPos = pos } = pos
-  position Name { namePos = pos } = pos
+  position Bind { bindPos = pos } = pos
   position Exact { exactLit = l } = position l
 
 instance PositionElement Exp where
@@ -518,6 +534,9 @@ instance Eq Group where
     Group { groupVisibility = vis2, groupElements = elems2 } =
       vis1 == vis2 && elems1 == elems2
 
+instance Eq n => Eq (Name n) where
+  Name { nameSym = name1 } == Name { nameSym = name2 } = name1 == name2
+
 instance Eq Content where
   Body { bodyScope = b1 } == Body { bodyScope = b2 } = b1 == b2
   Value { valueExp = v1 } == Value { valueExp = v2 } = v1 == v2
@@ -544,7 +563,9 @@ instance Eq Element where
   Proof { proofName = name1, proofBody = body1 } ==
     Proof { proofName = name2, proofBody = body2 } =
       name1 == name2 && body1 == body2
-  Import { importExp = exp1 } == Import { importExp = exp2 } = exp1 == exp2
+  Import { importExp = exp1, importNames = names1 } ==
+    Import { importExp = exp2, importNames = names2 } =
+      exp1 == exp2 && names1 == names2
   Syntax { syntaxSym = sym1, syntaxPrecs = precs1, syntaxFixity = fixity1 } ==
     Syntax { syntaxSym = sym2, syntaxPrecs = precs2, syntaxFixity = fixity2 } =
       sym1 == sym2 && fixity1 == fixity2 && precs1 == precs2
@@ -569,7 +590,7 @@ instance Eq Pattern where
       pat1 == pat2 && ty1 == ty2
   As { asName = name1, asPat = pat1 } == As { asName = name2, asPat = pat2 } =
       name1 == name2 && pat1 == pat2
-  Name { nameSym = name1 } == Name { nameSym = name2 } = name1 == name2
+  Bind { bindSym = bind1 } == Bind { bindSym = bind2 } = bind1 == bind2
   Exact { exactLit = e1 } == Exact { exactLit = e2 } = e1 == e2
   _ == _ = False
 
@@ -643,6 +664,10 @@ instance Ord Group where
         EQ -> compare elems1 elems2
         out -> out
 
+instance Ord n => Ord (Name n) where
+  compare Name { nameSym = name1 } Name { nameSym = name2 } =
+    compare name1 name2
+
 instance Ord Content where
   compare Body { bodyScope = b1 } Body { bodyScope = b2 } = compare b1 b2
   compare Body {} _ = GT
@@ -701,8 +726,11 @@ instance Ord Element where
       out -> out
   compare Proof {} _ = GT
   compare _ Proof {} = LT
-  compare Import { importExp = exp1 } Import { importExp = exp2 } =
-    compare exp1 exp2
+  compare Import { importExp = exp1, importNames = names1 }
+          Import { importExp = exp2, importNames = names2 } =
+    case compare exp1 exp2 of
+      EQ -> compare names1 names2
+      out -> out
   compare Import {} _ = GT
   compare _ Import {} = LT
   compare Syntax { syntaxSym = sym1, syntaxPrecs = precs1,
@@ -754,10 +782,10 @@ instance Ord Pattern where
       out -> out
   compare As {} _ = GT
   compare _ As {} = LT
-  compare Name { nameSym = name1 } Name { nameSym = name2 } =
-    compare name1 name2
-  compare Name {} _ = GT
-  compare _ Name {} = LT
+  compare Bind { bindSym = bind1 } Bind { bindSym = bind2 } =
+    compare bind1 bind2
+  compare Bind {} _ = GT
+  compare _ Bind {} = LT
   compare Exact { exactLit = e1 } Exact { exactLit = e2 } = compare e1 e2
 
 instance Ord Exp where
@@ -880,6 +908,9 @@ instance Hashable Group where
   hashWithSalt s Group { groupVisibility = vis, groupElements = elems } =
     s `hashWithSalt` vis `hashWithSalt` elems
 
+instance Hashable n => Hashable (Name n) where
+  hashWithSalt s Name { nameSym = sym } = s `hashWithSalt` sym
+
 instance Hashable Content where
   hashWithSalt s Body { bodyScope = b } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` b
@@ -902,8 +933,8 @@ instance Hashable Element where
     kind `hashWithSalt` prop `hashWithSalt` proof
   hashWithSalt s Proof { proofName = sym, proofBody = body } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt` sym `hashWithSalt` body
-  hashWithSalt s Import { importExp = exp } =
-    s `hashWithSalt` (7 :: Int) `hashWithSalt` exp
+  hashWithSalt s Import { importExp = exp, importNames = names } =
+    s `hashWithSalt` (7 :: Int) `hashWithSalt` exp `hashWithSalt` names
   hashWithSalt s Syntax { syntaxSym = sym, syntaxPrecs = precs,
                           syntaxFixity = fixity } =
     s `hashWithSalt` (8 :: Int) `hashWithSalt`
@@ -926,7 +957,7 @@ instance Hashable Pattern where
     s `hashWithSalt` (4 :: Int) `hashWithSalt` pat `hashWithSalt` ty
   hashWithSalt s As { asName = sym, asPat = pat } =
     s `hashWithSalt` (5 :: Int) `hashWithSalt` sym `hashWithSalt` pat
-  hashWithSalt s Name { nameSym = sym } =
+  hashWithSalt s Bind { bindSym = sym } =
     s `hashWithSalt` (6 :: Int) `hashWithSalt` sym
   hashWithSalt s (Exact e) = s `hashWithSalt` (7 :: Int) `hashWithSalt` e
 
@@ -1317,7 +1348,7 @@ patternDot As { asName = sym, asPat = pat } =
                       string "shape = \"record\"") <>
             char ';' <!> dquoted (string nodeid) <> string ":pat" <>
           string " -> " <> dquoted (string patname), nodeid)
-patternDot Name { nameSym = sym } =
+patternDot Bind { bindSym = sym } =
   do
     namestr <- name sym
     nodeid <- getNodeID
@@ -1465,7 +1496,7 @@ expDot Project { projectVal = val, projectFields = fields } =
   let
     commabstr = Strict.fromString ", "
   in do
-    names <- mapM (name . fieldSym) fields
+    names <- mapM (name . fieldSym . nameSym) fields
     nodeid <- getNodeID
     (valnode, valname) <- expDot val
     return (valnode <!> dquoted (string nodeid) <+>
@@ -1839,12 +1870,12 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Pattern where
                              [(string "name", namedoc),
                               (string "pos", posdoc),
                               (string "pat", patdoc)])
-  formatM Name { nameSym = sym, namePos = pos } =
+  formatM Bind { bindSym = sym, bindPos = pos } =
     do
-      namedoc <- formatM sym
+      binddoc <- formatM sym
       posdoc <- formatM pos
-      return (compoundApplyDoc (string "Name")
-                             [(string "name", namedoc),
+      return (compoundApplyDoc (string "Bind")
+                             [(string "bind", binddoc),
                               (string "pos", posdoc)])
   formatM Exact { exactLit = e } = formatM e
 
@@ -1916,7 +1947,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
   formatM Project { projectVal = val, projectFields = fields,
                     projectPos = pos } =
     do
-      fielddocs <- mapM formatM fields
+      fielddocs <- mapM (formatM . nameSym) fields
       posdoc <- formatM pos
       valdoc <- formatM val
       return (compoundApplyDoc (string "Project")
@@ -2051,6 +2082,14 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
                                                 xpickle)
                                    (xpElemNodes (gxFromString "pos") xpickle)))
 
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+         XmlPickler [(tag, text)] n) =>
+         XmlPickler [NodeG [] tag text] (Name n) where
+  xpickle = xpWrap (\(sym, pos) -> Name { nameSym = sym, namePos = pos },
+                    \Name { nameSym = sym, namePos = pos } -> (sym, pos))
+                   (xpElem (gxFromString "Name") xpickle
+                           (xpElemNodes (gxFromString "pos") xpickle))
+
 bodyPickler :: (GenericXMLString tag, Show tag,
                 GenericXMLString text, Show text) =>
                PU [NodeG [] tag text] Content
@@ -2174,13 +2213,17 @@ importPickler :: (GenericXMLString tag, Show tag,
                 PU [NodeG [] tag text] Element
 importPickler =
   let
-    revfunc Import { importExp = exp, importPos = pos } = (exp, pos)
+    revfunc Import { importExp = exp, importNames = names,
+                     importPos = pos } = (exp, names, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(exp, pos) -> Import { importExp = exp, importPos = pos }, revfunc)
+    xpWrap (\(exp, names, pos) -> Import { importExp = exp, importNames = names,
+                                           importPos = pos }, revfunc)
            (xpElemNodes (gxFromString "Import")
-                        (xpPair (xpElemNodes (gxFromString "name") xpickle)
-                                (xpElemNodes (gxFromString "pos") xpickle)))
+                        (xpTriple (xpElemNodes (gxFromString "scope") xpickle)
+                                  (xpElemNodes (gxFromString "names")
+                                                (xpList xpickle))
+                                  (xpElemNodes (gxFromString "pos") xpickle)))
 
 syntaxPickler :: (GenericXMLString tag, Show tag,
                  GenericXMLString text, Show text) =>
@@ -2323,16 +2366,16 @@ asPickler =
                    (xpPair (xpElemNodes (gxFromString "pattern") xpickle)
                            (xpElemNodes (gxFromString "pos") xpickle)))
 
-namePickler :: (GenericXMLString tag, Show tag,
-              GenericXMLString text, Show text) =>
+bindPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
              PU [NodeG [] tag text] Pattern
-namePickler =
+bindPickler =
   let
-    revfunc Name { nameSym = sym, namePos = pos } = (sym, pos)
+    revfunc Bind { bindSym = sym, bindPos = pos } = (sym, pos)
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(sym, pos) -> Name { nameSym = sym, namePos = pos }, revfunc)
-           (xpElem (gxFromString "Name") xpickle
+    xpWrap (\(sym, pos) -> Bind { bindSym = sym, bindPos = pos }, revfunc)
+           (xpElem (gxFromString "Bind") xpickle
                    (xpElemNodes (gxFromString "pos") xpickle))
 
 exactPickler :: (GenericXMLString tag, Show tag,
@@ -2354,11 +2397,11 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
       picker Split {} = 2
       picker Typed {} = 3
       picker As {} = 4
-      picker Name {} = 5
+      picker Bind {} = 5
       picker Exact {} = 6
     in
       xpAlt picker [optionPickler, deconstructPickler, splitPickler,
-                    typedPickler, asPickler, namePickler, exactPickler]
+                    typedPickler, asPickler, bindPickler, exactPickler]
 
 compoundPickler :: (GenericXMLString tag, Show tag,
                     GenericXMLString text, Show text) =>

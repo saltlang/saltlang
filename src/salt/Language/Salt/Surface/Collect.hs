@@ -93,6 +93,7 @@ import qualified Data.ByteString.UTF8 as Strict
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.HashMap.Strict as HashMap
 import qualified Data.HashTable.IO as HashTable
+import qualified Data.HashSet as HashSet
 import qualified Data.IntMap as IntMap
 import qualified Language.Salt.Surface.AST as AST
 import qualified Language.Salt.Surface.Syntax as Syntax
@@ -444,8 +445,8 @@ collectPattern pat =
                                       Syntax.asPos = pos },
                 HashMap.insertWith (++) sym [pos] newbinds)
     -- For a name pattern, we bind the field with that name to its own name.
-    collectNamedPattern binds AST.Name { AST.nameSym = sym,
-                                         AST.namePos = pos } =
+    collectNamedPattern binds AST.Bind { AST.bindSym = sym,
+                                         AST.bindPos = pos } =
       return (Just sym, Syntax.Name { Syntax.nameSym = sym,
                                       Syntax.namePos = pos },
               HashMap.insertWith (++) sym [pos] binds)
@@ -594,7 +595,7 @@ collectPattern pat =
         return (Syntax.As { Syntax.asName = sym, Syntax.asPat = collectedPat,
                             Syntax.asPos = pos },
                 HashMap.insertWith (++) sym [pos] newbinds)
-    collectPattern' binds AST.Name { AST.nameSym = sym, AST.namePos = pos } =
+    collectPattern' binds AST.Bind { AST.bindSym = sym, AST.bindPos = pos } =
       return (Syntax.Name { Syntax.nameSym = sym, Syntax.namePos = pos },
               HashMap.insertWith (++) sym [pos] binds)
     -- The rest of these are entirely straightforward
@@ -790,10 +791,27 @@ collectExp AST.Ascribe { AST.ascribeVal = val, AST.ascribeType = ty,
                             Syntax.ascribePos = pos }
 collectExp AST.Project { AST.projectVal = val, AST.projectFields = fields,
                          AST.projectPos = pos } =
-  do
+  let
+    foldfun tab AST.Name { AST.nameSym = sym, AST.namePos = namepos } =
+      HashMap.insertWith (++) sym [namepos] tab
+
+    namemap = foldl foldfun HashMap.empty fields
+
+    collapseNames set (sym, [_]) = return $! HashSet.insert sym set
+    collapseNames set (sym, []) =
+      do
+        internalError "Empty position list collapsing names" [pos]
+        return $! HashSet.insert sym set
+    collapseNames set (fname @ FieldName { fieldSym = sym }, poslist) =
+      do
+        duplicateName sym poslist
+        return $! HashSet.insert fname set
+  in do
     collectedVal <- collectExp val
+    collectedFields <- foldM collapseNames HashSet.empty
+                             (HashMap.toList namemap)
     return Syntax.Project { Syntax.projectVal = collectedVal,
-                            Syntax.projectFields = fields,
+                            Syntax.projectFields = collectedFields,
                             Syntax.projectPos = pos }
 collectExp AST.With { AST.withVal = val, AST.withArgs = args,
                       AST.withPos = pos } =
@@ -908,7 +926,6 @@ collectCase AST.Case { AST.casePat = pat, AST.caseBody = body,
     return Syntax.Case { Syntax.casePatDef = defid, Syntax.caseScope = scopeid,
                          Syntax.casePos = pos }
 
-
 -- | Collect a definition.
 collectElement :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
                   Visibility
@@ -969,10 +986,28 @@ collectElement vis AST.Def { AST.defPattern = pat, AST.defInit = init,
                                  Syntax.defPos = pos }
     addNames vis binds defid
 collectElement vis AST.Import { AST.importExp = exp,
+                                AST.importNames = names,
                                 AST.importPos = pos } =
-  do
+  let
+    foldfun tab AST.Name { AST.nameSym = sym, AST.namePos = namepos } =
+      HashMap.insertWith (++) sym [namepos] tab
+
+    namemap = foldl foldfun HashMap.empty names
+
+    collapseNames set (sym, [_]) = return $! HashSet.insert sym set
+    collapseNames set (sym, []) =
+      do
+        internalError "Empty position list collapsing names" [pos]
+        return $! HashSet.insert sym set
+    collapseNames set (sym, poslist) =
+      do
+        duplicateName sym poslist
+        return $! HashSet.insert sym set
+  in do
+    collectedNames <- foldM collapseNames HashSet.empty (HashMap.toList namemap)
     collectedExp <- collectExp exp
     addImport Syntax.Import { Syntax.importExp = collectedExp,
+                              Syntax.importNames = collectedNames,
                               Syntax.importVisibility = vis,
                               Syntax.importPos = pos }
 -- For Funs, we do the same kind of transformation we did with
