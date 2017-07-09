@@ -112,11 +112,9 @@ data Resolution =
 
 data Error =
     Cyclic { cyclicRefs :: !(HashSet TempRef) }
+  | Ambiguous { ambiguousRefs :: !(HashSet Resolution) }
   | Undefined
     deriving (Eq)
-
-data Result res =
-    Success { successVal :: !res }
 
 -- | Placeholders for anything that might be a static expression.
 -- These are substituted into expressions in a manner similar to
@@ -144,7 +142,7 @@ data TempScope =
     -- | Expressions to resolve
     tempScopeRenameTab :: !(Array TempRef TempExp),
     -- | Local symbols that need to be resolved.
-    tempScopeSyms :: !(HashMap Symbol Resolution),
+    tempScopeSyms :: !(HashMap Symbol (Maybe Resolution)),
     -- | All enclosed scopes
     tempScopeEnclosed :: ![ScopeID]
   }
@@ -269,22 +267,6 @@ instance Semigroup Resolution where
     | enc1 <= enc2 = enc1
     | otherwise = enc2
 
-instance Monad Result where
-  return = Success
-
-  Success { successVal = val } >>= f = f val
-  Cyclic { cyclicRefs = refs } >>= _ = Cyclic { cyclicRefs = refs }
-  Undefined >>= _ = Undefined
-
-instance MonadPlus Result where
-  mzero = Undefined
-
-  mplus out @ Success {} _ = out
-  mplus _ out @ Success {} = out
-  mplus out @ Cyclic {} _ = out
-  mplus _ out @ Cyclic {} = out
-  mplus Undefined Undefined = Undefined
-
 instance Default TempRef where
   def = TempRef { tempRefID = 0 }
 
@@ -389,10 +371,10 @@ renameExp p @ Project { projectVal = val, projectPos = pos } =
 -- XXX We'll need to do something with calls.  Probably the thing to
 -- do is have static calls come out of the parser.
 --
--- Maybe...  On the other hand, if we match the form of calls coming
--- out of the parser, then we get potentially static calls in
--- non-static expressions as well.  Problem with that is that we might
--- have postfix or infix expressions referring to builders.
+-- On the other hand, if we match the form of calls coming out of the
+-- parser, then we get potentially static calls in non-static
+-- expressions as well.  Problem with that is that we might have
+-- postfix or infix expressions referring to builders.
 --
 -- Obvervation: the only time builders in calls can affect another
 -- scope is in a static expression, which we know is of the form
@@ -484,6 +466,8 @@ renameExp Compound { compoundScope = scopeid, compoundPos = pos } =
 renameExp Literal { literalVal = lit } = return Literal { literalVal = lit }
 renameExp Bad { badPos = pos } = return Bad { badPos = pos }
 
+-- Performs renaming on a scope, turning everything that could be a
+-- static expression into a TempRef.
 renameScope :: (MonadMessages Message m) =>
                Scope (Exp Seq Symbol)
             -> m ([Proof TempRef],
@@ -588,7 +572,7 @@ finishScope (scopeid, TempScope { tempScopeBuilders = builders,
             })
 
 -- | Core resolution algorithm.
-resolveScopes :: (MonadIO m) =>
+resolveScopes :: (MonadIO m, MonadMessages Message m) =>
                  Array ScopeID TempScope
               -- ^ The current scope state
               -> BitArray ScopeID
@@ -599,73 +583,6 @@ resolveScopes :: (MonadIO m) =>
 resolveScopes tempscopes workset nextworkset =
   let
     arrbounds = Array.bounds tempscopes
-
-    -- | Try to look up a direct definition in a scope.
-    resolveDirect :: (MonadIO m, MonadMessages Message m) =>
-                     Visibility
-                  -- ^ The visibility level at which to resolve
-                  -> ScopeID
-                  -- ^ The scope in which to resolve the symbol.
-                  -> Symbol
-                  -- ^ The symbol to resolve
-                  -> ExceptT Error m Access
-    resolveDirect expectvis scopeid sym =
-      let
-        TempScope { tempScopeBuilders = builders, tempScopeTruths = truths,
-                    tempScopeNames = names } = tempscopes Array.! scopeid
-
-        -- | Check the visibility of a definition we find.
-        checkVisibility actualvis
-            -- If we find it, and the expected visibility is lower
-            -- or equal to the actual, then it's a valid access.
-          | expectvis <= actualvis = Just Valid
-            -- Don't report invalid accesses for Hidden visibility.
-          | actualvis == Hidden = Nothing
-            -- Otherwise report illegal access
-          | otherwise = Just Illegal { illegalVisibility = actualvis }
-
-        hiddenLookup
-          | HashMap.member sym (names Array.! Hidden) = checkVisibility Hidden
-          | otherwise = Nothing
-
-        privateLookup
-          | HashMap.member sym (names Array.! Private) = checkVisibility Private
-          | otherwise = Nothing
-
-        protectedLookup
-          | HashMap.member sym (names Array.! Protected) =
-            checkVisibility Protected
-          | otherwise = Nothing
-
-        publicLookup
-          | HashMap.member sym (names Array.! Public) = checkVisibility Public
-          | otherwise = Nothing
-
-        defsLookup = msum [hiddenLookup, privateLookup,
-                           protectedLookup, publicLookup]
-
-        builderLookup = case HashMap.lookup sym builders of
-          Just Builder { builderVisibility = actualvis } ->
-            checkVisibility actualvis
-          Nothing -> Nothing
-
-        truthLookup = case HashMap.lookup sym truths of
-          Just Truth { truthVisibility = actualvis } ->
-            checkVisibility actualvis
-          Nothing -> Nothing
-
-        foldfun (Just out) (Just _) =
-          do
-            internalError "Should not see multiple kinds of definitions" []
-            return (Just out)
-        foldfun (Just out) Nothing = return (Just out)
-        foldfun Nothing (Just out) = return (Just out)
-        foldfun Nothing Nothing = return Nothing
-      in do
-        res <- foldM foldfun Nothing [defsLookup, builderLookup, truthLookup]
-        case res of
-          Just out -> return out
-          Nothing -> throwError Undefined
 
     -- | Try to get the ScopeID of an Exp representing a builder reference.
     lookupScopeExp :: (MonadIO m, MonadMessages Message m) =>
@@ -736,11 +653,13 @@ resolveScopes tempscopes workset nextworkset =
                         -> ExceptT Error m ScopeID
     lookupScopeTempExp ctx @ TempScope { tempScopeSyms = syms }
                        history TempSym { tempSym = sym } =
-      case HashMap.lookup sym syms of
+      case join (HashMap.lookup sym syms) of
         -- For direct resolutions, look up in the local builders
         Just Direct -> lookupScopeSymbol ctx history sym
         -- For imported and inherited, only do the lookup if there
         -- is no ambiguity
+        --
+        -- XXX The blocker here is figuring out how to check for ambiguity
         Just Imported {} -> _
         Just Inherited {} -> _
         -- For enclosing resolutions, look up in the enclosing scope
@@ -759,6 +678,7 @@ resolveScopes tempscopes workset nextworkset =
                         -> ExceptT Error m ScopeID
     lookupScopeTempRef ctx @ TempScope { tempScopeRenameTab = renametab }
                        history tempref
+        -- Detect cyclic references
       | HashSet.member tempref history =
         throwError Cyclic { cyclicRefs = history }
       | otherwise =
@@ -768,11 +688,145 @@ resolveScopes tempscopes workset nextworkset =
         in
           lookupScopeTempExp ctx newhistory tempexp
 
-    -- | Resolve one symbol
-    resolveSymbol :: (MonadIO m, MonadPlus m, MonadMessages Message m) =>
+    -- | Check if the first scope inherits from the second, possibly
+    -- excluding some scope from the set of possible paths.
+    checkInherit :: (MonadIO m, MonadMessages Message m) =>
+                     Maybe ScopeID
+                  -- ^ Excluded scope
+                  -> ScopeID
+                  -- ^ Source scope
+                  -> ScopeID
+                  -- ^ Destination scope
+                  -> m Bool
+    -- Sanity check cases
+    checkInherit (Just exclude) src dst
+      | exclude == dst =
+        do
+          internalError "Destination is excluded in inheritence check" []
+          return False
+      | exclude == src =
+        do
+          internalError "Source is excluded in inheritence check" []
+          return False
+    -- The actual behavior
+    checkInherit exclude src dst =
+      let
+        searchInherit :: (MonadIO m, MonadMessages Message m) =>
+                         IOBitArray ScopeID
+                      -- ^ The visited bits on all scopes
+                      -> ScopeID
+                      -- ^ The current scope
+                      -> m Bool
+        searchInherit excludes currscope
+          | currscope == dst = return True
+          | otherwise =
+            let
+              tempscope @ TempScope { tempScopeInherits = inherits } =
+                tempscopes Array.! currscope
+
+              -- Foldable function to visit superscopes
+              foldfun True _ = return True
+              foldfun False tempref =
+                do
+                  res <- runExceptT $! lookupScopeTempRef tempscope
+                                                          HashSet.empty tempref
+                  case res of
+                    Left _ -> return False
+                    Right superscope -> searchInherit excludes superscope
+            in do
+              -- Check if this node is excluded
+              excluded <- liftIO $! IOBitArray.readArray excludes currscope
+              if excluded
+                then return False
+                else do
+                  -- Mark this node as excluded, then visit all the superscopes
+                liftIO $! IOBitArray.writeArray excludes currscope True
+                foldM foldfun False inherits
+      in do
+        excludes <- case exclude of
+          -- If we're excluding a scope, add it to the exclude set
+          Just excluded ->
+            do
+              excludes' <- liftIO $! IOBitArray.newArray arrbounds False
+              liftIO $! IOBitArray.writeArray excludes' excluded True
+              return excludes'
+          Nothing -> liftIO (IOBitArray.newArray arrbounds False)
+        searchInherit excludes src
+
+    -- | Try to look up a direct (local) definition in a scope by its
+    -- symbol.
+    resolveDirect :: (MonadIO m, MonadMessages Message m) =>
+                     Visibility
+                  -- ^ The visibility level at which to resolve
+                  -> ScopeID
+                  -- ^ The scope in which to resolve the symbol.
+                  -> Symbol
+                  -- ^ The symbol to resolve
+                  -> ExceptT Error m Access
+    resolveDirect expectvis scopeid sym =
+      let
+        TempScope { tempScopeBuilders = builders, tempScopeTruths = truths,
+                    tempScopeNames = names } = tempscopes Array.! scopeid
+
+        -- | Check the visibility of a definition we find.
+        checkVisibility actualvis
+            -- If we find it, and the expected visibility is lower
+            -- or equal to the actual, then it's a valid access.
+          | expectvis <= actualvis = Just Valid
+            -- Don't report invalid accesses for Hidden visibility.
+          | actualvis == Hidden = Nothing
+            -- Otherwise report illegal access
+          | otherwise = Just Illegal { illegalVisibility = actualvis }
+
+        hiddenLookup
+          | HashMap.member sym (names Array.! Hidden) = checkVisibility Hidden
+          | otherwise = Nothing
+
+        privateLookup
+          | HashMap.member sym (names Array.! Private) = checkVisibility Private
+          | otherwise = Nothing
+
+        protectedLookup
+          | HashMap.member sym (names Array.! Protected) =
+            checkVisibility Protected
+          | otherwise = Nothing
+
+        publicLookup
+          | HashMap.member sym (names Array.! Public) = checkVisibility Public
+          | otherwise = Nothing
+
+        defsLookup = msum [hiddenLookup, privateLookup,
+                           protectedLookup, publicLookup]
+
+        builderLookup = case HashMap.lookup sym builders of
+          Just Builder { builderVisibility = actualvis } ->
+            checkVisibility actualvis
+          Nothing -> Nothing
+
+        truthLookup = case HashMap.lookup sym truths of
+          Just Truth { truthVisibility = actualvis } ->
+            checkVisibility actualvis
+          Nothing -> Nothing
+
+        foldfun (Just out) (Just _) =
+          do
+            internalError "Should not see multiple kinds of definitions" []
+            return (Just out)
+        foldfun (Just out) Nothing = return (Just out)
+        foldfun Nothing (Just out) = return (Just out)
+        foldfun Nothing Nothing = return Nothing
+      in do
+        res <- foldM foldfun Nothing [defsLookup, builderLookup, truthLookup]
+        case res of
+          Just out -> return out
+          Nothing -> throwError Undefined
+
+    -- | Full resolution on a symbol.
+    resolveSymbol :: (MonadIO m, MonadMessages Message m) =>
                      ScopeID
                   -> Word
                   -> Bool
+                  -- ^ Whether or not to search enclosing scopes as well.
                   -> Symbol
                   -- ^ The symbol to resolve.
                   -> ExceptT Error m Resolution
@@ -808,12 +862,11 @@ resolveScopes tempscopes workset nextworkset =
                                             enclosingDepth = depth }
 
         -- | Attempt to resolve the symbol from imports.
-        resolveImports :: (MonadIO m, MonadPlus m, MonadMessages Message m) =>
+        resolveImports :: (MonadIO m, MonadMessages Message m) =>
                           ExceptT Error m Resolution
         resolveImports =
           let
-            resolveImport :: (MonadIO m, MonadPlus m,
-                              MonadMessages Message m) =>
+            resolveImport :: (MonadIO m, MonadMessages Message m) =>
                              Import TempRef
                           -> ExceptT Error m Resolution
             resolveImport Import { importExp = tempref, importNames = names }
@@ -836,12 +889,11 @@ resolveScopes tempscopes workset nextworkset =
             resolved <- mapM resolveImport imports
             return (mconcat resolved)
 
-        resolveInherits :: (MonadIO m, MonadPlus m, MonadMessages Message m) =>
+        resolveInherits :: (MonadIO m, MonadMessages Message m) =>
                           ExceptT Error m Resolution
         resolveInherits =
           let
-            resolveInherit :: (MonadIO m, MonadPlus m,
-                               MonadMessages Message m) =>
+            resolveInherit :: (MonadIO m, MonadMessages Message m) =>
                               TempRef
                            -> ExceptT Error m Resolution
             resolveInherit inherit =
@@ -854,11 +906,35 @@ resolveScopes tempscopes workset nextworkset =
                 -- XXX We're not done here; we need to come back and add a
                 -- path element when we figure out how that works.
 
-            reconcileInherits :: (MonadIO m, MonadPlus m,
-                                  MonadMessages Message m) =>
+            -- | Take a raw set of inherited resolutions and eliminate
+            -- all overridden resolutions.  If this reduces the set to
+            -- a singleton, that is the result; otherwise, it's an
+            -- ambiguous resolution.
+            reconcileInherits :: (MonadIO m, MonadMessages Message m) =>
                                  [Resolution]
-                              -> m Resolution
-            reconcileInherits resolutions = _
+                              -> ExceptT Error m Resolution
+            -- Easy case: we found nothing
+            reconcileInherits [] = throwError Undefined
+            -- Easy case; we found exactly one, no reconciliation required
+            reconcileInherits [out] = return out
+            reconcileInherits resolutions =
+              let
+                -- Filter out all the resolutions that are overridden
+                -- by other resolutions.
+                filterOverrides accum [] = return accum
+                filterOverrides accum _ = _
+              in do
+                nonoverrides <- filterOverrides HashSet.empty resolutions
+                case HashSet.toList nonoverrides of
+                  -- This case shouldn't happen, log an internal error
+                  [] ->
+                    do
+                      internalError ("Should not see empty non-override set") []
+                      throwError Undefined
+                  -- Exactly one resolution.  This is what we want.
+                  [out] -> return out
+                  -- Ambiguous resolution
+                  _ -> throwError Ambiguous { ambiguousRefs = nonoverrides }
           in do
             -- First resolve all inherits
             resolved <- mapM resolveInherit inherits
@@ -867,7 +943,7 @@ resolveScopes tempscopes workset nextworkset =
 
         -- | Attempt to resolve enclosing definitions, if we are
         -- allowed to look there.
-        resolveEnclosing :: (MonadIO m, MonadPlus m, MonadMessages Message m) =>
+        resolveEnclosing :: (MonadIO m, MonadMessages Message m) =>
                             ExceptT Error m Resolution
         resolveEnclosing
             -- Only resolve if we are actually checking enclosing scopes
@@ -891,24 +967,27 @@ resolveScopes tempscopes workset nextworkset =
             -- Otherwise, report undefined.
           | otherwise = throwError Undefined
       in
-        msum [resolveLocal, resolveImports, resolveInherits, resolveEnclosing]
+        resolveLocal `catchError`
+          (\_ -> resolveImports `catchError`
+                 (\_ -> resolveInherits `catchError`
+                          (\_ -> resolveEnclosing)))
 
-    resolveScope :: (MonadIO m) =>
+    -- | Attempt to resolve all symbols in a scope, if it's in the
+    -- workset.
+    resolveScope :: (MonadIO m, MonadMessages Message m) =>
                     (ScopeID, TempScope)
                  -> m (ScopeID, TempScope)
     -- Skip this scope if it's not in the workset
     resolveScope elem @ (idx, _) | workset BitArray.! idx = return elem
-    resolveScope curr @ (scopeid,
-                         TempScope { tempScopeSyms = resolutions }) =
+    resolveScope curr @ (scopeid, TempScope { tempScopeSyms = resolutions }) =
       let
-        finishScope :: (MonadIO m) =>
-                       HashMap Symbol (Maybe Resolution)
-                    -> m (ScopeID, TempScope)
-        finishScope newresolutions
+        resolveScopeLinks :: (MonadIO m) =>
+                             HashMap Symbol (Maybe Resolution)
+                          -> m (ScopeID, TempScope)
+        resolveScopeLinks newresolutions
           | resolutions == newresolutions = return curr
           | otherwise =
             do
-              -- Resolve all symbols
               -- Use the new resolutions to resolve all imports
 
               -- Use the new resoultions to resolve all inherits
@@ -917,12 +996,23 @@ resolveScopes tempscopes workset nextworkset =
               -- depend on this one
               _
 
+        tryResolveSymbol :: (MonadIO m, MonadMessages Message m) =>
+                            Symbol
+                         -> m (Symbol, Maybe Resolution)
+        tryResolveSymbol sym =
+          do
+            -- Catch any errors
+            res <- runExceptT (resolveSymbol scopeid 0 True sym)
+            case res of
+              Left _ -> return (sym, Nothing)
+              -- Correct resolution adds an entry
+              Right out -> return (sym, Just out)
       in do
         -- Resolve all symbols using the previous scope
-        newresolutions <- mapM resolveSymbol (HashMap.keys resolutions)
-        finishScope (HashMap.fromList newresolutions)
+        newresolutions <- mapM tryResolveSymbol (HashMap.keys resolutions)
+        resolveScopeLinks (HashMap.fromList newresolutions)
 
-    resolveRound :: (MonadIO m) =>
+    resolveRound :: (MonadIO m, MonadMessages Message m) =>
                     m (Array ScopeID TempScope)
     resolveRound =
       do
@@ -1040,6 +1130,7 @@ resolve surface @ Surface { surfaceScopes = scopes } =
         frozenenclosed <- liftIO (IOArray.unsafeFreeze enclosedarr)
         makeTempScopes frozenenclosed tempscopes
 
+    -- The initial working set visits everything
     initworkset = (BitArray.true arrbounds)
   in do
     -- Set up the initial state
