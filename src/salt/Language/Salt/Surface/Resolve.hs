@@ -64,22 +64,6 @@ import qualified Data.Array.BitArray.IO as IOBitArray
 import qualified Data.HashSet as HashSet
 import qualified Data.HashMap.Strict as HashMap
 
--- | State of a resolved symbol.
-data Access =
-    -- | A valid resolution result.
-    Valid
-    -- | Access to an out-of-context element.
-  | Inaccessible {
-      -- | True for object context, false for local.
-      inaccessibleObject :: !Bool
-    }
-    -- | An illegal access result.
-  | Illegal {
-      -- | True for private access, false for protected.
-      illegalVisibility :: !Visibility
-    }
-    deriving (Eq, Ord)
-
 -- | Resolution path element.  A sequence of these describe how an
 -- indirect resolution is resolved.
 data PathElem =
@@ -89,14 +73,14 @@ data PathElem =
       -- Non-singleton maps denate ambiguity.
       importedScope :: !ScopeID,
       -- | The expression for the import.
-      importedScopeExp :: !TempExp
+      importedScopeExp :: !TempRef
     }
     -- | An inherited definition.
   | Inherited {
       -- | The set of scopes from which the definition is inherited.
       inheritedScope :: !ScopeID,
       -- | The expression for the inherited scope.
-      inheritedScopeExp :: !TempExp
+      inheritedScopeExp :: !TempRef
     }
     -- | A definition in an enclosing scope.
   | Enclosing {
@@ -122,7 +106,7 @@ data NonLocal =
     -- derived.
     nonLocalTail :: ![PathElem],
     -- | All resolution results on which this resolution depends.
-    nonLocalDeps :: !(HashSet NonLocal)
+    nonLocalDeps :: !(HashMap Ref Ref)
   }
   deriving (Eq)
 
@@ -133,13 +117,32 @@ data Resolution =
     -- | Resolution from a different scope.
   | Indirect {
       -- | Resolution data.
-      indirectRes :: !NonLocal
+      indirectSrc :: !NonLocal
     }
     deriving (Eq, Ord)
 
 data Error =
+    -- | Cyclic definitions.  This can happen with builder definitions
+    -- that never "bottom out" at a concrete definition.
     Cyclic { cyclicRefs :: !(HashSet TempRef) }
+    -- | Ambiguous inherited or imported definitions.
   | Ambiguous { ambiguousRefs :: !(HashSet Resolution) }
+    -- | Illegal access (private from an inheriting scope, private or
+    -- protected from an non-inheriting scope)
+  | Illegal {
+      -- | Visibility of the symbol.
+      illegalVisibility :: !Visibility
+    }
+    -- | Access to a non-static definition from a static context.
+  | Inaccessible {
+      -- | True for object context, false for local.
+      inaccessibleKind :: !Bool
+    }
+    -- | A resolution result which depends on itself resolving to
+    -- something else.
+  | Inconsistent {
+      inconsistentRes :: !NonLocal
+    }
     deriving (Eq)
 
 -- | Placeholders for anything that might be a static expression.
@@ -211,8 +214,8 @@ instance Ord NonLocal where
                      nonLocalSrc = src2, nonLocalTail = tail2,
                      nonLocalDeps = deps2 } =
     let
-      sorteddeps1 = sort (HashSet.toList deps1)
-      sorteddeps2 = sort (HashSet.toList deps2)
+      sorteddeps1 = sort (HashMap.toList deps1)
+      sorteddeps2 = sort (HashMap.toList deps2)
     in case compare scopeid1 scopeid2 of
       EQ -> case compare sym1 sym2 of
         EQ -> case compare src1 src2 of
@@ -222,12 +225,31 @@ instance Ord NonLocal where
         out -> out
       out -> out
 
-instance Hashable Access where
-  hashWithSalt s Valid = s `hashWithSalt` (1 :: Word)
-  hashWithSalt s Inaccessible { inaccessibleObject = object } =
-    s `hashWithSalt` (2 :: Word) `hashWithSalt` object
-  hashWithSalt s Illegal { illegalVisibility = vis } =
-    s `hashWithSalt` (3 :: Word) `hashWithSalt` vis
+instance Ord Error where
+  compare Cyclic { cyclicRefs = refs1 } Cyclic { cyclicRefs = refs2 } =
+    let
+      sortedrefs1 = sort (HashSet.toList refs1)
+      sortedrefs2 = sort (HashSet.toList refs2)
+    in
+      compare sortedrefs1 sortedrefs2
+  compare Cyclic {} _ = LT
+  compare _ Cyclic {} = GT
+  compare Ambiguous { ambiguousRefs = refs1 }
+          Ambiguous { ambiguousRefs = refs2 } =
+    let
+      sortedrefs1 = sort (HashSet.toList refs1)
+      sortedrefs2 = sort (HashSet.toList refs2)
+    in
+      compare sortedrefs1 sortedrefs2
+  compare Ambiguous {} _ = LT
+  compare _ Ambiguous {} = GT
+  compare Illegal { illegalVisibility = vis1 }
+          Illegal { illegalVisibility = vis2 } = compare vis1 vis2
+  compare Illegal {} _ = LT
+  compare _ Illegal {} = GT
+  compare Inaccessible { inaccessibleKind = kind1 }
+          Inaccessible { inaccessibleKind = kind2 } =
+    compare kind1 kind2
 
 instance Hashable PathElem where
   hashWithSalt s Imported { importedScope = scope, importedScopeExp = ex } =
@@ -246,8 +268,26 @@ instance Hashable NonLocal where
 
 instance Hashable Resolution where
   hashWithSalt s Direct = s `hashWithSalt` (0 :: Int)
-  hashWithSalt s Indirect { indirectRes = res } =
+  hashWithSalt s Indirect { indirectSrc = res } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` res
+
+instance Hashable Error where
+  hashWithSalt s Cyclic { cyclicRefs = refs } =
+    let
+      sortedRefs = sort (HashSet.toList refs)
+    in
+      s `hashWithSalt` (0 :: Int) `hashWithSalt` sortedRefs
+  hashWithSalt s Ambiguous { ambiguousRefs = refs } =
+    let
+      sortedRefs = sort (HashSet.toList refs)
+    in
+      s `hashWithSalt` (1 :: Int) `hashWithSalt` sortedRefs
+  hashWithSalt s Illegal { illegalVisibility = vis } =
+    s `hashWithSalt` (2 :: Int) `hashWithSalt` vis
+  hashWithSalt s Inaccessible { inaccessibleKind = object } =
+    s `hashWithSalt` (3 :: Word) `hashWithSalt` object
+  hashWithSalt s Inconsistent { inconsistentRes = res } =
+    s `hashWithSalt` (4 :: Word) `hashWithSalt` res
 
 smallest :: Word -> Word -> Word
 smallest a b
@@ -265,8 +305,8 @@ instance Semigroup Resolution where
   Direct <> Direct = Direct
   Direct <> _ = Direct
   _ <> Direct = Direct
-  Indirect { indirectRes = res1 } <> Indirect { indirectRes = res2 } =
-    Indirect { indirectRes = res1 <> res2 }
+  Indirect { indirectSrc = res1 } <> Indirect { indirectSrc = res2 } =
+    Indirect { indirectSrc = res1 <> res2 }
 
 instance Default TempRef where
   def = TempRef { tempRefID = 0 }
@@ -582,11 +622,77 @@ undef :: (Monad m) => ExceptT (Maybe Error) m a
 undef = throwError Nothing
 
 cyclic :: (Monad m) => HashSet TempRef -> ExceptT (Maybe Error) m a
-cyclic refs = throwError $! Just Cyclic { cyclicRefs = refs }
+cyclic = throwError . Just . Cyclic
 
 -- | Report an ambiguous inherited symbol
 ambiguous :: (Monad m) => HashSet Resolution -> ExceptT (Maybe Error) m a
-ambiguous refs = throwError $! Just Ambiguous { ambiguousRefs = refs }
+ambiguous = throwError . Just . Ambiguous
+
+-- | Report an illegal access
+illegal :: (Monad m) => Visibility -> ExceptT (Maybe Error) m a
+illegal = throwError . Just . Illegal
+
+-- | Report an inconsistent resolution
+inconsistent :: (Monad m) => NonLocal -> ExceptT (Maybe Error) m a
+inconsistent = throwError . Just . Inconsistent
+
+-- Common pattern: go with the first valid resolution out of a list of
+-- actions representing the precedence.
+firstValid :: (MonadIO m, MonadMessages Message m) =>
+              [ExceptT (Maybe Error) m a] ->
+              ExceptT (Maybe Error) m a
+firstValid [] =
+  do
+    internalError "Should not see empty action list" []
+    undef
+firstValid [out] = out
+firstValid (first : rest) = first `catchError` const (firstValid rest)
+
+allUndef :: (MonadIO m, MonadMessages Message m) =>
+            ExceptT (Maybe Error) m a
+         -- ^ Final action to perform
+         -> [ExceptT (Maybe Error) m a]
+         -- ^ List of actions expected to return undefined.
+         -> ExceptT (Maybe Error) m a
+allUndef final [] = final
+allUndef final (first : rest) =
+  let
+    report =
+      do
+        internalError "Expected only one definite result here" []
+        final
+
+    reportSuccess =
+      do
+        _ <- first
+        report
+
+    expectUndef Nothing = allUndef final rest
+    expectUndef _ = report
+  in
+    reportSuccess `catchError` expectUndef
+
+-- | Another common pattern: only one valid result expected.  Do a
+-- sanity check to enforce this.
+oneValid :: (MonadIO m, MonadMessages Message m) =>
+            [ExceptT (Maybe Error) m a] ->
+            ExceptT (Maybe Error) m a
+oneValid [] =
+  do
+    internalError "Should not see empty action list" []
+    undef
+oneValid [out] = out
+oneValid (first : rest) =
+  let
+    acceptOne =
+      do
+        res <- first
+        allUndef (return res) rest
+
+    handler Nothing = oneValid rest
+    handler err = allUndef (throwError err) rest
+  in
+    acceptOne `catchError` handler
 
 -- | Core resolution algorithm.
 resolveScopes :: (MonadIO m, MonadMessages Message m) =>
@@ -661,28 +767,43 @@ resolveScopes tempscopes workset nextworkset =
           lookupScopeExp scope history content
         Nothing -> undef
 
+    lookupResolvedScopeSymbol :: (MonadIO m, MonadMessages Message m) =>
+                                 TempScope
+                              -> HashSet TempRef
+                              -> Symbol
+                              -> ExceptT (Maybe Error) m ScopeID
+    lookupResolvedScopeSymbol ctx @ TempScope { tempScopeSyms = syms }
+                              history sym =
+      let
+        expectDefined :: (MonadIO m, MonadMessages Message m) =>
+                         Maybe Error -> ExceptT (Maybe Error) m ScopeID
+        expectDefined Nothing =
+          do
+            internalError "Should not see undefined for a resolved symbol" []
+            undef
+
+        lookupResolvedScopeSymbol' =
+          case join (HashMap.lookup sym syms) of
+            -- For direct resolutions, look up in the local scope.
+            Just Direct -> lookupScopeSymbol ctx history sym
+            -- For indirect resolutions, look up in the remote scope.
+            Just Indirect { indirectSrc = NonLocal { nonLocalScope = indscope,
+                                                     nonLocalSym = indsym } } ->
+              lookupScopeSymbol (tempscopes Array.! indscope) history indsym
+            -- Anything else fails
+            Nothing -> undef
+      in
+        lookupResolvedScopeSymbol' `catchError` expectDefined
+
+
     -- | Try to get the ScopeID of a TempExp representing a builder reference.
     lookupScopeTempExp :: (MonadIO m, MonadMessages Message m) =>
                            TempScope
                         -> HashSet TempRef
                         -> TempExp
                         -> ExceptT (Maybe Error) m ScopeID
-    lookupScopeTempExp ctx @ TempScope { tempScopeSyms = syms }
-                       history TempSym { tempSym = sym } =
-      case join (HashMap.lookup sym syms) of
-        -- For direct resolutions, look up in the local builders
-        Just Direct -> lookupScopeSymbol ctx history sym
-        -- For imported and inherited, only do the lookup if there
-        -- is no ambiguity
-        --
-        -- XXX The blocker here is figuring out how to check for ambiguity
-        Just Imported {} -> _
-        Just Inherited {} -> _
-        -- For enclosing resolutions, look up in the enclosing scope
-        Just Enclosing { enclosingScope = encscopeid } ->
-          lookupScopeSymbol (tempscopes Array.! encscopeid) history sym
-        -- Anything else fails
-        Nothing -> undef
+    lookupScopeTempExp ctx history TempSym { tempSym = sym } =
+      lookupResolvedScopeSymbol ctx history sym
     lookupScopeTempExp ctx history TempExp { tempExp = ex } =
       lookupScopeExp ctx history ex
 
@@ -768,140 +889,168 @@ resolveScopes tempscopes workset nextworkset =
           Nothing -> liftIO (IOBitArray.newArray arrbounds False)
         searchInherit excludes src
 
-    -- | Try to look up a direct (local) definition in a scope by its
-    -- symbol.
-    resolveDirect :: (MonadIO m, MonadMessages Message m) =>
-                     Visibility
-                  -- ^ The visibility level at which to resolve
-                  -> ScopeID
-                  -- ^ The scope in which to resolve the symbol.
-                  -> Symbol
-                  -- ^ The symbol to resolve
-                  -> ExceptT (Maybe Error) m Access
-    resolveDirect expectvis scopeid sym =
-      let
-        TempScope { tempScopeBuilders = builders, tempScopeTruths = truths,
-                    tempScopeNames = names } = tempscopes Array.! scopeid
-
-        -- | Check the visibility of a definition we find.
-        checkVisibility actualvis
-            -- If we find it, and the expected visibility is lower
-            -- or equal to the actual, then it's a valid access.
-          | expectvis <= actualvis = Just Valid
-            -- Don't report invalid accesses for Hidden visibility.
-          | actualvis == Hidden = Nothing
-            -- Otherwise report illegal access
-          | otherwise = Just Illegal { illegalVisibility = actualvis }
-
-        hiddenLookup
-          | HashMap.member sym (names Array.! Hidden) = checkVisibility Hidden
-          | otherwise = Nothing
-
-        privateLookup
-          | HashMap.member sym (names Array.! Private) = checkVisibility Private
-          | otherwise = Nothing
-
-        protectedLookup
-          | HashMap.member sym (names Array.! Protected) =
-            checkVisibility Protected
-          | otherwise = Nothing
-
-        publicLookup
-          | HashMap.member sym (names Array.! Public) = checkVisibility Public
-          | otherwise = Nothing
-
-        defsLookup = msum [hiddenLookup, privateLookup,
-                           protectedLookup, publicLookup]
-
-        builderLookup = case HashMap.lookup sym builders of
-          Just Builder { builderVisibility = actualvis } ->
-            checkVisibility actualvis
-          Nothing -> Nothing
-
-        truthLookup = case HashMap.lookup sym truths of
-          Just Truth { truthVisibility = actualvis } ->
-            checkVisibility actualvis
-          Nothing -> Nothing
-
-        foldfun (Just out) (Just _) =
-          do
-            internalError "Should not see multiple kinds of definitions" []
-            return (Just out)
-        foldfun (Just out) Nothing = return (Just out)
-        foldfun Nothing (Just out) = return (Just out)
-        foldfun Nothing Nothing = return Nothing
-      in do
-        res <- foldM foldfun Nothing [defsLookup, builderLookup, truthLookup]
-        case res of
-          Just out -> return out
-          Nothing -> undef
-
     -- | Full resolution on a symbol.
     resolveSymbol :: (MonadIO m, MonadMessages Message m) =>
                      ScopeID
-                  -> Word
+                  -> Visibility
                   -> Bool
                   -- ^ Whether or not to search enclosing scopes as well.
                   -> Symbol
                   -- ^ The symbol to resolve.
                   -> ExceptT (Maybe Error) m Resolution
-    resolveSymbol scopeid depth withenclosing sym =
+    resolveSymbol scopeid expectvis withenclosing sym =
       let
         ctx @ TempScope { tempScopeEnclosing = enclosing,
+                          tempScopeTruths = truths,
+                          tempScopeBuilders = builders,
                           tempScopeRenameTab = renametab,
                           tempScopeImports = imports,
                           tempScopeInherits = inherits,
+                          tempScopeNames = names,
                           tempScopeSyms = syms } = tempscopes Array.! scopeid
 
-        -- | Attempt to resolve local definitions
-        resolveLocal :: (MonadIO m, MonadMessages Message m) =>
-                        ExceptT (Maybe Error) m Resolution
-        resolveLocal =
-          do
-            res <- resolveDirect Hidden scopeid sym
-            case res of
-              -- We should only ever see valid resolutions here.
-              Valid
-                  -- If this is a local definition, return a direct definition.
-                | depth == 0 -> return Direct
-                  -- Otherwise, it's an enclosing definition.
-                | otherwise -> return Enclosing { enclosingScope = scopeid,
-                                                  enclosingDepth = depth }
-              -- Report an internal error otherwise
-              _ ->
-                do
-                  internalError "Should only see a Valid resolution" []
-                  if depth == 0
-                    then return Direct
-                    else return Enclosing { enclosingScope = scopeid,
-                                            enclosingDepth = depth }
+        -- | Check that the resolution result is consistent.
+        checkConsistent :: (MonadIO m, MonadMessages Message m) =>
+                           Resolution
+                        -> ExceptT (Maybe Error) m Resolution
+        -- Direct resolutions are always consistent
+        checkConsistent Direct = return Direct
+        checkConsistent out @ Indirect {
+                                indirectSrc =
+                                  src @ NonLocal { nonLocalDeps = deps,
+                                                   nonLocalScope = expectscope,
+                                                   nonLocalSym = expectsym }
+                              } =
+          let
+            key = Ref { refScopeID = scopeid, refSymbol = sym }
+          in case HashMap.lookup key deps of
+            -- If we depend on our own resolution being something
+            -- different, then this is an inconsistent resolution
+            -- result.
+            Just Ref { refScopeID = actualscope, refSymbol = actualsym }
+              | expectscope /= actualscope ||
+                expectsym /= actualsym -> inconsistent src
+            -- Otherwise the result is fine.
+            _ -> return out
+
+        -- | Try to look up a direct (local) definition in a scope by its
+        -- symbol.
+        resolveDirect :: (MonadIO m, MonadMessages Message m) =>
+                         ExceptT (Maybe Error) m Resolution
+        resolveDirect =
+          let
+            checkVisibility :: (Monad m) =>
+                               Visibility
+                            -> ExceptT (Maybe Error) m Resolution
+            -- | Check the visibility of a definition we find.
+            checkVisibility actualvis
+                -- If we find it, and the expected visibility is lower
+                -- or equal to the actual, then it's a valid access.
+              | expectvis <= actualvis = return Direct
+                -- Don't report invalid accesses for Hidden visibility.
+              | actualvis == Hidden = undef
+                -- Otherwise report illegal access
+              | otherwise = illegal actualvis
+
+            hiddenLookup
+              | HashMap.member sym (names Array.! Hidden) =
+                checkVisibility Hidden
+              | otherwise = undef
+
+            privateLookup
+              | HashMap.member sym (names Array.! Private) =
+                checkVisibility Private
+              | otherwise = undef
+
+            protectedLookup
+              | HashMap.member sym (names Array.! Protected) =
+                checkVisibility Protected
+              | otherwise = undef
+
+            publicLookup
+              | HashMap.member sym (names Array.! Public) =
+                checkVisibility Public
+              | otherwise = undef
+
+            defsLookup = firstValid [hiddenLookup, privateLookup,
+                                     protectedLookup, publicLookup]
+
+            builderLookup = case HashMap.lookup sym builders of
+              Just Builder { builderVisibility = actualvis } ->
+                checkVisibility actualvis
+              Nothing -> undef
+
+            truthLookup = case HashMap.lookup sym truths of
+              Just Truth { truthVisibility = actualvis } ->
+                checkVisibility actualvis
+              Nothing -> undef
+
+            foldfun (Just out) (Just _) =
+              do
+                internalError "Should not see multiple kinds of definitions" []
+                return (Just out)
+            foldfun (Just out) Nothing = return (Just out)
+            foldfun Nothing (Just out) = return (Just out)
+            foldfun Nothing Nothing = return Nothing
+          in do
+            oneValid [defsLookup, builderLookup, truthLookup]
 
         -- | Attempt to resolve the symbol from imports.
-        resolveImports :: (MonadIO m, MonadMessages Message m) =>
+        resolveFromImports :: (MonadIO m, MonadMessages Message m) =>
                           ExceptT (Maybe Error) m Resolution
-        resolveImports =
+        resolveFromImports =
           let
-            resolveImport :: (MonadIO m, MonadMessages Message m) =>
+            resolveFromImport :: (MonadIO m, MonadMessages Message m) =>
                              Import TempRef
                           -> ExceptT (Maybe Error) m Resolution
-            resolveImport Import { importExp = tempref, importNames = names }
+            resolveFromImport Import { importExp = tempref, importNames = names }
                 -- Check if the symbol is one of the ones in the
                 -- import list, or if the list is empty (in which case
                 -- we import everything)
               | HashSet.null names || HashSet.member sym names =
-                do
+                let
+                  addPathElem impscope deps Direct =
+                    let
+                      -- For direct resolutions, synthesize a new
+                      -- indirect resolution.
+                      imported = Imported { importedScopeExp = tempref,
+                                            importedScope = impscope }
+                      nonlocal = NonLocal { nonLocalSym = sym,
+                                            nonLocalScope = impscope,
+                                            nonLocalSrc = imported,
+                                            nonLocalTail = [],
+                                            nonLocalDeps = deps }
+                    in
+                      return Indirect { indirectSrc = nonlocal }
+                  -- For indirect resolutions, add a path element and
+                  -- union the dependencies.
+                  addPathElem impscope deps
+                              ind @ Indirect {
+                                      indirectSrc =
+                                        nl @ NonLocal { nonLocalTail = tail,
+                                                        nonLocalSrc = src,
+                                                        nonLocalDeps = olddeps }
+                                    } =
+                    let
+                      imported = Imported { importedScopeExp = tempref,
+                                            importedScope = impscope }
+                      newnonlocal = nl { nonLocalSrc = imported,
+                                         nonLocalTail = src : tail,
+                                         nonLocalDeps = olddeps <> deps }
+                    in
+                      return ind { indirectSrc = newnonlocal }
+                in do
                   -- First, look up the scope from which we import
                   importscope <- lookupScopeTempRef ctx HashSet.empty tempref
                   -- Now do resolution from that scope, ignoring
                   -- enclosing scopes.
-                  resolveSymbol importscope depth False sym
-                  -- XXX We're not done here; we need to come back and add a
-                  -- path element when we figure out how that works.
-
+                  res <- resolveSymbol importscope Public False sym
+                  -- Add the import path element.
+                  addPathElem importscope _ res
                   -- Otherwise, we can't possibly import the symbol here.
               | otherwise = undef
           in do
-            resolved <- mapM resolveImport imports
+            resolved <- mapM resolveFromImport imports
             return (mconcat resolved)
 
         resolveInherits :: (MonadIO m, MonadMessages Message m) =>
@@ -912,14 +1061,45 @@ resolveScopes tempscopes workset nextworkset =
                               TempRef
                            -> ExceptT (Maybe Error) m Resolution
             resolveInherit inherit =
-              do
+              let
+                  addPathElem inheritscope deps Direct =
+                    let
+                      -- For direct resolutions, synthesize a new
+                      -- indirect resolution.
+                      inherited = Inherited { inheritedScopeExp = inherit,
+                                              inheritedScope = inheritscope }
+                      nonlocal = NonLocal { nonLocalSym = sym,
+                                            nonLocalScope = inheritscope,
+                                            nonLocalSrc = inherited,
+                                            nonLocalTail = [],
+                                            nonLocalDeps = deps }
+                    in
+                      return Indirect { indirectSrc = nonlocal }
+                  -- For indirect resolutions, add a path element and
+                  -- union the dependencies.
+                  addPathElem impscope deps
+                              ind @ Indirect {
+                                      indirectSrc =
+                                        nl @ NonLocal { nonLocalTail = tail,
+                                                        nonLocalSrc = src,
+                                                        nonLocalDeps = olddeps }
+                                    } =
+                    let
+                      inherited = Inherited { inheritedScopeExp = inherit,
+                                              inheritedScope = impscope }
+                      newnonlocal = nl { nonLocalSrc = inherited,
+                                         nonLocalTail = src : tail,
+                                         nonLocalDeps = olddeps <> deps }
+                    in
+                      return ind { indirectSrc = newnonlocal }
+              in do
                 -- First, look up the scope from which we inherit
-                importscope <- lookupScopeTempRef ctx HashSet.empty inherit
-                -- Now do resolution from that scope, ignoring
-                -- enclosing scopes.
-                resolveSymbol importscope depth False sym
-                -- XXX We're not done here; we need to come back and add a
-                -- path element when we figure out how that works.
+                inheritscope <- lookupScopeTempRef ctx HashSet.empty inherit
+                -- Now do resolution from that scope at protected
+                -- visibility, ignoring enclosing scopes.
+                res <- resolveSymbol inheritscope Protected False sym
+                -- Add the inherit path element.
+                addPathElem inheritscope _ res
 
             -- | Take a raw set of inherited resolutions and eliminate
             -- all overridden resolutions.  If this reduces the set to
@@ -967,25 +1147,61 @@ resolveScopes tempscopes workset nextworkset =
               -- If there is an enclosing scope, attempt to resolve inside it
               Just encscopeid ->
                 do
-                  res <- resolveSymbol encscopeid (depth + 1) True sym
+                  res <- resolveSymbol encscopeid expectvis True sym
                   case res of
-                    -- This should be an enclosing result.
-                    Enclosing {} -> return res
-                    -- Otherwise, report an internal error.
-                    _ ->
-                      do
-                        internalError "Should only see Enclosing" []
-                        return Enclosing { enclosingScope = scopeid,
-                                           enclosingDepth = depth }
+                    -- If the result is a direct definition, construct
+                    -- a non-local resolution result.
+                    Direct ->
+                      let
+                        pathelem = Enclosing { enclosingScope = encscopeid,
+                                               enclosingDepth = 1 }
+                        nonlocal = NonLocal { nonLocalSym = sym,
+                                              nonLocalScope = encscopeid,
+                                              nonLocalSrc = pathelem,
+                                              nonLocalTail = [],
+                                              nonLocalDeps = HashMap.empty }
+                      in
+                        return Indirect { indirectSrc = nonlocal }
+                    -- If the result is an enclosing scope definition,
+                    -- increment the depth.
+                    ind @ Indirect {
+                            indirectSrc =
+                              nl @ NonLocal {
+                                     nonLocalSrc =
+                                       enc @ Enclosing {
+                                               enclosingDepth = depth
+                                             }
+                                   }
+                          } ->
+                      return ind {
+                               indirectSrc =
+                                 nl {
+                                   nonLocalSrc =
+                                     enc { enclosingDepth = depth + 1 }
+                                 }
+                             }
+                    -- Otherwise, add an enclosing scope path element
+                    ind @ Indirect {
+                            indirectSrc = nl @ NonLocal { nonLocalTail = tail,
+                                                          nonLocalSrc = src }
+                          } ->
+                      let
+                        newsrc = Enclosing { enclosingScope = encscopeid,
+                                             enclosingDepth = 1 }
+                        newnonlocal = nl { nonLocalSrc = newsrc,
+                                           nonLocalTail = src : tail }
+                      in
+                      return ind { indirectSrc = newnonlocal }
               -- If there is no enclosing scope, report undefined
               Nothing -> undef
             -- Otherwise, report undefined.
           | otherwise = undef
-      in
-        resolveLocal `catchError`
-          (\_ -> resolveImports `catchError`
-                 (\_ -> resolveInherits `catchError`
-                          (\_ -> resolveEnclosing)))
+      in do
+        -- Search for results in precedence order
+        res <- firstValid [resolveDirect, resolveFromImports,
+                           resolveInherits, resolveEnclosing]
+        -- Check consistency
+        checkConsistent res
 
     -- | Attempt to resolve all symbols in a scope, if it's in the
     -- workset.
@@ -1017,7 +1233,7 @@ resolveScopes tempscopes workset nextworkset =
         tryResolveSymbol sym =
           do
             -- Catch any errors
-            res <- runExceptT (resolveSymbol scopeid 0 True sym)
+            res <- runExceptT (resolveSymbol scopeid Hidden True sym)
             case res of
               Left _ -> return (sym, Nothing)
               -- Correct resolution adds an entry
@@ -1156,364 +1372,3 @@ resolve surface @ Surface { surfaceScopes = scopes } =
     -- Finalize the results and report errors
     resolvedscopes <- mapM finishScope (Array.assocs finalscopes)
     return surface { surfaceScopes = Array.array arrbounds resolvedscopes }
-
-{-
-import Control.Monad.Messages
-import Control.Monad.Reader
-import Control.Monad.State
-import Control.Monad.Trans
-import Data.Array.IO(IOArray)
-import Data.Semigroup
-import Language.Salt.Message
-import Language.Salt.Surface.Common
-
-import qualified Data.ByteString.UTF8 as Strict
-import qualified Data.Array.BitArray.IO as BitArray
-import qualified Data.Array.IO as Array
-
-instance Semigroup Dependence where
-  Imported { importedSyms = symsa, importedInherit = inherita } <>
-  Imported { importedSyms = symsb, importedInherit = inheritb } =
-    Imported { importedSyms = symsa <> symsb,
-               importedInherit = inherita || inheritb }
-  i @ Imported {} <> Inherited = i { importedInherit = True }
-  Inherited <> i @ Imported {} = i { importedInherit = True }
-  Inherited <> Inherited = Inherited
-  En
-
-
--- | State of elaboration of scopes.
-data ElaborationState =
-  ElaborationState {
-    -- | A bitmap of the pending scope completions.  Used to catch cycles.
-    elaboratePending :: !(IOBitArray ScopeID),
-    -- | A bitmap of all the completed scopes.
-    elaborateDone :: !(IOBitArray ScopeID),
-    -- | Array mapping @ScopeID@s to completed scopes.
-    elaborateScopes :: !(IOArray ScopeID Scope.Scope)
-  }
-
-data TempScope =
-  TempScope {
-    -- | Inherited scopes.
-    scopeInherits :: !(HashMap ScopeID Scope.Scope),
-    -- | Truths.
-    scopeTruths :: !(HashMap Symbol Truth),
-  }
-
--- | A reference to a scope.  This is what is stored in the stack of
--- scopes.
-data ScopeRef =
-  ScopeRef {
-    -- | Whether or not local definitions are accessible from this scope.
-    refLocalAccess :: !Bool,
-    -- | Whether or not object definitions are accessible from this
-    -- scope reference.
-    refObjectAccess :: !Bool,
-    -- | The ID of the scope.
-    refID :: !ScopeID,
-    -- | The actual scope.
-    refScope :: !Bindings.Scope
-  }
-
-type CompleteT = ReaderT CompletionState
-
--- | Get the completed form of a scope
-scope :: (Monad m) =>
-         ScopeID
-      -- ^ The ID of the scope to get.
-      -> CompleteT m Bindings.Scope
-      -- ^ A monad that generates the completed scope.
-      -> CompleteT m Bindings.Scope
-      -- ^ A monad that generates an error value upon detection of a cycle.
-      -> CompleteT m Bindings.Scope
-scope scopeid create cycle =
-  do
-    CompleteState { completePending = pendingarr, completeDone = donearr,
-                    completeScopes = scopesarr } <- ask
-    -- Check the pending bits.
-    pending <- BitArray.readArray pendingarr scopeid
-    if pending
-      -- Call the error action on a cycle.
-      then cycle
-      -- Otherwise, lookup or create the scope.
-      else do
-        -- Check the completed bit.
-        completed <- Bitarray.readArray donearr scopeid
-        if completed
-          -- If the completed flag is set, then get the scope out of
-          -- the completed scopes array.
-          then Array.readArray scopesarr scopeid
-          else do
-            -- Set the pending bit.
-            BitArray.writeArray pendingarr scopeid True
-            -- Create the result.
-            out <- create
-            -- Clear the pending bit and set the done bit.
-            BitArray.writeArray pendingarr scopeid False
-            BitArray.writeArray donearr scopeid True
-            -- Store the result.
-            Array.writeArray scopesarr out
-            -- Finally return it.
-            return out
-
--- Resolution results are a monoid, so that we can combine results
--- from resolution in multiple scopes.
-instance Monoid (Resolve a) where
-  mempty = Undef
-
-  -- Out-of-context accesses beat everything else if they come first.
-  mappend c @ Context { contextObject = False } _ = c
-  mappend c @ Context { contextObject = True } _ = c
-  -- The first valid reference beats everything but an out-of-context access.
-  mappend v @ Valid {} _ = v
-  -- Later out-of-context accesses beat everything but a valid response.
-  mappend _ c @ Context { contextObject = False } = c
-  mappend _ c @ Context { contextObject = True } = c
-  -- A later valid reference beats everything but an out-of-context access.
-  mappend _ v @ Valid {} = v
-  -- If there's no valid reference or out-of-context access, take the first
-  -- illegal access.
-  mappend i @ Illegal { illegalPrivate = False } _ = i
-  mappend _ i @ Illegal {illegalPrivate = False } = i
-  mappend i @ Illegal { illegalPrivate = True } _ = i
-  mappend _ i @ Illegal {illegalPrivate = True } = i
-  -- Undefs get ignored unless that's all there is.
-  mappend Undef Undef = Undef
-
--- | Lookup a local definition in a scope.  This does not chase down
--- inherited scopes.
-localValueSym :: Symbol
-              -- ^ The symbol to lookup.
-              -> Visibility
-              -- ^ The expected visibility level of the lookup.
-              -> ScopeRef
-              -- ^ The 'ScopeRef' in which to do the lookup.
-              -> Resolve [Bindings.Bind]
-localValueSym sym vis ScopeRef { refContext = ctx, refID = scopeid,
-                                 refLocalAccess = localaccess,
-                                 refObjectAccess = objectaccess,
-                                 refScope = Scope { scopeDefs = localdefs } } =
-  let
-    -- Check to see if an access is illegal
-    checkIllegal =
-      case vis of
-        -- Check for protected or private binds.
-        Public -> case (bindarr ! Protected, bindarr ! Private) of
-          -- There aren't any private or protected defs, so the only
-          -- other ones must be hidden.  Report undef.
-          ([], []) -> Undef
-          -- We found private binds, so report an illegal access
-          ([], _) -> Illegal { illegalScope = scopeid, illegalPrivate = True }
-          -- We found protected bindings, so report an illegal access
-          (_, _) -> Illegal { illegalScope = scopeid, illegalPrivate = False }
-        -- For protected, see if there are any private defs
-        Protected -> case bindarr ! Private of
-          -- There aren't so the only other defs must be hidden
-          [] -> Undef
-          -- We found binds, so report an illegal access
-          _ -> Illegal { illegalScope = scopeid, illegalPrivate = True }
-        -- We're looking at private level: the only other
-        -- definitions must be Hidden, so we don't report errors for
-        -- them.
-        Private -> Undef
-        -- This case should never happen
-        Hidden -> error "Impossible case"
-
-  in
-    -- Lookup the bindings in the table
-    case HashMap.lookup sym vals of
-      -- If we get an object binding and object bindings aren't
-      -- accessible, then report out of context.
-      Just Binds { bindsContext = Object } | not objectaccess ->
-        Context { contextObject = True, contextScope = scopeid }
-      -- If we get a local binding and local bindings aren't
-      -- accessible, then report out of context.
-      Just Binds { bindsContext = Local } | not localaccess ->
-        Context { contextObject = False, contextScope = scopeid }
-      -- Otherwise, we have an accessible right context, so figure out
-      -- what to do.
-      Just Binds { bindsViews = bindarr } ->
-        -- Look up the binds for this visibility level (remember,
-        -- binds are a telescoping list)
-        case bindarr ! vis of
-          -- If we get nothing, check for possible illegal access
-          [] -> checkIllegal
-          -- If there's a non-empty list at the given visibility,
-          -- return a Valid binding.
-          out -> Valid { validScope = scopeid, validContent = out }
-      -- There are no bindings, so return Undef
-      Nothing -> Undef
-
-lookupValueSym :: Symbol
-               -- ^ The symbol to look up.
-               -> ScopeRef
-               -- ^ The scope in which to do the lookup
-               -> Resolve [Bindings.Bind]
-lookupValueSym sym ref @ ScopeRef {
-                           refID = localid,
-                           refScope = Scope { scopeInherits = localinherits }
-                         } =
-  let
-    lookupInheritedValue :: ScopeID -> Scope -> Resolve [Bindings.Bind]
-    lookupInheritedValue scopeid Scope { scopeInherits = inherits,
-                                         scopeDefs = defs } =
-      localValueSym sym Protected scopeid defs <>
-      foldMapWithKey (lookupInheritedValue
-
-    -- Lookup any symbol in the local scope, then try the inherited scopes.
-    result = localValueSym sym Hidden localid localdefs
-  in
-
--- | Attempt to resolve a value symbol in a given scope.
-resolveValueSym :: (MonadMessages Message m) =>
-                   Symbol
-                -- ^ The symbol being resolved.
-                -> DWARFPosition
-                -- ^ The position at which the reference occurred.
-                -> [ScopeRef]
-                -- ^ The stack of scopes.
-                -> m Scope.Exp
-resolveValueSym sym pos scopes =
-  -- Convert the Resolve into an expression and report any errors.
-  -- Note: this depends on laziness to be efficient!
-  case mconcat lookupValueSym scopes of
-    -- For valid results, convert it into a Sym expression
-    Valid { validScope = scopeid } ->
-      return Bindings.Sym { symName = sym, symScope = scopeid, symPos = pos }
-    -- For the rest, we have an error.  Report the error and return a
-    -- bad expression.
-    Illegal { illegalPrivate = private } ->
-      do
-        if private
-          then privateAccess sym pos
-          else protectedAccess sym pos
-        return Bindings.BadExp { badExpPos = pos }
-    Context { contextObject = object } ->
-      do
-        if object
-          then objectAccess sym pos
-          else localAccess sym pos
-        return Bindings.BadExp { badExpPos = pos }
-    Undef ->
-      do
-        undefSymbol sym pos
-        return Bindings.BadExp { badExpPos = pos }
-
-badProject :: Strict.ByteString
-badProject = Strict.fromString "Empty field list in projection"
-
--- | Resolve a set of imports.
-elaborateImports :: (MonadMessages Message m, MonadIO m) =>
-                   Syntax.Exp
-                -- ^ The import expression.
-                -> m [Scope.Scope]
-                -- ^ The scope referred to by the import
-elaborateImports =
-  let
-    -- This is a worklist-fixedpoint algorithm.  We run over
-    -- unresolved imports until we hit a fixed point.  Once we do, we
-    -- convert any unresolved imports into error messages.
-
-    -- | Resolve a single import.  Returns a scope if it could be
-    -- resolved, or Nothing if it couldn't.
-    completeImport :: (MonadMessages Message m, MonadIO m) =>
-                     ([Syntax.Exp], [Syntax.Exp]) -> Syntax.Exp ->
-                     m ([Syntax.Exp], [Syntax.Exp])
-                  -- ^ The scope referred to by the import
-    completeImport accum Syntax.With { Syntax.withPos = pos } = ()
-    -- We can't import from a with expression
-    completeImport accum Syntax.Seq { Syntax.seqExps = func : args } = ()
-    -- If importing from a call, check all the arguments, and pull in the
-    -- scope from the "function".
-
-    -- Use elaborateStaticExp for the function and arguments.  This is OK;
-    -- syntax directives don't apply to static expressions.
-
-    -- For a symbol, look for a builder of that name.  If we find it, pull
-    -- in the scope.
-    completeImport accum Syntax.Sym { } = ()
-
-    -- XXX A split could be tricky.  If it ends up referring to a
-    -- definition in our own (incomplete) scope, then we've got a cycle.
-    completeImport accum Syntax.Project { Syntax.projectFields = fields } =
-      case HashMap.assocs fields of
-        -- An empty project list can't possibly happen
-        [] -> internalError badProject pos >> return accum
-        -- Importing one field
-        [(fname, ent)] -> ()
-        -- Check that the base expression isn't referring to a builder that we
-        -- ourselves define
-
-        -- For multiple fields,
-        multi -> ()
-
-    -- An empty fields list is an internal error
-    -- You can't import an anonymous builder instance.
-    completeImport accum Syntax.Anon { Syntax.anonPos = pos } =
-      do
-        importNestedScope pos
-        return accum
-    -- The rest of these can't occur in a static expression.
-    completeImport nonstatic =
-      let
-        pos = Syntax.expPosition nonstatic
-        badStatic = Strict.fromString "Expression is not a static expression"
-      in do
-        internalError badStatic pos
-        return accum
-
-    -- | Run over unresolved imports once.
-    resolvePass :: (MonadMessages Message m, MonadIO m) =>
-                   ([Syntax.Exp], [Syntax.Exp]) ->
-                   m ([Syntax.Exp], [Syntax.Exp])
-    resolvePass (resolved, unresolved) =
-      foldM completeImport (resolved, []) unresolved
-
-    -- | Run passes until we reach a fixed point.
-  in
-    -- Now convert all unresolved imports into an error message.
-
--- | Construct a scope by pulling in all definitions.
-elaborateScope :: (MonadMessages Message m, MonadIO m) =>
-                  Surface.Scope
-               -- ^ The scope being elaborated.
-               -> m Bindings.Scope
-elaborateScope Syntax.Scope { Syntax.scopeID = scopeID } = _
--- First, pull in all the all the imports
-
--- | Elaborate one component.  This generates the top-level scope and
--- then checks that the expected definition is actually present.
-elaborateComponent :: (MonadMessages Message m, MonadIO m) =>
-                      Syntax.Component
-                   -- ^ The component being elaborated.
-                   -> m Scope.Scope
--- First, enter a new scope for the component.
--- Once all the defs are in, check that the expected definition exists
--- At the end, pop the scope and turn it into a top-level.
-
-convert :: STArray s ScopeID Scope
-        -> [Syntax.Component]
-        -> ST s (STArray s ScopeID Scope)
-convert arr compontents =
-  let
-  in do
-    mapM_ convertComponent components
-    return arr
-
--- | Bind a set of components.  The components are expected to
--- represent a closed set, meaning no external dependencies.  Binding
--- turns them into a set of top-level definitions with inter-linked
--- scopes.
-bind :: (MonadMessages Message m, MonadIO m) =>
-        [Syntax.Component]
-     -> m Scope.Scopes
-bind components =
-  let
-
-  in
--- First, convert all the trees, with placeholders at all references
--- Now, run a fixed-point computation to resolve all references
--- Last, convert the tree to its final form
--- Check that all the expected definitions are present
--}
