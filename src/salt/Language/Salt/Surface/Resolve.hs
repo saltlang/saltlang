@@ -136,7 +136,7 @@ data Resolution =
 data Error =
     -- | Cyclic definitions.  This can happen with builder definitions
     -- that never "bottom out" at a concrete definition.
-    Cyclic { cyclicRefs :: !(HashSet TempRef) }
+    Cyclic { cyclicRefs :: !(HashSet (ScopeID, TempRef)) }
     -- | Ambiguous inherited or imported definitions.
   | Ambiguous {
       ambiguousRefs :: !(HashMap ScopeID NonLocal)
@@ -728,7 +728,7 @@ finishScope tempscopes
 undef :: (Monad m) => ExceptT Error m a
 undef = throwError Undefined
 
-cyclic :: (Monad m) => HashSet TempRef -> ExceptT Error m a
+cyclic :: (Monad m) => HashSet (ScopeID, TempRef) -> ExceptT Error m a
 cyclic = throwError . Cyclic
 
 -- | Report an ambiguous inherited symbol
@@ -801,153 +801,6 @@ oneValid (first : rest) =
   in
     acceptOne `catchError` handler
 
--- | Try to get the ScopeID of a TempRef representing a builder reference.
-lookupScopeTempRef :: (MonadIO m, MonadMessages Message m) =>
-                      Array ScopeID TempScope
-                   -- ^ The current scope state
-                   -> TempScope
-                   -> TempRef
-                   -> ExceptT Error m (ScopeID,
-                                       HashMap (ScopeID, TempRef) ScopeID)
-lookupScopeTempRef tempscopes ctx' tempref =
-  let
-    -- | Try to get the ScopeID of an Exp representing a builder reference.
-    lookupScopeExp :: (MonadIO m, MonadMessages Message m) =>
-                      TempScope
-                   -> HashSet TempRef
-                   -> HashMap (ScopeID, TempRef) ScopeID
-                   -> Exp Seq TempRef
-                   -> ExceptT Error m (ScopeID,
-                                       HashMap (ScopeID, TempRef) ScopeID)
-    -- For projects, look up the base scope, then do a lookup of the
-    -- field name in the base scope.
-    lookupScopeExp scope history deps Project { projectFields = fields,
-                                                projectVal = base,
-                                                projectPos = pos } =
-      case HashSet.toList fields of
-        [FieldName { fieldSym = sym }] ->
-          do
-            (basescope, basedeps) <- lookupScopeExp scope history deps base
-            lookupScopeSymbol (tempscopes Array.! basescope)
-                              history basedeps sym
-        [] ->
-          do
-            internalError "Should not see empty projected fields set" [pos]
-            undef
-        _ ->
-          do
-            internalError "Should not see multiple projected fields" [pos]
-            undef
-
-    -- For Id, look up the temp ref (note that cycles will be handled
-    -- by that function).
-    lookupScopeExp scope history deps Id { idRef = ref } =
-      lookupScopeTempRef' scope history deps ref
-    -- XXX Same as With, should this get turned into a separate scope?
-    lookupScopeExp scope history deps
-                   Call { callInfo = Seq { seqExps = [inner, _]} } =
-      lookupScopeExp scope history deps inner
-    -- XXX What do we do here? Possibly create a separate scope for this?
-    lookupScopeExp scope history deps With { withVal = val } =
-      lookupScopeExp scope history deps val
-    lookupScopeExp scope history deps Where { whereVal = val } =
-      lookupScopeExp scope history deps val
-    -- For a builder expression, return the scope id.
-    lookupScopeExp _ _ deps Anon { anonScope = resscopeid } =
-      return (resscopeid, HashMap.insert tempref resscopeid deps)
-    -- Skip bad scopes
-    lookupScopeExp _ _ _ Bad {} = undef
-    -- Everything else is an internal error
-    lookupScopeExp _ _ _ ex =
-      do
-        internalError "Expected static expression" [position ex]
-        undef
-
-    -- | Try to get the ScopeID of a Symbol representing a builder
-    -- reference.
-    lookupScopeSymbol :: (MonadIO m, MonadMessages Message m) =>
-                         TempScope
-                      -> HashSet TempRef
-                      -> HashMap (ScopeID, TempRef) ScopeID
-                      -> Symbol
-                      -> ExceptT Error m (ScopeID,
-                                          HashMap (ScopeID, TempRef) ScopeID)
-    lookupScopeSymbol ctx @ TempScope { tempScopeBuilders = builders }
-                      history deps sym =
-      case HashMap.lookup sym builders of
-        Just Builder { builderContent = content } ->
-          lookupScopeExp ctx history deps content
-        Nothing -> undef
-
-    lookupResolvedScopeSymbol :: (MonadIO m, MonadMessages Message m) =>
-                                 TempScope
-                              -> HashSet TempRef
-                              -> HashMap (ScopeID, TempRef) ScopeID
-                              -> Symbol
-                              -> ExceptT Error m
-                                         (ScopeID,
-                                          HashMap (ScopeID, TempRef) ScopeID)
-    lookupResolvedScopeSymbol ctx @ TempScope { tempScopeSyms = syms }
-                              history deps sym =
-      let
-        expectDefined :: (MonadIO m, MonadMessages Message m) =>
-                         Error
-                      -> ExceptT Error m (ScopeID,
-                                          HashMap (ScopeID, TempRef) ScopeID)
-        expectDefined Undefined =
-          do
-            internalError "Should not see undefined for a resolved symbol"
-                          []
-            undef
-
-        lookupResolvedScopeSymbol' =
-          case HashMap.lookup sym syms of
-            -- For direct resolutions, look up in the local scope.
-            Just (Right Direct) -> lookupScopeSymbol ctx history deps sym
-            -- For indirect resolutions, look up in the remote scope.
-            Just (Right Indirect {
-                          indirectSrc = NonLocal { nonLocalScope = indscope,
-                                                   nonLocalSym = indsym }
-                        }) ->
-              lookupScopeSymbol (tempscopes Array.! indscope)
-                                history deps indsym
-            -- Anything else fails
-            _ -> undef
-      in
-        lookupResolvedScopeSymbol' `catchError` expectDefined
-
-    lookupScopeTempRef' :: (MonadIO m, MonadMessages Message m) =>
-                           TempScope
-                        -> HashSet TempRef
-                        -> HashMap (ScopeID, TempRef) ScopeID
-                        -> TempRef
-                        -> ExceptT Error m (ScopeID,
-                                            HashMap (ScopeID, TempRef) ScopeID)
-    lookupScopeTempRef' ctx @ TempScope { tempScopeRenameTab = renametab }
-                        history deps tempref'
-        -- Detect cyclic references
-      | HashSet.member tempref' history = cyclic history
-      | otherwise =
-        let
-          -- | Try to get the ScopeID of a TempExp representing a
-          -- builder reference.
-          lookupScopeTempExp :: (MonadIO m, MonadMessages Message m) =>
-                                 TempExp
-                              -> ExceptT Error m
-                                         (ScopeID,
-                                          HashMap (ScopeID, TempRef) ScopeID)
-          lookupScopeTempExp TempSym { tempSym = sym } =
-            lookupResolvedScopeSymbol ctx history deps sym
-          lookupScopeTempExp TempExp { tempExp = ex } =
-            lookupScopeExp ctx history deps ex
-
-          newhistory = HashSet.insert tempref' history
-          tempexp = renametab Array.! tempref'
-        in
-          lookupScopeTempExp tempexp
-  in
-    lookupScopeTempRef' ctx' HashSet.empty HashMap.empty tempref
-
 -- | Core resolution algorithm.
 resolveScopes :: (MonadIO m, MonadMessages Message m) =>
                  Array ScopeID TempScope
@@ -960,6 +813,140 @@ resolveScopes :: (MonadIO m, MonadMessages Message m) =>
 resolveScopes tempscopes workset nextworkset =
   let
     arrbounds = Array.bounds tempscopes
+
+    -- | Try to get the ScopeID of a Symbol representing a builder
+    -- reference.
+    lookupScopeSymbol :: (MonadIO m, MonadMessages Message m) =>
+                         HashSet (ScopeID, TempRef)
+                      -> HashMap (ScopeID, TempRef) ScopeID
+                      -> TempScope
+                      -> Symbol
+                      -> ExceptT Error m (ScopeID,
+                                          HashMap (ScopeID, TempRef) ScopeID)
+    lookupScopeSymbol history deps TempScope { tempScopeSyms = syms } sym =
+      case HashMap.lookup sym syms of
+        Just (Right Direct {
+                      directResolvedScope =
+                        Just ResolvedScope { resolvedScopeID = resscope,
+                                             resolvedScopeDeps = resdeps }
+                      }) ->
+          -- XXX Union deps and resdeps
+          return (resscope, deps)
+        Just (Right Indirect {
+                      indirectSrc =
+                        NonLocal {
+                          nonLocalResolvedScope =
+                            Just ResolvedScope { resolvedScopeID = resscope,
+                                                 resolvedScopeDeps = resdeps }
+                                 }
+                    }) ->
+          -- XXX Union deps and resdeps
+          return (resscope, deps)
+        -- If we can't find a resolved scope, report an undefined
+        _ -> undef
+
+    -- | Try to get the ScopeID of an Exp representing a builder reference.
+    lookupScopeExpTail :: (MonadIO m, MonadMessages Message m) =>
+                          HashSet (ScopeID, TempRef)
+                       -> HashMap (ScopeID, TempRef) ScopeID
+                       -> ScopeID
+                       -> TempRef
+                       -> Exp Seq TempRef
+                       -> ExceptT Error m (ScopeID,
+                                           HashMap (ScopeID, TempRef) ScopeID)
+    -- For projects, look up the base scope, then do a lookup of the
+    -- field name in the base scope.
+    lookupScopeExpTail history deps scopeid tempref
+                       Project { projectFields = fields,
+                                 projectVal = base,
+                                 projectPos = pos } =
+      case HashSet.toList fields of
+        [FieldName { fieldSym = sym }] ->
+          do
+            (basescope, basedeps) <- lookupScopeExpTail history deps scopeid
+                                                        tempref base
+            lookupScopeSymbol history basedeps (tempscopes Array.! basescope)
+                              sym
+        [] ->
+          do
+            internalError "Should not see empty projected fields set" [pos]
+            undef
+        _ ->
+          do
+            internalError "Should not see multiple projected fields" [pos]
+            undef
+
+    -- For Id, look up the temp ref (note that cycles will be handled
+    -- by that function).
+    lookupScopeExpTail history deps scopeid tempref Id { idRef = ref } =
+      lookupScopeTempRefTail history deps scopeid ref
+    -- XXX Same as With, should this get turned into a separate scope?
+    lookupScopeExpTail history deps scopeid tempref
+                       Call { callInfo = Seq { seqExps = [inner, _]} } =
+      lookupScopeExpTail history deps scopeid tempref inner
+    -- XXX What do we do here? Possibly create a separate scope for this?
+    lookupScopeExpTail history deps scopeid tempref With { withVal = val } =
+      lookupScopeExpTail history deps scopeid tempref val
+    lookupScopeExpTail history deps scopeid tempref Where { whereVal = val } =
+      lookupScopeExpTail history deps scopeid tempref val
+    -- For a builder expression, return the scope id.
+    lookupScopeExpTail _ deps scopeid tempref Anon { anonScope = resscopeid } =
+      return (resscopeid, HashMap.insert (scopeid, tempref) resscopeid deps)
+    -- Skip bad scopes
+    lookupScopeExpTail _ _ _ _ Bad {} = undef
+    -- Everything else is an internal error
+    lookupScopeExpTail _ _ _ _ ex =
+      do
+        internalError "Expected static expression" [position ex]
+        undef
+
+    lookupScopeExp :: (MonadIO m, MonadMessages Message m) =>
+                      ScopeID
+                   -> TempRef
+                   -> Exp Seq TempRef
+                   -> ExceptT Error m (ScopeID,
+                                       HashMap (ScopeID, TempRef) ScopeID)
+    lookupScopeExp = lookupScopeExpTail HashSet.empty HashMap.empty
+
+    lookupScopeTempRefTail :: (MonadIO m, MonadMessages Message m) =>
+                              HashSet (ScopeID, TempRef)
+                           -> HashMap (ScopeID, TempRef) ScopeID
+                           -> ScopeID
+                           -> TempRef
+                           -> ExceptT Error m
+                                      (ScopeID,
+                                       HashMap (ScopeID, TempRef) ScopeID)
+    lookupScopeTempRefTail history deps scopeid tempref
+        -- Detect cyclic references
+      | HashSet.member (scopeid, tempref) history = cyclic history
+      | otherwise =
+        let
+          TempScope { tempScopeRenameTab = renametab } =
+            tempscopes Array.! scopeid
+
+          -- | Try to get the ScopeID of a TempExp representing a
+          -- builder reference.
+          lookupScopeTempExp :: (MonadIO m, MonadMessages Message m) =>
+                                 TempExp
+                              -> ExceptT Error m
+                                         (ScopeID,
+                                          HashMap (ScopeID, TempRef) ScopeID)
+          lookupScopeTempExp TempSym { tempSym = sym } =
+            lookupScopeSymbol history deps (tempscopes Array.! scopeid) sym
+          lookupScopeTempExp TempExp { tempExp = ex } =
+            lookupScopeExpTail history deps scopeid tempref ex
+
+          newhistory = HashSet.insert (scopeid, tempref) history
+          tempexp = renametab Array.! tempref
+        in
+          lookupScopeTempExp tempexp
+
+    lookupScopeTempRef :: (MonadIO m, MonadMessages Message m) =>
+                          ScopeID
+                       -> TempRef
+                       -> ExceptT Error m (ScopeID,
+                                           HashMap (ScopeID, TempRef) ScopeID)
+    lookupScopeTempRef = lookupScopeTempRefTail HashSet.empty HashMap.empty
 
     -- | Check if the first scope inherits from the second, possibly
     -- excluding some scope from the set of possible paths.
@@ -1001,8 +988,7 @@ resolveScopes tempscopes workset nextworkset =
               foldfun True _ = return True
               foldfun False tempref =
                 do
-                  res <- runExceptT $! lookupScopeTempRef tempscopes tempscope
-                                                          tempref
+                  res <- runExceptT $! lookupScopeTempRef currscope tempref
                   case res of
                     Left _ -> return False
                     Right (superscope, _) -> searchInherit excludes superscope
@@ -1096,10 +1082,22 @@ resolveScopes tempscopes workset nextworkset =
             builderLookup = case HashMap.lookup sym builders of
               Just Builder { builderVisibility = actualvis,
                              builderContent = content } ->
-                do
-                  -- Attempt to resolve the scope expression.
-                  resscope <- lookupScopeExp ctx history deps content
-                  checkVisibility (Just resscope) actualvis
+                -- There should be a tempref for this symbol
+                case HashMap.lookup sym symtemprefs of
+                  Just tempref ->
+                    do
+                      -- Attempt to resolve the scope expression.
+                      (resscope, resdeps) <- lookupScopeExp scopeid tempref
+                                                            content
+                      checkVisibility (Just ResolvedScope {
+                                              resolvedScopeID = resscope,
+                                              resolvedScopeDeps = resdeps
+                                            })
+                                      actualvis
+                  Nothing ->
+                    do
+                      internalError "No tempref mapping for symbol" []
+                      undef
               Nothing -> undef
 
             truthLookup = case HashMap.lookup sym truths of
