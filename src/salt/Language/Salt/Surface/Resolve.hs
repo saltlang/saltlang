@@ -87,6 +87,14 @@ data PathElem =
     }
     deriving (Eq, Ord)
 
+data ResolvedScope =
+    ResolvedScope {
+      resolvedScopeID :: !ScopeID,
+      resolvedScopeDeps :: !(HashMap (ScopeID, TempRef) ScopeID)
+    }
+  | NotScope
+    deriving (Eq)
+
 -- | Non-Local resolution result.  This is separate, because we only
 -- store non-local resolutions in the dependence set.
 data NonLocal =
@@ -102,14 +110,22 @@ data NonLocal =
     -- derived.
     nonLocalTail :: ![PathElem],
     -- | All resolution results on which this resolution depends.
-    nonLocalDeps :: !(HashMap TempRef ScopeID)
+    nonLocalDeps :: !(HashMap (ScopeID, TempRef) ScopeID),
+    -- | If this resolution points to a builder and we can resolve
+    -- the scope, it is stored here.
+    nonLocalResolvedScope :: !(Maybe ResolvedScope)
+
   }
   deriving (Eq)
 
 data Resolution =
     -- | Locally-defined symbol.  This is always valid, so no need for
     -- validity.
-    Direct
+    Direct {
+      -- | If this resolution points to a builder and we can resolve
+      -- the scope, it is stored here.
+      directResolvedScope :: !(Maybe ResolvedScope)
+    }
     -- | Resolution from a different scope.
   | Indirect {
       -- | Resolution data.
@@ -154,13 +170,13 @@ newtype TempRef = TempRef { tempRefID :: Word }
 data TempInherit =
   TempInherit {
     tempInheritScope :: !ScopeID,
-    tempInheritDeps :: !(HashMap TempRef ScopeID)
+    tempInheritDeps :: !(HashMap (ScopeID, TempRef) ScopeID)
   }
 
 data TempImport =
   TempImport {
     tempImportData :: !(Import ScopeID),
-    tempImportDeps :: !(HashMap TempRef ScopeID)
+    tempImportDeps :: !(HashMap (ScopeID, TempRef) ScopeID)
   }
 
 data TempScope =
@@ -186,7 +202,8 @@ data TempScope =
     tempScopeResolvedImports :: ![Either Error TempImport],
     tempScopeResolvedInherits :: ![Either Error TempInherit],
     -- | All enclosed scopes
-    tempScopeEnclosed :: ![ScopeID]
+    tempScopeEnclosed :: ![ScopeID],
+    tempScopeSymbolTempRefs :: !(HashMap Symbol TempRef)
   }
 
 data TempExp =
@@ -214,7 +231,8 @@ type ResolveT m = ReaderT ResolveState m
 data RenameState =
   RenameState {
     renameStateCurr :: !TempRef,
-    renameStateTab :: !(HashMap TempExp TempRef)
+    renameStateTab :: !(HashMap TempExp TempRef),
+    renameSymTab :: !(HashMap Symbol TempRef)
   }
 
 type RenameT m = StateT RenameState m
@@ -237,6 +255,19 @@ instance Ord NonLocal where
           out -> out
         out -> out
       out -> out
+
+instance Ord ResolvedScope where
+  compare ResolvedScope { resolvedScopeID = scopeid1,
+                          resolvedScopeDeps = deps1 }
+          ResolvedScope { resolvedScopeID = scopeid2,
+                          resolvedScopeDeps = deps2 } =
+    let
+      sorteddeps1 = sort (HashMap.toList deps1)
+      sorteddeps2 = sort (HashMap.toList deps2)
+    in
+      case compare scopeid1 scopeid2 of
+        EQ -> compare sorteddeps1 sorteddeps2
+        out -> out
 
 instance Ord Error where
   compare Cyclic { cyclicRefs = refs1 } Cyclic { cyclicRefs = refs2 } =
@@ -272,6 +303,14 @@ instance Hashable PathElem where
   hashWithSalt s Enclosing { enclosingScope = scope, enclosingDepth = depth } =
     s `hashWithSalt` (2 :: Word) `hashWithSalt` scope `hashWithSalt` depth
 
+instance Hashable ResolvedScope where
+  hashWithSalt s ResolvedScope { resolvedScopeID = scopeid,
+                                 resolvedScopeDeps = deps } =
+    let
+      sorteddeps = sort (HashMap.toList deps)
+    in
+      s `hashWithSalt` scopeid `hashWithSalt` sorteddeps
+
 instance Hashable NonLocal where
   hashWithSalt s NonLocal { nonLocalScope = scopeid, nonLocalSym = sym,
                             nonLocalSrc = src, nonLocalTail = tail,
@@ -280,7 +319,8 @@ instance Hashable NonLocal where
     src `hashWithSalt` tail `hashWithSalt` deps
 
 instance Hashable Resolution where
-  hashWithSalt s Direct = s `hashWithSalt` (0 :: Int)
+  hashWithSalt s Direct { directResolvedScope = scope} =
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` scope
   hashWithSalt s Indirect { indirectSrc = res } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` res
 
@@ -316,9 +356,8 @@ instance Semigroup NonLocal where
   out <> _ = out
 
 instance Semigroup Resolution where
-  Direct <> Direct = Direct
-  Direct <> _ = Direct
-  _ <> Direct = Direct
+  out @ Direct {} <> _ = out
+  _ <> out @ Direct {} = out
   Indirect { indirectSrc = res1 } <> Indirect { indirectSrc = res2 } =
     Indirect { indirectSrc = res1 <> res2 }
 
@@ -360,12 +399,13 @@ renameSym :: (Monad m) =>
           -- ^ The symbol to rename.
           -> RenameT m TempRef
           -- ^ A 'TempRef' representing this 'Symbol'.
-renameSym ref =
+renameSym sym =
   let
-    tempsym = TempSym { tempSym = ref }
+    tempsym = TempSym { tempSym = sym }
   in do
     -- Check the renaming table to see if we've seen this one before
-    st @ RenameState { renameStateCurr = curr, renameStateTab = tab } <- get
+    st @ RenameState { renameStateCurr = curr, renameStateTab = tab,
+                       renameSymTab = symtab } <- get
     case HashMap.lookup tempsym tab of
       -- If we have, return its TempRef
       Just tempref -> return tempref
@@ -375,6 +415,7 @@ renameSym ref =
           newidx = succ curr
         in do
           put st { renameStateTab = HashMap.insert tempsym newidx tab,
+                   renameSymTab = HashMap.insert sym newidx symtab,
                    renameStateCurr = succ newidx }
           return newidx
 
@@ -538,7 +579,8 @@ renameScope :: (MonadMessages Message m) =>
                   HashMap Symbol (Truth (Exp Seq TempRef)),
                   Array DefID (Def (Exp Seq TempRef)),
                   [Compound (Exp Seq TempRef)],
-                  Array TempRef TempExp)
+                  Array TempRef TempExp,
+                  HashMap Symbol TempRef)
 renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
                     scopeTruths = truths, scopeDefs = defs,
                     scopeEval = eval, scopeProofs = proofs,
@@ -546,7 +588,8 @@ renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
   let
     -- Start with def, that way we never end up assigning it
     initstate = RenameState { renameStateCurr = def,
-                              renameStateTab = HashMap.empty }
+                              renameStateTab = HashMap.empty,
+                              renameSymTab = HashMap.empty }
 
     -- Imports, inherits, and proofs are static expressions.  These
     -- should always be converted into TempRefs
@@ -588,10 +631,10 @@ renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
         arr
   in do
     ((proofs, imports, inherits, builders, syntax, truths, defs, eval),
-     RenameState { renameStateCurr = endidx, renameStateTab = tab }) <-
-      runStateT renameScope' initstate
+     RenameState { renameStateCurr = endidx, renameStateTab = tab,
+                   renameSymTab = symtab }) <- runStateT renameScope' initstate
     return (proofs, imports, inherits, builders, syntax,
-            truths, defs, eval, renametab endidx tab)
+            truths, defs, eval, renametab endidx tab, symtab)
 
 -- | Convert a 'TempScope' into a 'Resolved' scope.
 finishScope :: (MonadIO m, MonadMessages Message m) =>
@@ -617,7 +660,7 @@ finishScope tempscopes
           -> Exp Seq TempRef
           -> Exp Seq Ref
     subst tmprefvals = (>>= (tmprefvals Array.!))
-
+{-
     getScopeID :: (MonadIO m, MonadMessages Message m) =>
                   TempRef
                -> m (Maybe ScopeID)
@@ -627,7 +670,7 @@ finishScope tempscopes
         case res of
           Left _ -> return Nothing
           Right (out, _) -> return $! Just out
-{-
+
     foldinherits :: (MonadIO m, MonadMessages Message m) =>
                     [ScopeID]
                  -> TempRef
@@ -764,16 +807,18 @@ lookupScopeTempRef :: (MonadIO m, MonadMessages Message m) =>
                    -- ^ The current scope state
                    -> TempScope
                    -> TempRef
-                   -> ExceptT Error m (ScopeID, HashMap TempRef ScopeID)
+                   -> ExceptT Error m (ScopeID,
+                                       HashMap (ScopeID, TempRef) ScopeID)
 lookupScopeTempRef tempscopes ctx' tempref =
   let
     -- | Try to get the ScopeID of an Exp representing a builder reference.
     lookupScopeExp :: (MonadIO m, MonadMessages Message m) =>
                       TempScope
                    -> HashSet TempRef
-                   -> HashMap TempRef ScopeID
+                   -> HashMap (ScopeID, TempRef) ScopeID
                    -> Exp Seq TempRef
-                   -> ExceptT Error m (ScopeID, HashMap TempRef ScopeID)
+                   -> ExceptT Error m (ScopeID,
+                                       HashMap (ScopeID, TempRef) ScopeID)
     -- For projects, look up the base scope, then do a lookup of the
     -- field name in the base scope.
     lookupScopeExp scope history deps Project { projectFields = fields,
@@ -808,8 +853,8 @@ lookupScopeTempRef tempscopes ctx' tempref =
     lookupScopeExp scope history deps Where { whereVal = val } =
       lookupScopeExp scope history deps val
     -- For a builder expression, return the scope id.
-    lookupScopeExp _ _ deps Anon { anonScope = scopeid } =
-      return (scopeid, HashMap.insert tempref scopeid deps)
+    lookupScopeExp _ _ deps Anon { anonScope = resscopeid } =
+      return (resscopeid, HashMap.insert tempref resscopeid deps)
     -- Skip bad scopes
     lookupScopeExp _ _ _ Bad {} = undef
     -- Everything else is an internal error
@@ -823,9 +868,10 @@ lookupScopeTempRef tempscopes ctx' tempref =
     lookupScopeSymbol :: (MonadIO m, MonadMessages Message m) =>
                          TempScope
                       -> HashSet TempRef
-                      -> HashMap TempRef ScopeID
+                      -> HashMap (ScopeID, TempRef) ScopeID
                       -> Symbol
-                      -> ExceptT Error m (ScopeID, HashMap TempRef ScopeID)
+                      -> ExceptT Error m (ScopeID,
+                                          HashMap (ScopeID, TempRef) ScopeID)
     lookupScopeSymbol ctx @ TempScope { tempScopeBuilders = builders }
                       history deps sym =
       case HashMap.lookup sym builders of
@@ -836,16 +882,18 @@ lookupScopeTempRef tempscopes ctx' tempref =
     lookupResolvedScopeSymbol :: (MonadIO m, MonadMessages Message m) =>
                                  TempScope
                               -> HashSet TempRef
-                              -> HashMap TempRef ScopeID
+                              -> HashMap (ScopeID, TempRef) ScopeID
                               -> Symbol
-                              -> ExceptT Error m (ScopeID,
-                                                  HashMap TempRef ScopeID)
+                              -> ExceptT Error m
+                                         (ScopeID,
+                                          HashMap (ScopeID, TempRef) ScopeID)
     lookupResolvedScopeSymbol ctx @ TempScope { tempScopeSyms = syms }
                               history deps sym =
       let
         expectDefined :: (MonadIO m, MonadMessages Message m) =>
                          Error
-                      -> ExceptT Error m (ScopeID, HashMap TempRef ScopeID)
+                      -> ExceptT Error m (ScopeID,
+                                          HashMap (ScopeID, TempRef) ScopeID)
         expectDefined Undefined =
           do
             internalError "Should not see undefined for a resolved symbol"
@@ -871,9 +919,10 @@ lookupScopeTempRef tempscopes ctx' tempref =
     lookupScopeTempRef' :: (MonadIO m, MonadMessages Message m) =>
                            TempScope
                         -> HashSet TempRef
-                        -> HashMap TempRef ScopeID
+                        -> HashMap (ScopeID, TempRef) ScopeID
                         -> TempRef
-                        -> ExceptT Error m (ScopeID, HashMap TempRef ScopeID)
+                        -> ExceptT Error m (ScopeID,
+                                            HashMap (ScopeID, TempRef) ScopeID)
     lookupScopeTempRef' ctx @ TempScope { tempScopeRenameTab = renametab }
                         history deps tempref'
         -- Detect cyclic references
@@ -884,8 +933,9 @@ lookupScopeTempRef tempscopes ctx' tempref =
           -- builder reference.
           lookupScopeTempExp :: (MonadIO m, MonadMessages Message m) =>
                                  TempExp
-                              -> ExceptT Error m (ScopeID,
-                                                  HashMap TempRef ScopeID)
+                              -> ExceptT Error m
+                                         (ScopeID,
+                                          HashMap (ScopeID, TempRef) ScopeID)
           lookupScopeTempExp TempSym { tempSym = sym } =
             lookupResolvedScopeSymbol ctx history deps sym
           lookupScopeTempExp TempExp { tempExp = ex } =
@@ -994,32 +1044,9 @@ resolveScopes tempscopes workset nextworkset =
                           tempScopeResolvedImports = imports,
                           tempScopeResolvedInherits = inherits,
                           tempScopeNames = names,
-                          tempScopeSyms = syms } = tempscopes Array.! scopeid
-
-        -- | Check that the resolution result is consistent.
-        checkConsistent :: (MonadIO m, MonadMessages Message m) =>
-                           Resolution
-                        -> ExceptT Error m Resolution
-        -- Direct resolutions are always consistent
-        checkConsistent Direct = return Direct
-        checkConsistent out @ Indirect {
-                                indirectSrc =
-                                  src @ NonLocal { nonLocalDeps = deps,
-                                                   nonLocalScope = expectscope,
-                                                   nonLocalSym = expectsym }
-                              } =
-          let
-            key = Ref { refScopeID = scopeid, refSymbol = sym }
-          in case HashMap.lookup key deps of
-            -- If we depend on our own resolution being something
-            -- different, then this is an inconsistent resolution
-            -- result.
-            Just Ref { refScopeID = actualscope, refSymbol = actualsym }
-              | expectscope /= actualscope ||
-                expectsym /= actualsym -> inconsistent src
-            -- Otherwise the result is fine.
-            _ -> return out
-
+                          tempScopeSyms = syms,
+                          tempScopeSymbolTempRefs = symtemprefs } =
+          tempscopes Array.! scopeid
         -- | Try to look up a direct (local) definition in a scope by its
         -- symbol.
         resolveDirect :: (MonadIO m, MonadMessages Message m) =>
@@ -1027,13 +1054,17 @@ resolveScopes tempscopes workset nextworkset =
         resolveDirect =
           let
             checkVisibility :: (Monad m) =>
-                               Visibility
+                               Maybe ResolvedScope
+                            -- ^ The resolved scope ID
+                            -> Visibility
+                            -- ^ The actual visibility level
                             -> ExceptT Error m Resolution
             -- | Check the visibility of a definition we find.
-            checkVisibility actualvis
+            checkVisibility resscope actualvis
                 -- If we find it, and the expected visibility is lower
                 -- or equal to the actual, then it's a valid access.
-              | expectvis <= actualvis = return Direct
+              | expectvis <= actualvis =
+                return Direct { directResolvedScope = resscope }
                 -- Don't report invalid accesses for Hidden visibility.
               | actualvis == Hidden = undef
                 -- Otherwise report illegal access
@@ -1041,35 +1072,39 @@ resolveScopes tempscopes workset nextworkset =
 
             hiddenLookup
               | HashMap.member sym (names Array.! Hidden) =
-                checkVisibility Hidden
+                checkVisibility Nothing Hidden
               | otherwise = undef
 
             privateLookup
               | HashMap.member sym (names Array.! Private) =
-                checkVisibility Private
+                checkVisibility Nothing Private
               | otherwise = undef
 
             protectedLookup
               | HashMap.member sym (names Array.! Protected) =
-                checkVisibility Protected
+                checkVisibility Nothing Protected
               | otherwise = undef
 
             publicLookup
               | HashMap.member sym (names Array.! Public) =
-                checkVisibility Public
+                checkVisibility Nothing Public
               | otherwise = undef
 
             defsLookup = firstValid [hiddenLookup, privateLookup,
                                      protectedLookup, publicLookup]
 
             builderLookup = case HashMap.lookup sym builders of
-              Just Builder { builderVisibility = actualvis } ->
-                checkVisibility actualvis
+              Just Builder { builderVisibility = actualvis,
+                             builderContent = content } ->
+                do
+                  -- Attempt to resolve the scope expression.
+                  resscope <- lookupScopeExp ctx history deps content
+                  checkVisibility (Just resscope) actualvis
               Nothing -> undef
 
             truthLookup = case HashMap.lookup sym truths of
               Just Truth { truthVisibility = actualvis } ->
-                checkVisibility actualvis
+                checkVisibility Nothing actualvis
               Nothing -> undef
 
             foldfun (Just out) (Just _) =
@@ -1102,7 +1137,8 @@ resolveScopes tempscopes workset nextworkset =
                 -- we import everything)
               | HashSet.null names || HashSet.member sym names =
                 let
-                  addPathElem impscope deps Direct =
+                  addPathElem impscope deps
+                              Direct { directResolvedScope = resscope } =
                     let
                       -- For direct resolutions, synthesize a new
                       -- indirect resolution.
@@ -1111,7 +1147,8 @@ resolveScopes tempscopes workset nextworkset =
                                             nonLocalScope = impscope,
                                             nonLocalSrc = imported,
                                             nonLocalTail = [],
-                                            nonLocalDeps = deps }
+                                            nonLocalDeps = deps,
+                                            nonLocalResolvedScope = resscope }
                     in
                       return Indirect { indirectSrc = nonlocal }
                   -- For indirect resolutions, add a path element and
@@ -1155,7 +1192,8 @@ resolveScopes tempscopes workset nextworkset =
             resolveFromInherit TempInherit { tempInheritScope = inheritscope,
                                              tempInheritDeps = deps } =
               let
-                  addPathElem inheritscope deps Direct =
+                  addPathElem inheritscope deps
+                              Direct { directResolvedScope = resscope } =
                     let
                       -- For direct resolutions, synthesize a new
                       -- indirect resolution.
@@ -1164,7 +1202,8 @@ resolveScopes tempscopes workset nextworkset =
                                             nonLocalScope = inheritscope,
                                             nonLocalSrc = inherited,
                                             nonLocalTail = [],
-                                            nonLocalDeps = deps }
+                                            nonLocalDeps = deps,
+                                            nonLocalResolvedScope = resscope }
                     in
                       return Indirect { indirectSrc = nonlocal }
                   -- For indirect resolutions, add a path element and
@@ -1300,7 +1339,7 @@ resolveScopes tempscopes workset nextworkset =
                   case res of
                     -- If the result is a direct definition, construct
                     -- a non-local resolution result.
-                    Direct ->
+                    Direct { directResolvedScope = resscope } ->
                       let
                         pathelem = Enclosing { enclosingScope = encscopeid,
                                                enclosingDepth = 1 }
@@ -1308,7 +1347,8 @@ resolveScopes tempscopes workset nextworkset =
                                               nonLocalScope = encscopeid,
                                               nonLocalSrc = pathelem,
                                               nonLocalTail = [],
-                                              nonLocalDeps = HashMap.empty }
+                                              nonLocalDeps = HashMap.empty,
+                                              nonLocalResolvedScope = resscope }
                       in
                         return Indirect { indirectSrc = nonlocal }
                     -- If the result is an enclosing scope definition,
@@ -1343,6 +1383,38 @@ resolveScopes tempscopes workset nextworkset =
               Nothing -> undef
             -- Otherwise, report undefined.
           | otherwise = undef
+
+        -- | Check that the resolution result is consistent.
+        checkConsistent :: (MonadIO m, MonadMessages Message m) =>
+                           Resolution
+                        -> ExceptT Error m Resolution
+        checkConsistent out @ Indirect {
+                                indirectSrc =
+                                  src @ NonLocal {
+                                          nonLocalDeps = deps,
+                                          nonLocalResolvedScope =
+                                            Just ResolvedScope {
+                                                   resolvedScopeID = expectscope
+                                                 }
+                                        }
+                              } =
+          -- See if there's a tempref for this symbol.
+          case HashMap.lookup sym symtemprefs of
+            -- If there's not, then there's nothing to do.
+            Nothing -> return out
+            -- If there is, then we do the consistency check
+            Just tempref ->
+              -- Check if the scope, tempref pair is in the dependencies
+              case HashMap.lookup (scopeid, tempref) deps of
+                -- If we depend on our own resolution being something
+                -- different, then this is an inconsistent resolution
+                -- result.
+                Just actualscope
+                  | expectscope /= actualscope -> inconsistent src
+                -- Otherwise the result is fine.
+                _ -> return out
+        -- In all other cases, resolution is consistent
+        checkConsistent out = return out
       in do
         -- Search for results in precedence order
         res <- firstValid [resolveDirect, resolveFromImports,
@@ -1440,7 +1512,8 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                      HashMap Symbol (Truth (Exp Seq TempRef)),
                      Array DefID (Def (Exp Seq TempRef)),
                      [Compound (Exp Seq TempRef)],
-                     Array TempRef TempExp)
+                     Array TempRef TempExp,
+                     HashMap Symbol TempRef)
         mapfun enclosedarr (scopeid, scope) =
           let
             -- Gather up all the references
@@ -1455,10 +1528,10 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                   liftIO (IOArray.writeArray enclosedarr enclosing
                                              (scopeid : enclosed))
               _ -> return ()
-            (proofs, imports, inherits, builders,
-             syntax, truths, defs, eval, renametab) <- renameScope scope
+            (proofs, imports, inherits, builders, syntax,
+             truths, defs, eval, renametab, symtab) <- renameScope scope
             return (scopeid, HashMap.fromList ents, proofs, imports, inherits,
-                    builders, syntax, truths, defs, eval, renametab)
+                    builders, syntax, truths, defs, eval, renametab, symtab)
 
         -- Create the 'TempScope's out of their components
         makeTempScopes :: MonadIO m =>
@@ -1470,13 +1543,15 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                             HashMap Symbol (Truth (Exp Seq TempRef)),
                             Array DefID (Def (Exp Seq TempRef)),
                             [Compound (Exp Seq TempRef)],
-                            Array TempRef TempExp)]
+                            Array TempRef TempExp,
+                            HashMap Symbol TempRef)]
                        -> m (Array ScopeID TempScope)
         makeTempScopes enclosedarr scopedata =
           let
             -- Map function
             makeTempScope (scopeid, syms, proofs, imports, inherits,
-                           builders, syntax, truths, defs, eval, renametab) =
+                           builders, syntax, truths, defs, eval, renametab,
+                           symtab) =
               let
                 Scope { scopeEnclosing = enclosing,
                         scopeNames = names } = scopes Array.! scopeid
@@ -1497,7 +1572,8 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                                              tempScopeSyms = syms,
                                              tempScopeResolvedImports = [],
                                              tempScopeResolvedInherits = [],
-                                             tempScopeEnclosed = enclosed })
+                                             tempScopeEnclosed = enclosed,
+                                             tempScopeSymbolTempRefs = symtab })
           in do
             tempscopes <- mapM makeTempScope scopedata
             return (Array.array arrbounds tempscopes)
