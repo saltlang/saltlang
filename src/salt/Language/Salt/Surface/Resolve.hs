@@ -38,6 +38,7 @@ import Control.Monad.Except
 import Control.Monad.Messages.Class
 import Control.Monad.Reader
 import Control.Monad.State
+import Control.Monad.Symbols
 import Data.Array(Array, Ix)
 import Data.Array.BitArray(BitArray)
 import Data.Array.BitArray.IO(IOBitArray)
@@ -185,7 +186,7 @@ data TempScope =
     tempScopeNames :: !(Array Visibility (HashMap Symbol [DefID])),
     tempScopeEnclosing :: !(Maybe ScopeID),
     -- Static expression-based content from the original scope.
-    tempScopeProofs :: ![Proof TempRef],
+    tempScopeProofs :: ![Proof (Exp Seq TempRef)],
     tempScopeImports :: ![Import TempRef],
     tempScopeInherits :: ![TempRef],
     -- Renamed expression-based content from the original Scope.
@@ -203,7 +204,8 @@ data TempScope =
     tempScopeResolvedInherits :: ![Either Error TempInherit],
     -- | All enclosed scopes
     tempScopeEnclosed :: ![ScopeID],
-    tempScopeSymbolTempRefs :: !(HashMap Symbol TempRef)
+    tempScopeSymbolTempRefs :: !(HashMap Symbol TempRef),
+    tempScopeSymbolPos :: !(HashMap Symbol [Position])
   }
 
 data TempExp =
@@ -232,7 +234,8 @@ data RenameState =
   RenameState {
     renameStateCurr :: !TempRef,
     renameStateTab :: !(HashMap TempExp TempRef),
-    renameSymTab :: !(HashMap Symbol TempRef)
+    renameSymTab :: !(HashMap Symbol TempRef),
+    renameSymPos :: !(HashMap Symbol [Position])
   }
 
 type RenameT m = StateT RenameState m
@@ -397,15 +400,17 @@ nonLocalPath NonLocal { nonLocalSrc = first, nonLocalTail = rest } =
 renameSym :: (Monad m) =>
              Symbol
           -- ^ The symbol to rename.
+          -> Position
+          -- ^ Position at which the symbol was referenced.
           -> RenameT m TempRef
           -- ^ A 'TempRef' representing this 'Symbol'.
-renameSym sym =
+renameSym sym pos =
   let
     tempsym = TempSym { tempSym = sym }
   in do
     -- Check the renaming table to see if we've seen this one before
     st @ RenameState { renameStateCurr = curr, renameStateTab = tab,
-                       renameSymTab = symtab } <- get
+                       renameSymTab = symtab, renameSymPos = sympos } <- get
     case HashMap.lookup tempsym tab of
       -- If we have, return its TempRef
       Just tempref -> return tempref
@@ -416,6 +421,7 @@ renameSym sym =
         in do
           put st { renameStateTab = HashMap.insert tempsym newidx tab,
                    renameSymTab = HashMap.insert sym newidx symtab,
+                   renameSymPos = HashMap.insertWith (++) sym [pos] sympos,
                    renameStateCurr = succ newidx }
           return newidx
 
@@ -449,9 +455,9 @@ renameExp :: (Monad m) =>
              Exp Seq Symbol
           -> RenameT m (Exp Seq TempRef)
 -- Always replace 'Id's symbol with a 'TempRef'
-renameExp i @ Id { idRef = ref } =
+renameExp i @ Id { idRef = ref, idPos = pos } =
   do
-    tempref <- renameSym ref
+    tempref <- renameSym ref pos
     return i { idRef = tempref }
 -- Translate 'Project's into 'TempRef's, as long as their inner
 -- expression is also translated into a 'TempRef'
@@ -571,7 +577,7 @@ renameExp Bad { badPos = pos } = return Bad { badPos = pos }
 -- static expression into a TempRef.
 renameScope :: (MonadMessages Message m) =>
                Scope (Exp Seq Symbol)
-            -> m ([Proof TempRef],
+            -> m ([Proof (Exp Seq TempRef)],
                   [Import TempRef],
                   [TempRef],
                   HashMap Symbol (Builder (Exp Seq TempRef)),
@@ -580,7 +586,8 @@ renameScope :: (MonadMessages Message m) =>
                   Array DefID (Def (Exp Seq TempRef)),
                   [Compound (Exp Seq TempRef)],
                   Array TempRef TempExp,
-                  HashMap Symbol TempRef)
+                  HashMap Symbol TempRef,
+                  HashMap Symbol [Position])
 renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
                     scopeTruths = truths, scopeDefs = defs,
                     scopeEval = eval, scopeProofs = proofs,
@@ -589,7 +596,8 @@ renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
     -- Start with def, that way we never end up assigning it
     initstate = RenameState { renameStateCurr = def,
                               renameStateTab = HashMap.empty,
-                              renameSymTab = HashMap.empty }
+                              renameSymTab = HashMap.empty,
+                              renameSymPos = HashMap.empty }
 
     -- Imports, inherits, and proofs are static expressions.  These
     -- should always be converted into TempRefs
@@ -610,9 +618,8 @@ renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
               return def
 
     renameScope' =
-      let
-      in do
-        newproofs <- mapM (mapM renameStaticExp) proofs
+      do
+        newproofs <- mapM (mapM renameExp) proofs
         newimports <- mapM (mapM renameStaticExp) imports
         newinherits <- mapM renameStaticExp inherits
         newbuilders <- mapM (mapM renameExp) builders
@@ -632,97 +639,319 @@ renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
   in do
     ((proofs, imports, inherits, builders, syntax, truths, defs, eval),
      RenameState { renameStateCurr = endidx, renameStateTab = tab,
-                   renameSymTab = symtab }) <- runStateT renameScope' initstate
-    return (proofs, imports, inherits, builders, syntax,
-            truths, defs, eval, renametab endidx tab, symtab)
+                   renameSymTab = symtab, renameSymPos = sympos }) <-
+      runStateT renameScope' initstate
+    return (proofs, imports, inherits, builders, syntax, truths,
+            defs, eval, renametab endidx tab, symtab, sympos)
 
--- | Convert a 'TempScope' into a 'Resolved' scope.
-finishScope :: (MonadIO m, MonadMessages Message m) =>
-               Array ScopeID TempScope
-            -- ^ The final scope state.
-            -> (ScopeID, TempScope)
-            -> m (ScopeID, Resolved (Exp Seq Ref))
-finishScope tempscopes
-            (scopeid,
-             tempscope @ TempScope { tempScopeBuilders = builders,
-                                     tempScopeSyntax = syntax,
-                                     tempScopeTruths = truths,
-                                     tempScopeDefs = defs,
-                                     tempScopeEval = eval,
-                                     tempScopeNames = names,
-                                     tempScopeEnclosing = enclosing,
-                                     tempScopeResolvedInherits = inherits,
-                                     tempScopeResolvedImports = imports,
-                                     tempScopeProofs = proofs }) =
+-- | Core resolution algorithm.
+finishScopes :: (MonadIO m, MonadMessages Message m, MonadSymbols m) =>
+                 Array ScopeID TempScope
+             -> m (Array ScopeID (Resolved (Exp Seq Ref)))
+finishScopes finalscopes =
   let
-    -- | Substitute the term for a 'TempRef' back in
-    subst :: Array TempRef (Exp Seq Ref)
-          -> Exp Seq TempRef
-          -> Exp Seq Ref
-    subst tmprefvals = (>>= (tmprefvals Array.!))
-{-
-    getScopeID :: (MonadIO m, MonadMessages Message m) =>
-                  TempRef
-               -> m (Maybe ScopeID)
-    getScopeID tempref =
-      do
-        res <- runExceptT $! lookupScopeTempRef tempscopes tempscope tempref
-        case res of
-          Left _ -> return Nothing
-          Right (out, _) -> return $! Just out
+    arrbounds = Array.bounds finalscopes
 
-    foldinherits :: (MonadIO m, MonadMessages Message m) =>
-                    [ScopeID]
-                 -> TempRef
-                 -> m [ScopeID]
-    foldinherits accum tempref =
-      do
-        res <- getScopeID tempref
-        case res of
-          Just scopeid -> return (scopeid : accum)
-          Nothing -> return accum
+    -- | Convert a 'TempScope' into a 'Resolved' scope.
+    finishScope :: (MonadIO m, MonadMessages Message m, MonadSymbols m) =>
+                   Array ScopeID TempScope
+                -- ^ The final scope state.
+                -> (ScopeID, TempScope)
+                -> m (ScopeID, Resolved (Exp Seq Ref))
+    finishScope tempscopes
+                (scopeid,
+                 tempscope @ TempScope { tempScopeBuilders = builders,
+                                         tempScopeSyntax = syntax,
+                                         tempScopeTruths = truths,
+                                         tempScopeDefs = defs,
+                                         tempScopeEval = eval,
+                                         tempScopeNames = names,
+                                         tempScopeEnclosing = enclosing,
+                                         tempScopeSyms = syms,
+                                         tempScopeSymbolPos = sympos,
+                                         tempScopeRenameTab = renametab,
+                                         tempScopeResolvedInherits = inherits,
+                                         tempScopeResolvedImports = imports,
+                                         tempScopeProofs = proofs }) =
+      let
+        -- | Substitute the term for a 'TempRef' back in
+        subst :: Array TempRef (Position -> Exp Seq Ref)
+              -> Exp Seq TempRef
+              -> Exp Seq Ref
+        subst _ Compound { compoundScope = scopeid, compoundPos = pos } =
+          Compound { compoundScope = scopeid, compoundPos = pos }
+        subst arr a @ Abs { absCases = cases } =
+          a { absCases = fmap (fmap (subst arr)) cases  }
+        subst arr m @ Match { matchVal = val, matchCases = cases } =
+          m { matchCases = fmap (fmap (subst arr)) cases,
+              matchVal = subst arr val }
+        subst arr a @ Ascribe { ascribeVal = val, ascribeType = ty } =
+          a { ascribeVal = subst arr val, ascribeType = subst arr ty }
+        subst arr c @ Call { callInfo = info } =
+          c { callInfo = fmap (subst arr) info }
+        subst arr r @ RecordType { recordTypeFields = fields } =
+          r { recordTypeFields = fmap (subst arr) fields }
+        subst arr r @ Record { recordFields = fields } =
+          r { recordFields = fmap (subst arr) fields }
+        subst arr t @ Tuple { tupleFields = fields } =
+          t { tupleFields = fmap (subst arr) fields }
+        subst arr p @ Project { projectVal = val } =
+          p { projectVal = subst arr val }
+        subst arr i @ Id { idRef = ref, idPos = pos } = (arr Array.! ref) pos
+        subst arr w @ With { withVal = val, withArgs = args } =
+          w { withVal = subst arr val, withArgs = subst arr args }
+        subst arr w @ Where { whereVal = val, whereProp = prop } =
+          w { whereVal = subst arr val, whereProp = subst arr prop }
+        subst arr a @ Anon { anonParams = params } =
+          a { anonParams = fmap (subst arr) params }
+        subst _ Literal { literalVal = lit } = Literal { literalVal = lit }
+        subst _ Bad { badPos = pos } = Bad { badPos = pos }
+    {-
+        getScopeID :: (MonadIO m, MonadMessages Message m) =>
+                      TempRef
+                   -> m (Maybe ScopeID)
+        getScopeID tempref =
+          do
 
-    foldimports :: (MonadIO m, MonadMessages Message m) =>
-                   [Import ScopeID]
-                -> Import TempRef
-                -> m [Import ScopeID]
-    foldimports accum imp @ Import { importExp = tempref } =
-      do
-        res <- getScopeID tempref
-        case res of
-          Just scopeid -> return (imp { importExp = scopeid } : accum)
-          Nothing -> return accum
--}
-    foldinherits :: [ScopeID]
-                 -> Either Error TempInherit
-                 -> [ScopeID]
-    foldinherits accum (Left _) = accum
-    foldinherits accum (Right TempInherit { tempInheritScope = scope }) =
-      scope : accum
+res <- runExceptT $! lookupScopeTempRef tempscopes tempscope tempref
+            case res of
+              Left _ -> return Nothing
+              Right (out, _) -> return $! Just out
 
-    foldimports :: [Import ScopeID]
-                -> Either Error TempImport
-                -> [Import ScopeID]
-    foldimports accum (Left _) = accum
-    foldimports accum (Right TempImport { tempImportData = out }) = out : accum
+        foldinherits :: (MonadIO m, MonadMessages Message m) =>
+                        [ScopeID]
+                     -> TempRef
+                     -> m [ScopeID]
+        foldinherits accum tempref =
+          do
+            res <- getScopeID tempref
+            case res of
+              Just scopeid -> return (scopeid : accum)
+              Nothing -> return accum
+
+        foldimports :: (MonadIO m, MonadMessages Message m) =>
+                       [Import ScopeID]
+                    -> Import TempRef
+                    -> m [Import ScopeID]
+        foldimports accum imp @ Import { importExp = tempref } =
+          do
+            res <- getScopeID tempref
+            case res of
+              Just scopeid -> return (imp { importExp = scopeid } : accum)
+              Nothing -> return accum
+    -}
+        foldinherits :: [ScopeID]
+                     -> Either Error TempInherit
+                     -> [ScopeID]
+        foldinherits accum (Left _) = accum
+        foldinherits accum (Right TempInherit { tempInheritScope = scope }) =
+          scope : accum
+
+        foldimports :: [Import ScopeID]
+                    -> Either Error TempImport
+                    -> [Import ScopeID]
+        foldimports accum (Left _) = accum
+        foldimports accum (Right TempImport { tempImportData = out }) =
+          out : accum
+
+        -- | Report resolution errors for symbols
+        finishSym :: (MonadIO m, MonadMessages Message m, MonadSymbols m) =>
+                     HashMap Symbol Ref
+                  -> (Symbol, Either Error Resolution)
+                  -> m (HashMap Symbol Ref)
+        finishSym accum (sym, Left Undefined) =
+          case HashMap.lookup sym sympos of
+            Just poslist ->
+              do
+                undefSymbol sym poslist
+                return accum
+            Nothing ->
+              do
+                internalError "Expected position list for symbol" []
+                return accum
+        -- Direct resolutions
+        finishSym accum (sym, Right Direct {}) =
+          return $! HashMap.insert sym Ref { refScopeID = scopeid,
+                                             refSymbol = sym } accum
+        finishSym accum
+                  (sym,
+                   Right Indirect {
+                           indirectSrc = NonLocal {
+                                           nonLocalScope = resscope,
+                                           nonLocalSym = ressym
+                                         }
+                         }) =
+          return $! HashMap.insert sym Ref { refScopeID = resscope,
+                                             refSymbol = ressym } accum
+
+        finishRename :: (MonadIO m, MonadMessages Message m) =>
+                        HashMap Symbol Ref
+                     -> m (Array TempRef (Position -> Exp Seq Ref))
+        finishRename finishedsyms =
+          let
+            arrbounds @ (lo, hi) = Array.bounds renametab
+
+            finishEnt :: (MonadIO m, MonadMessages Message m) =>
+                         IOBitArray TempRef
+                      -> IOBitArray TempRef
+                      -> IOArray TempRef (Position -> Exp Seq Ref)
+                      -> TempRef
+                      -> m ()
+            finishEnt finishmask visitmask finishedarr idx' =
+              let
+                finishExp  :: (MonadIO m, MonadMessages Message m) =>
+                              Exp Seq TempRef
+                           -> m (Position -> Exp Seq Ref)
+                finishExp Compound { compoundScope = scope,
+                                     compoundPos = pos } =
+                  return (const Compound { compoundScope = scope,
+                                           compoundPos = pos })
+                finishExp a @ Abs { absCases = cases } =
+                  do
+                    newcases <- mapM (mapM finishExp) cases
+                    return (\pos -> a { absCases = fmap (fmap (\f -> f pos))
+                                                         newcases })
+                finishExp m @ Match { matchVal = val, matchCases = cases } =
+                  do
+                    newval <- finishExp val
+                    newcases <- mapM (mapM finishExp) cases
+                    return (\pos -> m { matchVal = newval pos,
+                                        matchCases = fmap (fmap (\f -> f pos))
+                                                     newcases })
+                finishExp a @ Ascribe { ascribeVal = val, ascribeType = ty } =
+                  do
+                    newval <- finishExp val
+                    newty <- finishExp ty
+                    return (\pos -> a { ascribeVal = newval pos,
+                                        ascribeType = newty pos})
+                finishExp c @ Call { callInfo = info } =
+                  do
+                    newinfo <- mapM finishExp info
+                    return (\pos -> c { callInfo = fmap (\f -> f pos) newinfo })
+                finishExp r @ RecordType { recordTypeFields = fields } =
+                  do
+                    newfields <- mapM finishExp fields
+                    return (\pos -> r { recordTypeFields = fmap (\f -> f pos)
+                                                                newfields })
+                finishExp r @ Record { recordFields = fields } =
+                  do
+                    newfields <- mapM finishExp fields
+                    return (\pos -> r { recordFields = fmap (\f -> f pos)
+                                                            newfields })
+                finishExp t @ Tuple { tupleFields = fields } =
+                  do
+                    newfields <- mapM finishExp fields
+                    return (\pos -> t { tupleFields = fmap (\f -> f pos)
+                                                           newfields })
+                finishExp p @ Project { projectVal = val } =
+                  do
+                    newval <- finishExp val
+                    return (\pos -> p { projectVal = newval pos })
+                finishExp Id { idRef = tempref, idPos = pos } =
+                  do
+                    out <- finishTempRef tempref
+                    return (const (out pos))
+                finishExp w @ Where { whereVal = val, whereProp = prop } =
+                  do
+                    newval <- finishExp val
+                    newprop <- finishExp prop
+                    return (\pos -> w { whereVal = newval pos,
+                                        whereProp = newprop pos})
+                finishExp w @ With { withVal = val, withArgs = args } =
+                  do
+                    newval <- finishExp val
+                    newargs <- finishExp args
+                    return (\pos -> w { withVal = newval pos,
+                                        withArgs = newargs pos})
+                finishExp Literal { literalVal = val } =
+                  return (const Literal { literalVal = val })
+                finishExp Bad { badPos = pos } =
+                  return (const Bad { badPos = pos })
+
+                finishTempExp :: (MonadIO m, MonadMessages Message m) =>
+                                 TempExp
+                              -> m (Position -> Exp Seq Ref)
+                finishTempExp TempSym { tempSym = sym } =
+                  case HashMap.lookup sym finishedsyms of
+                    Just ref -> return (\pos -> Id { idRef = ref, idPos = pos })
+                    Nothing ->
+                      do
+                        internalError "Symbol not present in resolved syms" []
+                        return (\pos -> Bad { badPos = pos })
+                finishTempExp TempExp { tempExp = ex } = finishExp ex
+
+                finishTempRef :: (MonadIO m, MonadMessages Message m) =>
+                                 TempRef
+                              -> m (Position -> Exp Seq Ref)
+                finishTempRef idx =
+                  let
+                    returnFinished = liftIO $! IOArray.readArray finishedarr idx
+
+                    markCyclic =
+                      do
+                        -- Mark as done
+                        liftIO $! IOBitArray.writeArray finishmask idx True
+                        return Bad
+
+                    convert =
+                      let
+                        tempexp = renametab Array.! idx
+                      in do
+                        -- Mark as visited
+                        liftIO $! IOBitArray.writeArray visitmask idx True
+                        out <- finishTempExp tempexp
+                        -- Store result
+                        liftIO $! IOArray.writeArray finishedarr idx out
+                        -- Clear visited
+                        liftIO $! IOBitArray.writeArray visitmask idx False
+                        -- Mark as done
+                        liftIO $! IOBitArray.writeArray finishmask idx True
+                        return out
+
+                  in do
+                    finished <- liftIO $! IOBitArray.readArray finishmask idx
+                    if finished
+                      -- If this one is finished, read it out of the array
+                      then returnFinished
+                      else do
+                        visited <- liftIO $! IOBitArray.readArray finishmask idx
+                        if visited
+                           then markCyclic
+                           else convert
+              in do
+                _ <- finishTempRef idx'
+                return ()
+
+          in do
+            finishmask <- liftIO $! IOBitArray.newArray arrbounds False
+            visitmask <- liftIO $! IOBitArray.newArray arrbounds False
+            finishedarr <- liftIO $! IOArray.newArray_ arrbounds
+            mapM_ (finishEnt finishmask visitmask finishedarr) [lo..hi]
+            liftIO $! IOArray.unsafeFreeze finishedarr
+
+
+      in do
+        finishedsyms <- foldM finishSym HashMap.empty (HashMap.toList syms)
+        tmprefvals <- finishRename finishedsyms
+        return (scopeid,
+                Resolved {
+                  -- Names and enclosing scopes carry over directly
+                  resolvedNames = names,
+                  resolvedEnclosing = enclosing,
+                  resolvedImports = foldl foldimports [] imports,
+                  resolvedInherits = foldl foldinherits [] inherits,
+                  -- For proofs, just look up the value
+                  resolvedProofs = fmap (fmap (subst tmprefvals)) proofs,
+                  -- For the rest, substitute the expression back in
+                  resolvedBuilders = fmap (fmap (subst tmprefvals)) builders,
+                  resolvedSyntax = fmap (fmap (subst tmprefvals)) syntax,
+                  resolvedTruths = fmap (fmap (subst tmprefvals)) truths,
+                  resolvedDefs = fmap (fmap (subst tmprefvals)) defs,
+                  resolvedEval = fmap (fmap (subst tmprefvals)) eval
+                })
   in do
-    tmprefvals <- _
-    return (scopeid,
-            Resolved {
-              -- Names and enclosing scopes carry over directly
-              resolvedNames = names,
-              resolvedEnclosing = enclosing,
-              resolvedImports = foldl foldimports [] imports,
-              resolvedInherits = foldl foldinherits [] inherits,
-              -- For proofs, just look up the value
-              resolvedProofs = fmap (fmap (tmprefvals Array.!)) proofs,
-              -- For the rest, substitute the expression back in
-              resolvedBuilders = fmap (fmap (subst tmprefvals)) builders,
-              resolvedSyntax = fmap (fmap (subst tmprefvals)) syntax,
-              resolvedTruths = fmap (fmap (subst tmprefvals)) truths,
-              resolvedDefs = fmap (fmap (subst tmprefvals)) defs,
-              resolvedEval = fmap (fmap (subst tmprefvals)) eval
-            })
+    resolvedscopes <- mapM (finishScope finalscopes) (Array.assocs finalscopes)
+    return $! Array.array arrbounds resolvedscopes
 
 -- | Report an undefined symbol.
 undef :: (Monad m) => ExceptT Error m a
@@ -1486,7 +1715,7 @@ resolveScopes tempscopes workset nextworkset =
 
 -- | Resolve all references in a 'Surface' syntax structure and link
 -- all scopes together.
-resolve :: (MonadMessages Message m, MonadIO m) =>
+resolve :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
            Surface (Scope (Exp Seq Symbol))
         -- ^ The syntax structure to resolve.
         -> m (Surface (Resolved (Exp Seq Ref)))
@@ -1504,14 +1733,15 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                   IOArray ScopeID [ScopeID]
                -> (ScopeID, Scope (Exp Seq Symbol))
                -> m (ScopeID, HashMap Symbol (Either Error Resolution),
-                     [Proof TempRef], [Import TempRef], [TempRef],
+                     [Proof (Exp Seq TempRef)], [Import TempRef], [TempRef],
                      HashMap Symbol (Builder (Exp Seq TempRef)),
                      HashMap Symbol (Syntax (Exp Seq TempRef)),
                      HashMap Symbol (Truth (Exp Seq TempRef)),
                      Array DefID (Def (Exp Seq TempRef)),
                      [Compound (Exp Seq TempRef)],
                      Array TempRef TempExp,
-                     HashMap Symbol TempRef)
+                     HashMap Symbol TempRef,
+                     HashMap Symbol [Position])
         mapfun enclosedarr (scopeid, scope) =
           let
             -- Gather up all the references
@@ -1526,30 +1756,33 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                   liftIO (IOArray.writeArray enclosedarr enclosing
                                              (scopeid : enclosed))
               _ -> return ()
-            (proofs, imports, inherits, builders, syntax,
-             truths, defs, eval, renametab, symtab) <- renameScope scope
+            (proofs, imports, inherits, builders, syntax, truths,
+             defs, eval, renametab, symtab, sympos) <- renameScope scope
             return (scopeid, HashMap.fromList ents, proofs, imports, inherits,
-                    builders, syntax, truths, defs, eval, renametab, symtab)
+                    builders, syntax, truths, defs, eval, renametab, symtab,
+                    sympos)
 
         -- Create the 'TempScope's out of their components
         makeTempScopes :: MonadIO m =>
                           Array ScopeID [ScopeID]
                        -> [(ScopeID, HashMap Symbol (Either Error Resolution),
-                            [Proof TempRef], [Import TempRef], [TempRef],
+                            [Proof (Exp Seq TempRef)],
+                            [Import TempRef], [TempRef],
                             HashMap Symbol (Builder (Exp Seq TempRef)),
                             HashMap Symbol (Syntax (Exp Seq TempRef)),
                             HashMap Symbol (Truth (Exp Seq TempRef)),
                             Array DefID (Def (Exp Seq TempRef)),
                             [Compound (Exp Seq TempRef)],
                             Array TempRef TempExp,
-                            HashMap Symbol TempRef)]
+                            HashMap Symbol TempRef,
+                            HashMap Symbol [Position])]
                        -> m (Array ScopeID TempScope)
         makeTempScopes enclosedarr scopedata =
           let
             -- Map function
             makeTempScope (scopeid, syms, proofs, imports, inherits,
                            builders, syntax, truths, defs, eval, renametab,
-                           symtab) =
+                           symtab, sympos) =
               let
                 Scope { scopeEnclosing = enclosing,
                         scopeNames = names } = scopes Array.! scopeid
@@ -1571,7 +1804,8 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                                              tempScopeResolvedImports = [],
                                              tempScopeResolvedInherits = [],
                                              tempScopeEnclosed = enclosed,
-                                             tempScopeSymbolTempRefs = symtab })
+                                             tempScopeSymbolTempRefs = symtab,
+                                             tempScopeSymbolPos = sympos })
           in do
             tempscopes <- mapM makeTempScope scopedata
             return (Array.array arrbounds tempscopes)
@@ -1579,9 +1813,9 @@ resolve surface @ Surface { surfaceScopes = scopes } =
       in do
         -- Run through the scopes, extract the referenced symbols,
         -- link up the encloded scopes.
-        enclosedarr <- liftIO (IOArray.newArray arrbounds [])
+        enclosedarr <- liftIO $! IOArray.newArray_ arrbounds
         tempscopes <- mapM (mapfun enclosedarr) (Array.assocs scopes)
-        frozenenclosed <- liftIO (IOArray.unsafeFreeze enclosedarr)
+        frozenenclosed <- liftIO $! IOArray.unsafeFreeze enclosedarr
         makeTempScopes frozenenclosed tempscopes
 
     -- The initial working set visits everything
@@ -1593,5 +1827,5 @@ resolve surface @ Surface { surfaceScopes = scopes } =
     -- Run resolution
     finalscopes <- resolveScopes initscopes initworkset nextworkset
     -- Finalize the results and report errors
-    resolvedscopes <- mapM (finishScope finalscopes) (Array.assocs finalscopes)
-    return surface { surfaceScopes = Array.array arrbounds resolvedscopes }
+    resolvedscopes <- finishScopes finalscopes
+    return surface { surfaceScopes = resolvedscopes }
