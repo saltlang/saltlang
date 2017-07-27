@@ -96,36 +96,42 @@ Source-Repository head
 Test-Suite salt-UnitTest
   default-language:     Haskell2010
   type:                 exitcode-stdio-1.0
-  Main-Is:              UnitTest.hs
-  hs-source-dirs:       src/salt test/salt
-  build-depends:        base, compiler-toolbox, bound, containers, prelude-extras,
-                        mtl >= 2.2, hashable, hashable-extras, bytestring, utf8-string,
+  main-is:              UnitTest.hs
+  hs-source-dirs:       test/salt
+  build-depends:        base, compiler-toolbox, containers, prelude-extras,
+                        mtl >= 2.2, hashable, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
                         hashtables, filepath, semigroups, dynamic-pprint, data-default,
-                        monad-journal, bitwise, fgl >= 5.5.3, bifunctors, HUnit-Plus
+                        monad-journal, bitwise, fgl >= 5.5.3, bifunctors, HUnit-Plus,
+                        saltlang
 
 Executable saltc
   default-language:     Haskell2010
-  build-depends:        base, compiler-toolbox, bound, containers, prelude-extras,
-                        mtl, hashable, hashable-extras, bytestring, utf8-string,
-                        hexpat, hexpat-pickle, array, saltlang, filepath,
-                        blaze-builder, dynamic-pprint, bitwise
   hs-source-dirs:       src/saltc
   main-is:              Language/Salt/Compiler/Main.hs
+  build-depends:        base, compiler-toolbox, containers, prelude-extras,
+                        mtl, hashable, bytestring, utf8-string,
+                        hexpat, hexpat-pickle, array, saltlang, filepath,
+                        blaze-builder, dynamic-pprint, bitwise
+--  other-modules:      Language/Salt/Compiler/Driver.hs
+--                      Language/Salt/Complier/Options.hs
+--                      Language/Salt/Compiler/Stages.hs
 
-
---Executable salti
---  default-language:     Haskell2010
---  build-depends:        base, compiler-misc, bound, containers, prelude-extras,
---                        mtl, hashable, hashable-extras, bytestring, utf8-string,
---                        hexpat, hexpat-pickle, array, saltlang, readline
---  hs-source-dirs:       src/salti
---  main-is:              Language/Salt/Interpreter/Main.hs
+Executable salti
+  default-language:     Haskell2010
+  hs-source-dirs:       src/salti
+  main-is:              Language/Salt/Interpreter/Main.hs
+  build-depends:        base, compiler-toolbox, containers, prelude-extras,
+                        mtl, hashable, bytestring, utf8-string,
+                        hexpat, hexpat-pickle, array, saltlang, filepath,
+                        blaze-builder, dynamic-pprint, bitwise
+--  other-modules:        Language/Salt/Interpreter/Driver.hs
+--                        Language/Salt/Interpreter/Stages.hs
 
 Library
   default-language:     Haskell2010
-  build-depends:        base, compiler-toolbox, bound, containers, prelude-extras,
-                        mtl >= 2.2, hashable, hashable-extras, bytestring, utf8-string,
+  build-depends:        base, compiler-toolbox, containers, prelude-extras,
+                        mtl >= 2.2, hashable, bytestring, utf8-string,
                         hexpat, hexpat-pickle, array, unordered-containers,
                         hashtables, filepath, semigroups, dynamic-pprint, data-default,
                         monad-journal, bitwise, fgl >= 5.5.3, bifunctors
@@ -138,16 +144,16 @@ Library
 --                        Control.Monad.ProofObligations.Class
 --                        Control.Monad.ProofRecorder
 --                        Control.Monad.TypeErrors.Class
-                        Control.Monad.TypeCheck.Class
-                        Control.Monad.TypeRanks.Class
+--                        Control.Monad.TypeCheck.Class
+--                        Control.Monad.TypeRanks.Class
                         Control.Monad.Refs.Class
 --                        Language.Salt.Core
                         Language.Salt.Common
-                        Language.Salt.Core.Patterns
-                        Language.Salt.Core.Syntax
-                        Language.Salt.Core.Syntax.Util
+--                        Language.Salt.Core.Patterns
+--                        Language.Salt.Core.Syntax
+--                        Language.Salt.Core.Syntax.Util
 --                        Language.Salt.Core.TypeCheck
-                        Language.Salt.Core.TypeCheck.Env
+--                        Language.Salt.Core.TypeCheck.Env
                         Language.Salt.Format
                         Language.Salt.Frontend
                         Language.Salt.Message
@@ -160,6 +166,7 @@ Library
                         Language.Salt.Surface.Precedence
 --                        Language.Salt.Core.Proofs.ProofScript
 --                        Language.Salt.Core.Proofs.ProofState
+--                        Language.Salt.Surface.Resolve
                         Language.Salt.Surface.Syntax
                         Language.Salt.Surface.Token
 
