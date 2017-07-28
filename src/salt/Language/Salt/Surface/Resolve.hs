@@ -36,7 +36,6 @@ module Language.Salt.Surface.Resolve(
 
 import Control.Monad.Except
 import Control.Monad.Messages.Class
-import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Array(Array, Ix)
@@ -44,13 +43,12 @@ import Data.Array.BitArray(BitArray)
 import Data.Array.BitArray.IO(IOBitArray)
 import Data.Array.IO(IOArray)
 import Data.Default
-import Data.Foldable
+import Data.Either
 import Data.Hashable
 import Data.HashSet(HashSet)
 import Data.HashMap.Strict(HashMap)
 import Data.List
 import Data.PositionElement
-import Data.Position.BasicPosition
 import Data.ScopeID
 import Data.Semigroup
 import Data.Symbol
@@ -138,9 +136,18 @@ data Error =
     -- | Cyclic definitions.  This can happen with builder definitions
     -- that never "bottom out" at a concrete definition.
     Cyclic { cyclicRefs :: !(HashSet (ScopeID, TempRef)) }
+    -- | A resolution result which depends on itself resolving to
+    -- something else.
+  | Inconsistent {
+      inconsistentRes :: !NonLocal
+    }
     -- | Ambiguous inherited or imported definitions.
   | Ambiguous {
       ambiguousRefs :: !(HashMap ScopeID NonLocal)
+    }
+    -- | Import Collision
+  | Collision {
+      collisionRefs :: !(HashMap Ref NonLocal)
     }
     -- | Illegal access (private from an inheriting scope, private or
     -- protected from an non-inheriting scope)
@@ -152,11 +159,6 @@ data Error =
   | Inaccessible {
       -- | True for object context, false for local.
       inaccessibleKind :: !Bool
-    }
-    -- | A resolution result which depends on itself resolving to
-    -- something else.
-  | Inconsistent {
-      inconsistentRes :: !NonLocal
     }
   | Undefined
     deriving (Eq)
@@ -199,7 +201,6 @@ data TempScope =
     -- | Definitions of 'TempRef's
     tempScopeRenameTab :: !(Array TempRef TempExp),
     -- | All enclosed scopes
-    tempScopeEnclosed :: ![ScopeID],
     tempScopeSymbolTempRefs :: !(HashMap Symbol TempRef),
     tempScopeSymbolPos :: !(HashMap Symbol [Position])
   }
@@ -220,19 +221,6 @@ data TempExp =
       tempSym :: !Symbol
     }
     deriving (Eq, Ord)
-
--- | Resolution state.
-data ResolveState =
-  ResolveState {
-    -- | The current resolution state of all scopes.
-    resolveStateScopes :: !(Array ScopeID TempScope),
-    -- | The scopes that need to be recalculated.
-    resolveStateWorkset :: !(BitArray ScopeID),
-    -- | The workset for the next round.
-    resolveStateNextWorkset :: !(IOBitArray ScopeID)
-  }
-
-type ResolveT m = ReaderT ResolveState m
 
 data RenameState =
   RenameState {
@@ -259,6 +247,7 @@ instance Ord NonLocal where
         EQ -> case compare src1 src2 of
           EQ -> case compare tail1 tail2 of
             EQ -> compare sorteddeps1 sorteddeps2
+            out -> out
           out -> out
         out -> out
       out -> out
@@ -275,6 +264,9 @@ instance Ord ResolvedScope where
       case compare scopeid1 scopeid2 of
         EQ -> compare sorteddeps1 sorteddeps2
         out -> out
+  compare ResolvedScope {} _ = LT
+  compare _ ResolvedScope {} = GT
+  compare NotScope NotScope = EQ
 
 instance Ord Error where
   compare Cyclic { cyclicRefs = refs1 } Cyclic { cyclicRefs = refs2 } =
@@ -285,6 +277,11 @@ instance Ord Error where
       compare sortedrefs1 sortedrefs2
   compare Cyclic {} _ = LT
   compare _ Cyclic {} = GT
+  compare Inconsistent { inconsistentRes = res1 }
+          Inconsistent { inconsistentRes = res2 } =
+    compare res1 res2
+  compare Inconsistent {} _ = LT
+  compare _ Inconsistent {} = GT
   compare Ambiguous { ambiguousRefs = refs1 }
           Ambiguous { ambiguousRefs = refs2 } =
     let
@@ -294,6 +291,15 @@ instance Ord Error where
       compare sortedrefs1 sortedrefs2
   compare Ambiguous {} _ = LT
   compare _ Ambiguous {} = GT
+  compare Collision { collisionRefs = refs1 }
+          Collision { collisionRefs = refs2 } =
+    let
+      sortedrefs1 = sort (HashMap.toList refs1)
+      sortedrefs2 = sort (HashMap.toList refs2)
+    in
+      compare sortedrefs1 sortedrefs2
+  compare Collision {} _ = LT
+  compare _ Collision {} = GT
   compare Illegal { illegalVisibility = vis1 }
           Illegal { illegalVisibility = vis2 } = compare vis1 vis2
   compare Illegal {} _ = LT
@@ -301,6 +307,9 @@ instance Ord Error where
   compare Inaccessible { inaccessibleKind = kind1 }
           Inaccessible { inaccessibleKind = kind2 } =
     compare kind1 kind2
+  compare Inaccessible {} _ = LT
+  compare _ Inaccessible {} = GT
+  compare Undefined Undefined = EQ
 
 instance Hashable PathElem where
   hashWithSalt s Imported { importedScope = scope } =
@@ -311,19 +320,21 @@ instance Hashable PathElem where
     s `hashWithSalt` (2 :: Word) `hashWithSalt` scope `hashWithSalt` depth
 
 instance Hashable ResolvedScope where
+  hashWithSalt s NotScope = s `hashWithSalt` (0 :: Int)
   hashWithSalt s ResolvedScope { resolvedScopeID = scopeid,
                                  resolvedScopeDeps = deps } =
     let
       sorteddeps = sort (HashMap.toList deps)
     in
-      s `hashWithSalt` scopeid `hashWithSalt` sorteddeps
+      s `hashWithSalt` (1 :: Int) `hashWithSalt`
+      scopeid `hashWithSalt` sorteddeps
 
 instance Hashable NonLocal where
   hashWithSalt s NonLocal { nonLocalScope = scopeid, nonLocalSym = sym,
-                            nonLocalSrc = src, nonLocalTail = tail,
+                            nonLocalSrc = src, nonLocalTail = pathtail,
                             nonLocalDeps = deps } =
     s `hashWithSalt` scopeid `hashWithSalt` sym `hashWithSalt`
-    src `hashWithSalt` tail `hashWithSalt` deps
+    src `hashWithSalt` pathtail `hashWithSalt` deps
 
 instance Hashable Resolution where
   hashWithSalt s Direct { directResolvedScope = scope} =
@@ -342,18 +353,18 @@ instance Hashable Error where
       sortedRefs = sort (HashMap.toList refs)
     in
       s `hashWithSalt` (1 :: Int) `hashWithSalt` sortedRefs
+  hashWithSalt s Collision { collisionRefs = refs } =
+    let
+      sortedRefs = sort (HashMap.toList refs)
+    in
+      s `hashWithSalt` (2 :: Int) `hashWithSalt` sortedRefs
   hashWithSalt s Illegal { illegalVisibility = vis } =
-    s `hashWithSalt` (2 :: Int) `hashWithSalt` vis
+    s `hashWithSalt` (3 :: Int) `hashWithSalt` vis
   hashWithSalt s Inaccessible { inaccessibleKind = object } =
-    s `hashWithSalt` (3 :: Word) `hashWithSalt` object
+    s `hashWithSalt` (4 :: Word) `hashWithSalt` object
   hashWithSalt s Inconsistent { inconsistentRes = res } =
-    s `hashWithSalt` (4 :: Word) `hashWithSalt` res
+    s `hashWithSalt` (5 :: Word) `hashWithSalt` res
   hashWithSalt s Undefined = s `hashWithSalt` (5 :: Word)
-
-smallest :: Word -> Word -> Word
-smallest a b
-  | a <= b = a
-  | otherwise = b
 
 instance Semigroup NonLocal where
   out @ NonLocal { nonLocalSrc = Imported {} } <> _ = out
@@ -641,11 +652,11 @@ renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
       in
         arr
   in do
-    ((proofs, imports, inherits, builders, syntax, truths, defs, eval),
+    ((newproofs, newimports, inherits, builders, syntax, truths, defs, eval),
      RenameState { renameStateCurr = endidx, renameStateTab = tab,
                    renameSymTab = symtab, renameSymPos = sympos }) <-
       runStateT renameScope' initstate
-    return (proofs, imports, inherits, builders, syntax, truths,
+    return (newproofs, newimports, inherits, builders, syntax, truths,
             defs, eval, renametab endidx tab, symtab, sympos)
 
 -- | Core resolution algorithm.
@@ -939,6 +950,10 @@ cyclic = throwError . Cyclic
 -- | Report an ambiguous inherited symbol
 ambiguous :: (Monad m) => HashMap ScopeID NonLocal -> ExceptT Error m a
 ambiguous = throwError . Ambiguous
+
+-- | Report an import collision
+collision :: (Monad m) => HashMap Ref NonLocal -> ExceptT Error m a
+collision = throwError . Collision
 
 -- | Report an illegal access
 illegal :: (Monad m) => Visibility -> ExceptT Error m a
@@ -1379,13 +1394,65 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                   -- Otherwise, we can't possibly import the symbol here.
               | otherwise = undef
 
-            mapfun (Left _) = undef
-            mapfun (Right imp) = resolveFromImport imp
+            reconcileImports :: (MonadIO m, MonadMessages Message m) =>
+                                [Either Error Resolution]
+                             -> ExceptT Error m Resolution
+            -- We found nothing
+            reconcileImports [] = undef
+            -- Easy case: we found only one, no reconciliation required
+            reconcileImports [Left out] = throwError out
+            reconcileImports [Right out] = return out
+            reconcileImports resolutions =
+              let
+                valids = rights resolutions
+              in
+                case valids of
+                  -- If there's no valid results, report undefined
+                  [] -> undef
+                  [out] -> return out
+                  -- Harder case, there's more than one valid (maybe)
+                  _ ->
+                    let
+                      foldfun accum Direct {} =
+                        do
+                          internalError "Shouldn't see direct resolution" []
+                          return accum
+                      foldfun accum Indirect {
+                                      indirectSrc = nl @ NonLocal {
+                                                           nonLocalScope = src,
+                                                           nonLocalSym = sym
+                                                         }
+                                    } =
+                        let
+                          ref = Ref { refScopeID = src, refSymbol = sym }
+                        in
+                          -- XXX Should we merge the dependencies?
+                          return (HashMap.insert ref nl accum)
+                    in do
+                      -- Combine all valids by the definition they
+                      -- actually reference
+                      validtab <- foldM foldfun HashMap.empty valids
+                      case HashMap.toList validtab of
+                        [] ->
+                          do
+                            internalError "Shouldn't see empty list" []
+                            undef
+                        -- One unique object imported: this is what we want.
+                        [(_, src)] -> return Indirect { indirectSrc = src }
+                        -- If we have more than one, it's an import collision
+                        _ -> collision validtab
+
+            mapfun (Left _) = return (Left Undefined)
+            mapfun (Right imp) = runExceptT (resolveFromImport imp)
+
+            filterfun (Left Undefined) = False
+            filterfun _ = True
           in do
             TempScopeLinks { tempScopeResolvedImports = imports } <-
               liftIO $! IOArray.readArray scopelinks scopeid
             resolved <- mapM mapfun imports
-            return (mconcat resolved)
+            reconcileImports (filter filterfun resolved)
+
 
         resolveFromInherits :: (MonadIO m, MonadMessages Message m) =>
                                ExceptT Error m Resolution
@@ -1521,6 +1588,7 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                   -- Ambiguous resolution
                   _ -> ambiguous nonoverrides
 
+            -- XXX This is wrong, see above
             mapfun (Left _) = undef
             mapfun (Right inherit) = resolveFromInherit inherit
           in do
@@ -1826,8 +1894,7 @@ resolve surface @ Surface { surfaceScopes = scopes } =
 
         -- Create the 'TempScope's out of their components
         makeTempScopes :: MonadIO m =>
-                          Array ScopeID [ScopeID]
-                       -> [(ScopeID, HashMap Symbol Result,
+                          [(ScopeID, HashMap Symbol Result,
                             [Proof (Exp Seq TempRef)],
                             [Import TempRef], [TempRef],
                             HashMap Symbol (Builder (Exp Seq TempRef)),
@@ -1840,7 +1907,7 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                             HashMap Symbol [Position])]
                        -> m (Array ScopeID TempScope,
                              IOArray ScopeID (HashMap Symbol Result))
-        makeTempScopes enclosedarr scopedata =
+        makeTempScopes scopedata =
           let
             -- Map function
             makeTempScope resolvetabs
@@ -1851,7 +1918,6 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                 Scope { scopeEnclosing = enclosing,
                         scopeNames = names } = scopes Array.! scopeid
                 -- Lookup the enclosed scopes
-                enclosed = enclosedarr Array.! scopeid
               in do
                 liftIO $! IOArray.writeArray resolvetabs scopeid syms
                 return (scopeid, TempScope { tempScopeNames = names,
@@ -1865,7 +1931,6 @@ resolve surface @ Surface { surfaceScopes = scopes } =
                                              tempScopeDefs = defs,
                                              tempScopeEval = eval,
                                              tempScopeRenameTab = renametab,
-                                             tempScopeEnclosed = enclosed,
                                              tempScopeSymbolTempRefs = symtab,
                                              tempScopeSymbolPos = sympos })
 
@@ -1880,22 +1945,21 @@ resolve surface @ Surface { surfaceScopes = scopes } =
         -- Run through the scopes, extract the referenced symbols,
         -- link up the encloded scopes.
         enclosedarr <- liftIO $! IOArray.newArray_ arrbounds
-        tempscopes <- mapM (mapfun enclosedarr) (Array.assocs scopes)
-        frozenenclosed <- liftIO $! IOArray.unsafeFreeze enclosedarr
+        tempscopedata <- mapM (mapfun enclosedarr) (Array.assocs scopes)
         scopelinks <- liftIO $! IOArray.newArray arrbounds emptylinks
-        (scopes, resolvetabs) <- makeTempScopes frozenenclosed tempscopes
-        return (scopes, resolvetabs, scopelinks)
+        (tempscopes, resolvetabs) <- makeTempScopes tempscopedata
+        return (tempscopes, resolvetabs, scopelinks)
 
     -- The initial working set visits everything
     initworkset = (BitArray.true arrbounds)
   in do
     -- Set up the initial state
     nextworkset <- liftIO (IOBitArray.newArray arrbounds True)
-    (scopes, resolvetabs, scopelinks) <- initialState
+    (tempscopes, resolvetabs, scopelinks) <- initialState
     -- Run resolution
-    resolveScopes resolvetabs scopelinks scopes initworkset nextworkset
+    resolveScopes resolvetabs scopelinks tempscopes initworkset nextworkset
     frozenresolvetabs <- liftIO $! IOArray.unsafeFreeze resolvetabs
     frozenscopelinks <- liftIO $! IOArray.unsafeFreeze scopelinks
     -- Finalize the results and report errors
-    resolvedscopes <- finishScopes scopes frozenresolvetabs frozenscopelinks
+    resolvedscopes <- finishScopes tempscopes frozenresolvetabs frozenscopelinks
     return surface { surfaceScopes = resolvedscopes }
