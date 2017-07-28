@@ -715,40 +715,7 @@ finishScopes finalscopes resolvetabs scopelinks =
           a { anonParams = fmap (subst arr) params }
         subst _ Literal { literalVal = lit } = Literal { literalVal = lit }
         subst _ Bad { badPos = pos } = Bad { badPos = pos }
-    {-
-        getScopeID :: (MonadIO m, MonadMessages Message m) =>
-                      TempRef
-                   -> m (Maybe ScopeID)
-        getScopeID tempref =
-          do
 
-res <- runExceptT $! lookupScopeTempRef tempscopes tempscope tempref
-            case res of
-              Left _ -> return Nothing
-              Right (out, _) -> return $! Just out
-
-        foldinherits :: (MonadIO m, MonadMessages Message m) =>
-                        [ScopeID]
-                     -> TempRef
-                     -> m [ScopeID]
-        foldinherits accum tempref =
-          do
-            res <- getScopeID tempref
-            case res of
-              Just scopeid -> return (scopeid : accum)
-              Nothing -> return accum
-
-        foldimports :: (MonadIO m, MonadMessages Message m) =>
-                       [Import ScopeID]
-                    -> Import TempRef
-                    -> m [Import ScopeID]
-        foldimports accum imp @ Import { importExp = tempref } =
-          do
-            res <- getScopeID tempref
-            case res of
-              Just scopeid -> return (imp { importExp = scopeid } : accum)
-              Nothing -> return accum
-    -}
         foldinherits :: [ScopeID]
                      -> Either Error TempInherit
                      -> [ScopeID]
@@ -1665,72 +1632,146 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
     -- | Attempt to resolve all symbols in a scope, if it's in the
     -- workset.
     resolveScope :: (MonadIO m, MonadMessages Message m) =>
-                    ScopeID
+                    IOBitArray ScopeID
+                 -> ScopeID
                  -> m (ScopeID, HashMap Symbol Result)
-    resolveScope scopeid  =
+    resolveScope changedset scopeid  =
       let
         tryResolveSymbol :: (MonadIO m, MonadMessages Message m) =>
-                            Symbol
+                            HashMap Symbol Result
+                         -> Symbol
                          -> m (Symbol, Result)
-        tryResolveSymbol sym =
-          do
-            -- Catch any errors
-            res <- runExceptT $! resolveSymbol scopeid Hidden True sym
-            return (sym, res)
+        tryResolveSymbol resolutions sym =
+          case HashMap.lookup sym resolutions of
+            Just oldres ->
+              let
+                mark = liftIO $! IOBitArray.writeArray changedset scopeid True
+              in do
+                -- Catch any errors
+                res <- runExceptT $! resolveSymbol scopeid Hidden True sym
+                -- Mark this scope if we change the resolution
+                unless (oldres == res) mark
+                return (sym, res)
+            Nothing ->
+              do
+                internalError "Entry missing from resolution map" []
+                return (sym, Left Undefined)
       in do
         resolutions <- liftIO $! IOArray.readArray resolvetabs scopeid
         -- Resolve all symbols using the previous scope
-        newres <- mapM tryResolveSymbol (HashMap.keys resolutions)
+        newres <- mapM (tryResolveSymbol resolutions) (HashMap.keys resolutions)
         return $! (scopeid, HashMap.fromList newres)
 
-    resolveScopeLinks :: (MonadIO m) =>
+    resolveScopeLinks :: (MonadIO m, MonadMessages Message m) =>
                          ScopeID
                       -> m ()
     resolveScopeLinks scopeid =
       let
+        ctx @ TempScope { tempScopeImports = imports,
+                          tempScopeInherits = inherits } =
+          tempscopes Array.! scopeid
+
+        getInherit :: (MonadIO m, MonadMessages Message m) =>
+                      TempRef
+                   -> ExceptT Error m TempInherit
+        getInherit tempref =
+          do
+            (resscope, resdeps) <- lookupScopeTempRef scopeid tempref
+            return TempInherit { tempInheritScope = resscope,
+                                 tempInheritDeps = resdeps }
+
+        getImport :: (MonadIO m, MonadMessages Message m) =>
+                      Import TempRef
+                   -> ExceptT Error m TempImport
+        getImport i @ Import { importExp = tempref } =
+          do
+            (resscope, resdeps) <- lookupScopeTempRef scopeid tempref
+            return TempImport { tempImportData = i { importExp = resscope },
+                                 tempImportDeps = resdeps }
       in do
         -- Use the new resolutions to resolve all imports
-
+        newimports <- mapM (runExceptT . getImport) imports
         -- Use the new resoultions to resolve all inherits
+        newinherits <- mapM (runExceptT . getInherit) inherits
+        liftIO $! IOArray.writeArray scopelinks scopeid
+                                     TempScopeLinks {
+                                       tempScopeResolvedImports = newimports,
+                                       tempScopeResolvedInherits = newinherits
+                                     }
 
-        -- Propagate this change to all the scopes that
-        -- depend on this one
-        _
+    -- | Check all scopes to see if they need to be marked in the new workset.
+    markScopes :: (MonadIO m, MonadMessages Message m) =>
+                  BitArray ScopeID
+               -> m ()
+    markScopes changedset =
+      let
+        -- | Check all scopes on which this one depends, mark it if
+        -- any of them have changed.
+        markScope :: (MonadIO m, MonadMessages Message m) =>
+                     ScopeID
+                  -> m ()
+        markScope scopeid =
+          let
+            TempScope { tempScopeEnclosing = enclosing } =
+              tempscopes Array.! scopeid
+
+            -- | Mark the current scope if 'idx' is marked in the changedset
+            mark idx =
+              let
+                markTrue =
+                  liftIO $! IOBitArray.writeArray nextworkset scopeid True
+              in
+                when (changedset BitArray.! idx) markTrue
+
+          in do
+            TempScopeLinks { tempScopeResolvedInherits = inherits,
+                             tempScopeResolvedImports = imports } <-
+              liftIO $! IOArray.readArray scopelinks scopeid
+            -- Mark the enclosing scope
+            mapM_ mark enclosing
+            -- Mark the inherited scopes
+            mapM_ (mapM_ (mark . tempInheritScope)) inherits
+            -- Mark the imported scopes
+            mapM_ (mapM_ ((mapM_ mark) . tempImportData)) imports
+      in
+        mapM_ markScope (BitArray.indices changedset)
 
     resolveRound :: (MonadIO m, MonadMessages Message m) => m ()
     resolveRound =
       let
-        idxs = map fst (filter snd (BitArray.assocs workset))
+        trueIdxs bitarr = map fst (filter snd (BitArray.assocs bitarr))
+
+        idxs = trueIdxs workset
 
         updateResolved (idx, newrestab) =
           liftIO $! IOArray.writeArray resolvetabs idx newrestab
       in do
+        changedset <- liftIO (IOBitArray.newArray arrbounds True)
         -- Attempt to resolve all the external symbols in scopes that
         -- were in the work-set
-        newrestabs <- mapM resolveScope idxs
+        newrestabs <- mapM (resolveScope changedset) idxs
         -- Update the newly-resolved scopes all at once
         mapM_ updateResolved newrestabs
         -- Resolve the scope links using the newly updated resolutions
         mapM_ resolveScopeLinks idxs
+        -- Propagate all changes to the dependencies of the changed scopes
+        frozenchangedset <- liftIO $! IOBitArray.freeze nextworkset
+        markScopes frozenchangedset
 
-        -- XXX Compute the new workset
-        return ()
+    recurse =
+      do
+        -- Make the next workset
+        newworkset <- liftIO $! IOBitArray.freeze nextworkset
+        -- Recurse with the new tempscopes and workset array
+        resolveScopes resolvetabs scopelinks tempscopes newworkset nextworkset
   in do
     -- Clear the next workset array
-    liftIO (IOBitArray.fill nextworkset False)
+    liftIO $! IOBitArray.fill nextworkset False
     -- Run one round
     newtempscopes <- resolveRound
     -- Check to see if we're done
-    done <- liftIO (IOBitArray.and nextworkset)
-    if done
-      -- If the next workset is empty, then we're done
-      then return newtempscopes
-      -- Otherwise, recurse
-      else do
-        -- Make the next workset
-        newworkset <- liftIO (IOBitArray.freeze nextworkset)
-        -- Recurse with the new tempscopes and workset array
-        resolveScopes resolvetabs scopelinks tempscopes newworkset nextworkset
+    done <- liftIO $! IOBitArray.and nextworkset
+    unless done recurse
 
 -- | Resolve all references in a 'Surface' syntax structure and link
 -- all scopes together.
