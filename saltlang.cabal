@@ -167,6 +167,7 @@ Library
 --                        Language.Salt.Core.Proofs.ProofScript
 --                        Language.Salt.Core.Proofs.ProofState
 --                        Language.Salt.Surface.Resolve
+                        Language.Salt.Surface.Resolve.Resolution
                         Language.Salt.Surface.Syntax
                         Language.Salt.Surface.Token
 
