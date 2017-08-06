@@ -69,7 +69,6 @@ import Control.Monad.State
 import Data.Array
 import Data.ByteString(ByteString)
 import Data.Hashable
-import Data.Hashable.Extras(Hashable1)
 import Data.Ratio
 import Data.Position.BasicPosition
 import Data.PositionElement
@@ -356,9 +355,6 @@ instance Hashable refty => Hashable (Level refty) where
 instance Hashable expty => Hashable (Prec expty) where
   hashWithSalt s Prec { precOrd = ord, precLevel = ref } =
     s `hashWithSalt` ord `hashWithSalt` ref
-
-instance Hashable1 Level
-instance Hashable1 Prec
 
 instance Format Assoc where format = string . show
 instance Format Fixity where format = string . show

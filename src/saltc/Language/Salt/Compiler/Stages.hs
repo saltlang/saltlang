@@ -150,7 +150,7 @@ printTextAST fname ast =
     astfile = Strict.append fname astExt
   in do
     astdoc <- formatM ast
-    createArtifact astfile (buildGreedy 4 120 False astdoc)
+    createArtifact astfile (buildDynamic 120 False astdoc)
 
 printDotAST :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m,
                 MonadPositions m, MonadSymbols m) =>
@@ -192,7 +192,7 @@ printTextCollected :: (MonadPositions m, MonadSymbols m,
 printTextCollected surface =
   do
     collecteddoc <- formatM surface
-    createArtifact collectedName (buildGreedy 4 120 False collecteddoc)
+    createArtifact collectedName (buildDynamic 120 False collecteddoc)
 
 printXMLCollected :: (MonadArtifacts Strict.ByteString m,
                       MonadMessages Message m) =>

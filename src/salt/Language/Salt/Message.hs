@@ -70,19 +70,19 @@ module Language.Salt.Message(
        duplicateBuilder,
        duplicateName,
 
-       namelessField,
+       -- ** Resolution Messages
+       cyclicDefs,
+       illegalAccess,
+       outOfContextAccess,
        undefSymbol,
+
+       namelessField,
        noTopLevelDef,
        namelessUninitDef,
        badComponentName,
        importNestedScope,
        expectedFuncType,
-       cyclicImport,
        cyclicInherit,
-       privateAccess,
-       protectedAccess,
-       localAccess,
-       objectAccess,
        patternBindMismatch,
 
        -- ** Precedence Parsing Messages
@@ -103,8 +103,8 @@ module Language.Salt.Message(
        tupleMismatch,
 
        -- ** Normalization Messages
-       callNonFunc,
-       noMatch,
+--       callNonFunc,
+--       noMatch,
 ) where
 
 import Control.Monad.Messages
@@ -115,20 +115,15 @@ import Data.Position.BasicPosition
 import Data.Position.DWARFPosition(DWARFPosition, basicPosition)
 import Data.PositionElement
 import Language.Salt.Surface.Token(Token)
-import Data.Default
+import Language.Salt.Surface.Common
+--import Data.Default
 import Data.Symbol
 import Text.Format
-import Language.Salt.Core.Syntax hiding (Position)
+--import Language.Salt.Core.Syntax hiding (Position)
 
 import qualified Data.ByteString as Strict
 import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.Message as Msg
-
-type Position = BasicPosition
-
-data AccessKind = Private | Protected deriving (Ord, Eq, Enum)
-
-data ContextKind = Object | Local deriving (Ord, Eq, Enum)
 
 -- | Data structure containing all data for a particular message.
 data Message =
@@ -170,31 +165,37 @@ data Message =
     }
     -- | Unterminated comment (error).
   | UntermComment {
+      -- | Position at which the unterminated comment begins.
       untermCommentPos :: !Position
     }
     -- | A hard tab in a string literal.
   | TabStringLiteral {
-      -- | The position of the bad character literal.
+      -- | The position of the hard tab.
       tabStringPos :: !Position
     }
     -- | Unterminated string literal (error).
   | UntermString {
+      -- | Position at which the unterminated string begins.
       untermStringPos :: !Position
     }
     -- | Hard tabs in input (remark).
   | HardTabs {
+      -- | The position of the hard tab.
       hardTabsPos :: !Position
     }
     -- | Trailing whitespace.
   | TrailingWhitespace {
+      -- | The position of the trailing whitespace.
       trailingWhitespacePos :: !Position
     }
     -- | Newline in a string constant.
   | NewlineInString {
+      -- | The position of the newline in the string.
       newlineInStringPos :: !Position
     }
     -- | Parse error.
   | ParseError {
+      -- | The position of the parse error.
       parseErrorToken :: !Token
     }
     -- | Missing expected module definition.
@@ -207,7 +208,9 @@ data Message =
     }
     -- | Duplicate record field binding.
   | DuplicateField {
+      -- | The name of the duplicate field.
       duplicateFieldName :: !Strict.ByteString,
+      -- | The positions at which each field definition occurs.
       duplicateFieldPosList :: ![Position]
     }
   | NamelessField {
@@ -215,13 +218,15 @@ data Message =
     }
     -- | Duplicate truth definition in the current environment.
   | DuplicateTruth {
+      -- | The name of the duplicate truth.
       duplicateTruthName :: !Strict.ByteString,
+      -- | The positions at which each truth definition occurs.
       duplicateTruthPosList :: ![Position]
     }
     -- | Reference to undefined symbol
   | UndefSymbol {
       undefSymbolSym :: !Strict.ByteString,
-      undefSymbolPos :: !Position
+      undefSymbolPos :: ![Position]
     }
     -- | An uninitialized definition with no top-level name.
   | NamelessUninitDef {
@@ -229,12 +234,16 @@ data Message =
     }
     -- | Duplicate builder definition in the current environment.
   | DuplicateBuilder {
+      -- | The name of the duplicate builder definition.
       duplicateBuilderName :: !Strict.ByteString,
+      -- | The positions at which each builder definition occurs.
       duplicateBuilderPosList :: ![Position]
     }
     -- | Duplicate builder definition in the current environment.
   | DuplicateSyntax {
+      -- | The name of the duplicate syntax definition.
       duplicateSyntaxName :: !Strict.ByteString,
+      -- | The positions at which each syntax definition occurs.
       duplicateSyntaxPosList :: ![Position]
     }
     -- | Cannot find a file or a component
@@ -296,19 +305,19 @@ data Message =
   | ExpectedFunc {
       expectedFuncPos :: !Position
     }
-  | CyclicImport {
-      cyclicImportPos :: !Position
+  | CyclicDefs {
+      cyclicDefsPos :: ![Position]
     }
   | CyclicInherit {
       cyclicInheritPos :: !Position
     }
   | IllegalAccess {
-      illegalAccessPos :: !Position,
+      illegalAccessPos :: ![Position],
       illegalAccessSym :: !Strict.ByteString,
-      illegalAccessKind :: !AccessKind
+      illegalAccessKind :: !Visibility
     }
   | OutOfContext {
-      outOfContextPos :: !Position,
+      outOfContextPos :: ![Position],
       outOfContextKind :: !ContextKind,
       outOfContextSym :: !Strict.ByteString
     }
@@ -396,14 +405,6 @@ data Message =
 -}
     deriving (Ord, Eq)
 
-instance Format AccessKind where
-  format Private = string "private"
-  format Protected = string "protected"
-
-instance Format ContextKind where
-  format Object = string "object"
-  format Local = string "local"
-
 instance Hashable Message where
   hashWithSalt s BadChars { badCharsContent = str, badCharsPos = pos } =
     s `hashWithSalt` (0 :: Int) `hashWithSalt` str `hashWithSalt` pos
@@ -480,7 +481,7 @@ instance Hashable Message where
     s `hashWithSalt` (27 :: Int) `hashWithSalt` pos
   hashWithSalt s ExpectedFunc { expectedFuncPos = pos } =
     s `hashWithSalt` (28 :: Int) `hashWithSalt` pos
-  hashWithSalt s CyclicImport { cyclicImportPos = pos } =
+  hashWithSalt s CyclicDefs { cyclicDefsPos = pos } =
     s `hashWithSalt` (29 :: Int) `hashWithSalt` pos
   hashWithSalt s CyclicInherit { cyclicInheritPos = pos } =
     s `hashWithSalt` (30 :: Int) `hashWithSalt` pos
@@ -574,7 +575,7 @@ instance Msg.Message Message where
   brief CallNonFunc {} = string "Call to non-function during evaluation"
   brief NoMatch {} = string "No pattern matching term"
   brief ExpectedFunc {} = string "Expected a term with a function type"
-  brief CyclicImport {} = string "Cyclic import"
+  brief CyclicDefs {} = string "Cyclic scope definitions"
   brief CyclicInherit {} = string "Cyclic inheritance"
   brief IllegalAccess { illegalAccessKind = kind, illegalAccessSym = sym } =
     string "Illegal access to " <> format kind <>
@@ -669,7 +670,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions DuplicateField { duplicateFieldPosList = poslist } = poslist
   positions NamelessField { namelessFieldPos = pos } = [pos]
   positions DuplicateTruth { duplicateTruthPosList = poslist } = poslist
-  positions UndefSymbol { undefSymbolPos = pos } = [pos]
+  positions UndefSymbol { undefSymbolPos = pos } = pos
   positions NamelessUninitDef { namelessUninitDefPos = pos } = [pos]
   positions DuplicateBuilder { duplicateBuilderPosList = poslist } = poslist
   positions CannotFind { cannotFindPos = pos } = [pos]
@@ -681,10 +682,10 @@ instance Msg.MessagePosition BasicPosition Message where
   positions CallNonFunc { callNonFuncPos = pos } = [pos]
   positions NoMatch { noMatchPos = pos } = [pos]
   positions ExpectedFunc { expectedFuncPos = pos } = [pos]
-  positions CyclicImport { cyclicImportPos = pos } = [pos]
+  positions CyclicDefs { cyclicDefsPos = pos } = pos
   positions CyclicInherit { cyclicInheritPos = pos } = [pos]
-  positions IllegalAccess { illegalAccessPos = pos } = [pos]
-  positions OutOfContext { outOfContextPos = pos } = [pos]
+  positions IllegalAccess { illegalAccessPos = pos } = pos
+  positions OutOfContext { outOfContextPos = pos } = pos
   positions DuplicateSyntax { duplicateSyntaxPosList = poslist } = poslist
   positions PatternBindMismatch { patternBindMismatchPos = poslist } = poslist
   positions CyclicPrecedence { cyclicPrecedencePos = poslist } = poslist
@@ -717,8 +718,7 @@ emptyCharLiteral :: MonadMessages Message m =>
                     Position
                  -- ^ The position at which the bad characters occur.
                  -> m ()
-emptyCharLiteral pos =
-  message EmptyCharLiteral { emptyCharPos = pos }
+emptyCharLiteral = message . EmptyCharLiteral
 
 -- | Report an empty character literal.
 longCharLiteral :: MonadMessages Message m =>
@@ -735,23 +735,21 @@ newlineCharLiteral :: MonadMessages Message m =>
                       Position
                    -- ^ The position at which the bad characters occur.
                    -> m ()
-newlineCharLiteral pos =
-  message NewlineCharLiteral { newlineCharPos = pos }
+newlineCharLiteral = message . NewlineCharLiteral
 
 -- | Report an unescaped tab in a character literal.
 tabCharLiteral :: MonadMessages Message m =>
                   Position
                -- ^ The position at which the bad characters occur.
                -> m ()
-tabCharLiteral pos =
-  message TabCharLiteral { tabCharPos = pos }
+tabCharLiteral = message . TabCharLiteral
 
 -- | Report an unterminated comment in lexer input.
 untermComment :: MonadMessages Message m =>
                  Position
               -- ^ The position at which the hard tabs occur.
               -> m ()
-untermComment pos = message UntermComment { untermCommentPos = pos }
+untermComment = message . UntermComment
 
 -- | Report an unescaped tab in a string literal.
 tabInStringLiteral :: MonadMessages Message m =>
@@ -766,7 +764,7 @@ untermString :: MonadMessages Message m =>
                 Position
              -- ^ The position at which the hard tabs occur.
              -> m ()
-untermString pos = message UntermString { untermStringPos = pos }
+untermString = message . UntermString
 
 -- | Report hard tabs in lexer input.
 hardTabs :: MonadMessages Message m =>
@@ -780,22 +778,21 @@ trailingWhitespace :: MonadMessages Message m =>
                       Position
                    -- ^ Position at which the trailing whitespace occurs
                    -> m ()
-trailingWhitespace pos =
-  message TrailingWhitespace { trailingWhitespacePos = pos }
+trailingWhitespace = message . TrailingWhitespace
 
 -- | Report hard tabs in lexer input.
 newlineInString :: MonadMessages Message m =>
                    Position
                 -- ^ The position at which the hard tabs occur.
                 -> m ()
-newlineInString pos = message NewlineInString { newlineInStringPos = pos }
+newlineInString = message . NewlineInString
 
 -- | Report a parse error.
 parseError :: MonadMessages Message m =>
               Token
            -- ^ The position at which the hard tabs occur.
            -> m ()
-parseError tok = message ParseError { parseErrorToken = tok }
+parseError = message . ParseError
 
 -- | Report missing top-level definition.
 noTopLevelDef :: (MonadMessages Message m, MonadSymbols m) =>
@@ -827,7 +824,7 @@ namelessField :: MonadMessages Message m =>
                  Position
               -- ^ The position at which the nameless field occurs.
               -> m ()
-namelessField pos = message NamelessField { namelessFieldPos = pos }
+namelessField = message . NamelessField
 
 -- | Report duplicate truths.
 duplicateTruth :: (MonadMessages Message m, MonadSymbols m) =>
@@ -847,7 +844,7 @@ duplicateTruth sym poslist =
 undefSymbol :: (MonadMessages Message m, MonadSymbols m) =>
                Symbol
             -- ^ The undefined symbol name.
-            -> Position
+            -> [Position]
             -- ^ The position at which the undefined symbol
             -- definition occurs.
             -> m ()
@@ -931,11 +928,12 @@ cannotAccessComponent :: (MonadMessages Message m, MonadSymbols m) =>
 cannotAccessComponent cname fname msg pos =
   do
     bstrs <- mapM name cname
-    message CannotAccess { cannotAccessName =
-                              Just $! Strict.intercalate "." bstrs,
-                           cannotAccessFileName = fname,
-                           cannotAccessMsg = msg,
-                           cannotAccessPos = pos }
+    message CannotAccess {
+              cannotAccessName = Just $! Strict.intercalate "." bstrs,
+              cannotAccessFileName = fname,
+              cannotAccessMsg = msg,
+              cannotAccessPos = pos
+            }
 
 badComponentName :: (MonadMessages Message m, MonadSymbols m) =>
                     [Symbol]
@@ -993,7 +991,7 @@ importNestedScope :: MonadMessages Message m =>
                      Position
                   -- ^ The position at which the nameless field occurs.
                   -> m ()
-importNestedScope pos = message ImportNestedScope { importNestedScopePos = pos }
+importNestedScope = message . ImportNestedScope
 
 -- | Report an internal error.
 internalError :: MonadMessages Message m =>
@@ -1004,7 +1002,7 @@ internalError :: MonadMessages Message m =>
               -> m ()
 internalError str pos = message InternalError { internalErrorStr = str,
                                                 internalErrorPos = pos }
-
+{-
 -- | Report a call to a non-function in evaluation.
 callNonFunc :: (MonadMessages Message m, MonadSymbols m, MonadPositions m,
                 FormatM m bound, FormatM m free, Default bound, Eq bound) =>
@@ -1034,7 +1032,7 @@ noMatch term pos =
   in do
     termdoc <- formatM term
     message NoMatch { noMatchTerm = termdoc, noMatchPos = basicpos }
-
+-}
 -- | Type error when expecting a function type, but getting something else.
 expectedFuncType :: (MonadMessages Message m,
                      MonadSymbols m, MonadPositions m) =>
@@ -1047,16 +1045,12 @@ expectedFuncType pos =
   in
     message ExpectedFunc { expectedFuncPos = basicpos }
 
-cyclicImport :: (MonadMessages Message m,
-                 MonadSymbols m, MonadPositions m) =>
-                DWARFPosition defty tydefty
-             -- ^ The position at which the inheritance occurs.
-             -> m ()
-cyclicImport pos =
-  let
-    basicpos = basicPosition pos
-  in
-   message CyclicImport { cyclicImportPos = basicpos }
+cyclicDefs :: (MonadMessages Message m,
+               MonadSymbols m, MonadPositions m) =>
+              [Position]
+           -- ^ The positions of the cyclic definitions
+           -> m ()
+cyclicDefs = message . CyclicDefs
 
 cyclicInherit :: (MonadMessages Message m,
                   MonadSymbols m, MonadPositions m) =>
@@ -1067,69 +1061,37 @@ cyclicInherit pos =
   let
     basicpos = basicPosition pos
   in
-   message CyclicInherit { cyclicInheritPos = basicpos }
+    message CyclicInherit { cyclicInheritPos = basicpos }
 
-privateAccess :: (MonadMessages Message m,
+illegalAccess :: (MonadMessages Message m,
                   MonadSymbols m, MonadPositions m) =>
                  Symbol
               -- ^ The symbol that was illegally accessed.
-              -> DWARFPosition defty tydefty
+              -> Visibility
+              -> [Position]
               -- ^ The position at which the access occurs.
               -> m ()
-privateAccess sym pos =
-  let
-    basicpos = basicPosition pos
-  in do
+illegalAccess sym vis poslist =
+  do
     str <- name sym
-    message IllegalAccess { illegalAccessSym = str, illegalAccessPos = basicpos,
-                            illegalAccessKind = Private }
-
-protectedAccess :: (MonadMessages Message m,
-                    MonadSymbols m, MonadPositions m) =>
-                   Symbol
-                -- ^ The symbol that was illegally accessed.
-                -> DWARFPosition defty tydefty
-                -- ^ The position at which the access occurs.
-                -> m ()
-protectedAccess sym pos =
-  let
-    basicpos = basicPosition pos
-  in do
-    str <- name sym
-    message IllegalAccess { illegalAccessSym = str, illegalAccessPos = basicpos,
-                            illegalAccessKind = Protected }
-
--- | Report an access to a local definition in a non-local context.
-localAccess :: (MonadMessages Message m,
-                MonadSymbols m, MonadPositions m) =>
-               Symbol
-            -- ^ The symbol that was accessed.
-            -> DWARFPosition defty tydefty
-            -- ^ The position at which the access occurs.
-            -> m ()
-localAccess sym pos =
-  let
-    basicpos = basicPosition pos
-  in do
-    str <- name sym
-    message OutOfContext { outOfContextSym = str, outOfContextKind = Local,
-                           outOfContextPos = basicpos }
+    message IllegalAccess { illegalAccessSym = str, illegalAccessKind = vis,
+                            illegalAccessPos = poslist }
 
 -- | Report an access to an object definition in a static context.
-objectAccess :: (MonadMessages Message m,
-                 MonadSymbols m, MonadPositions m) =>
-                Symbol
-             -- ^ The symbol that was accessed.
-             -> DWARFPosition defty tydefty
-             -- ^ The position at which the access occurs.
-             -> m ()
-objectAccess sym pos =
-  let
-    basicpos = basicPosition pos
-  in do
+outOfContextAccess :: (MonadMessages Message m,
+                       MonadSymbols m, MonadPositions m) =>
+                      Symbol
+                   -- ^ The symbol that was accessed.
+                   -> ContextKind
+                   -- ^ The context of the symbol.
+                   -> [Position]
+                   -- ^ The position at which the access occurs.
+                   -> m ()
+outOfContextAccess sym ctx poslist =
+  do
     str <- name sym
-    message OutOfContext { outOfContextSym = str, outOfContextKind = Object,
-                           outOfContextPos = basicpos }
+    message OutOfContext { outOfContextSym = str, outOfContextKind = ctx,
+                           outOfContextPos = poslist }
 
 -- | Report duplicate syntax directives.
 duplicateSyntax :: (MonadMessages Message m, MonadSymbols m) =>
@@ -1170,15 +1132,14 @@ precedenceParseError :: (MonadMessages Message m) =>
                         Position
                      -- ^ The position at which the inheritance occurs.
                      -> m ()
-precedenceParseError pos =
-  message PrecedenceParseError { precParseErrorPos = pos }
+precedenceParseError = message . PrecedenceParseError
 
 -- | Report non-references where a reference was expected
 expectedRef :: (MonadMessages Message m) =>
                Position
             -- ^ The position at which the inheritance occurs.
             -> m ()
-expectedRef pos = message ExpectedRef { expectedRefPos = pos }
+expectedRef = message . ExpectedRef
 
 -- | Report missing fields in a record.
 missingFields :: (MonadMessages Message m, MonadSymbols m) =>
