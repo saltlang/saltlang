@@ -97,6 +97,9 @@ module Language.Salt.Surface.Syntax(
        Seq(..),
        Apply(..),
 
+       -- ** Links
+       Link(..),
+
        -- * Newtypes
        DefID
        ) where
@@ -194,7 +197,7 @@ data Scope expty =
 data Resolved expty =
   Resolved {
     -- | All the builders defined in this scope.
-    resolvedBuilders :: !(HashMap Symbol (Builder expty)),
+    resolvedBuilders :: !(HashMap Symbol (Builder Link)),
     -- | The syntax directives for this scope.
     resolvedSyntax :: !(HashMap Symbol (Syntax expty)),
     -- | The truth environment for this scope.  This contains all
@@ -207,11 +210,11 @@ data Resolved expty =
     -- | Proofs given in this scope.
     resolvedProofs :: ![Proof expty],
     -- | Imports in this scope.
-    resolvedImports :: ![Import ScopeID],
+    resolvedImports :: ![Import Link],
     -- | The enclosing scope, if one exists.
     resolvedEnclosing :: !(Maybe ScopeID),
     -- | The scopes from which this one inherits definitions.
-    resolvedInherits :: ![ScopeID],
+    resolvedInherits :: ![Link],
     -- | A compound expression to which this scope evaluates, or @[]@
     -- for scopes that have no value.
     resolvedEval :: ![Compound expty]
@@ -256,6 +259,9 @@ data Builder expty =
     -- | The visibility of this definition.
     builderVisibility :: !Visibility,
     -- | The parameters of the builder entity.
+
+    -- XXX This is wrong; this needs to be an expty representing a
+    -- scope expression
     builderParams :: !(Fields expty),
     -- | The declared supertypes for this builder entity.
     builderSuperTypes :: ![expty],
@@ -514,6 +520,9 @@ data Exp callty refty =
       -- | The type of entity the builder represents.
       anonKind :: !BuilderKind,
       -- | The parameters of the builder entity.
+
+      -- XXX This is wrong; this needs to be an expty representing a
+      -- scope expression
       anonParams :: !(Fields (Exp callty refty)),
       -- | The entities declared by the builder.
       anonScope :: !ScopeID,
@@ -525,6 +534,22 @@ data Exp callty refty =
     -- | Placeholder for invalid expressions.
   | Bad { badPos :: !Position }
     deriving (Functor, Foldable, Traversable)
+
+-- | Links are used post-resolution to represent references to another
+-- scope.
+data Link =
+    -- | A link to a scope, with position information.
+    Link {
+      -- | The 'ScopeID' to which the link refers.
+      linkScopeID :: !ScopeID,
+      -- | The position in source from which this arises.
+      linkPos :: !Position
+    }
+    -- | A bad link, usually arising from resolution errors.
+  | BadLink {
+      -- | The position in source from which this arises.
+      badLinkPos :: !Position
+    }
 
 -- | Representation of fields.  This contains information for
 -- interpreting record as well as tuple values.
@@ -725,6 +750,12 @@ instance (Eq (callty (Exp callty refty)), Eq refty) =>
     Anon { anonKind = kind2, anonParams = fields2, anonScope = content2 } =
       kind1 == kind2 && fields1 == fields2 && content1 == content2
   Literal lit1 == Literal lit2 = lit1 == lit2
+  _ == _ = False
+
+instance Eq Link where
+  Link { linkScopeID = scope1 } == Link { linkScopeID = scope2 } =
+    scope1 == scope2
+  BadLink {} == BadLink {} = True
   _ == _ = False
 
 instance Eq expty => Eq (Fields expty) where
@@ -1041,6 +1072,13 @@ instance (Ord (callty (Exp callty refty)), Ord refty) =>
   compare _ Literal {} = GT
   compare Bad {} Bad {} = EQ
 
+instance Ord Link where
+  compare Link { linkScopeID = scope1 } Link { linkScopeID = scope2 } =
+    compare scope1 scope2
+  compare Link {} _ = LT
+  compare _ Link {} = GT
+  compare BadLink {} BadLink {} = EQ
+
 instance Ord expty => Ord (Fields expty) where
   compare Fields { fieldsBindings = bindings1, fieldsOrder = order1 }
           Fields { fieldsBindings = bindings2, fieldsOrder = order2 } =
@@ -1218,6 +1256,11 @@ instance (Hashable (callty (Exp callty refty)), Hashable refty,
     s `hashWithSalt` (14 :: Int) `hashWithSalt` lit
   hashWithSalt s Bad {} = s `hashWithSalt` (0 :: Int)
 
+instance Hashable Link where
+  hashWithSalt s Link { linkScopeID = scope } =
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` scope
+  hashWithSalt s BadLink {} = s `hashWithSalt` (1 :: Int)
+
 instance (Hashable expty, Ord expty) => Hashable (Fields expty) where
   hashWithSalt s Fields { fieldsBindings = bindings, fieldsOrder = order } =
     let
@@ -1268,47 +1311,6 @@ instance Functor callty => Monad (Exp callty) where
     a { anonParams = fmap (>>= f) params }
   Literal { literalVal = lit } >>= _ = Literal { literalVal = lit }
   Bad { badPos = pos } >>= _ = Bad { badPos = pos }
-
-{-
-precDot :: MonadSymbols m => (Ordering, Exp) -> StateT Word m (Doc, String)
-precDot (ord, exp) =
-  let
-    orddoc = case ord of
-      LT -> string "<"
-      EQ -> string "=="
-      GT -> string ">"
-  in do
-    nodeid <- getNodeID
-    (expnode, expname) <- expDot exp
-    return (expnode <$>
-            dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Prec | " <>
-                               orddoc <> string " | " <>
-                               string "<exp> exp\"") <$>
-                      string "shape = \"record\"") <>
-            dquoted (string nodeid <> string ":exp") <>
-            string " -> " <> string expname, nodeid)
-
-syntaxDot :: MonadSymbols m => Syntax -> StateT Word m (Doc, String)
-syntaxDot Syntax { syntaxFixity = fixity, syntaxPrecs = precs } =
-  let
-    elemEdge nodeid (_, elemname) =
-      dquoted (string nodeid) <> string ":precs" <>
-      string " -> " <> dquoted (string elemname)
-  in do
-    nodeid <- getNodeID
-    precdocs <- mapM precDot precs
-    return (vcat (map fst precdocs) <$>
-            dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Syntax | " <>
-                               format fixity <> string " | " <>
-                               string "<precs> precs\"") <$>
-                      string "shape = \"record\"") <>
-            dquoted (string nodeid <> string ":value") <>
-            char ';' <$> vcat (map (elemEdge nodeid) precdocs), nodeid)
--}
 
 instance Format DefID where
   format = format . fromEnum
@@ -1734,6 +1736,15 @@ instance (MonadPositions m, MonadSymbols m, FormatM m refty,
                               (string "body", format body)])
   formatM Literal { literalVal = l } = formatM l
   formatM Bad {} = return (string "<bad>")
+
+instance (MonadPositions m) => FormatM m Link where
+  formatM Link { linkScopeID = scopeid, linkPos = pos } =
+    do
+      posdoc <- formatM pos
+      return (compoundApplyDoc (string "Link")
+                             [(string "scope", format scopeid),
+                              (string "pos", posdoc)])
+  formatM BadLink {} = return (string "<bad link>")
 
 instance (MonadPositions m, MonadSymbols m, FormatM m expty) =>
          FormatM m (Fields expty) where
@@ -2502,6 +2513,41 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                     callPickler, recordPickler, recordTypePickler, tuplePickler,
                     projectPickler, idPickler, withPickler, wherePickler,
                     anonPickler, literalPickler, badPickler]
+
+linkPickler :: (GenericXMLString tag, Show tag,
+                GenericXMLString text, Show text) =>
+               PU [NodeG [] tag text] Link
+linkPickler =
+  let
+    revfunc Link { linkScopeID = scopeid, linkPos = pos } = (scopeid, pos)
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\(scopeid, pos) -> Link { linkScopeID = scopeid,
+                                      linkPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Id")
+                        (xpPair (xpElemNodes (gxFromString "ref") xpickle)
+                                (xpElemNodes (gxFromString "pos") xpickle)))
+
+badLinkPickler :: (GenericXMLString tag, Show tag,
+                   GenericXMLString text, Show text) =>
+                  PU [NodeG [] tag text] Link
+badLinkPickler =
+  let
+    revfunc BadLink { badLinkPos = pos } = pos
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (\pos -> BadLink { badLinkPos = pos }, revfunc)
+           (xpElemNodes (gxFromString "Bad")
+                        (xpElemNodes (gxFromString "pos") xpickle))
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Link where
+  xpickle =
+    let
+      picker Link {} = 0
+      picker BadLink {} = 1
+    in
+      xpAlt picker [linkPickler, badLinkPickler]
 
 makeArray :: [a] -> Array Word a
 makeArray l = listArray (1, fromIntegral (length l)) l
