@@ -71,9 +71,7 @@ data Save =
     -- | Save a textual representation.
     saveText :: !Bool,
     -- | Save an XML representation.
-    saveXML :: !Bool,
-    -- | Save a graphviz representation.
-    saveDot :: !Bool
+    saveXML :: !Bool
   }
   deriving (Eq, Show)
 
@@ -138,11 +136,10 @@ instance Monoid (Singular a) where
   mappend (Single _) (Single _) = Multiple
 
 instance Monoid Save where
-  mempty = Save { saveText = False, saveXML = False, saveDot = False }
-  mappend Save { saveText = text1, saveXML = xml1, saveDot = dot1 }
-          Save { saveText = text2, saveXML = xml2, saveDot = dot2 } =
-    Save { saveText = text1 || text2, saveXML = xml1 || xml2,
-           saveDot = dot1 || dot2 }
+  mempty = Save { saveText = False, saveXML = False }
+  mappend Save { saveText = text1, saveXML = xml1 }
+          Save { saveText = text2, saveXML = xml2 } =
+    Save { saveText = text1 || text2, saveXML = xml1 || xml2 }
 
 instance Monoid Args where
   mempty = Args { argTokensSave = mempty, argASTSave = mempty,
@@ -252,25 +249,6 @@ keepXML (Just txt) =
   Error { errMsgs = ["no compiler structure named " ++ txt ++ "\n"],
           errDistDir = False, errLastStage = False }
 
-setSaveDot :: Save
-setSaveDot = mempty { saveDot = True }
-
-keepDot :: Maybe String -> Args
-keepDot Nothing = mempty { argASTSave = setSaveDot,
-                           argSurfaceSave = setSaveDot }
-keepDot (Just "all") = mempty { argASTSave = setSaveDot,
-                                argSurfaceSave = setSaveDot }
-keepDot (Just "tokens") =
-  Error { errMsgs = ["tokens have no graphviz representation"],
-          errDistDir = False, errLastStage = False }
-keepDot (Just "ast") =
-  mempty { argASTSave = setSaveDot }
-keepDot (Just "surface") =
-  mempty { argSurfaceSave = setSaveDot }
-keepDot (Just txt) =
-  Error { errMsgs = ["no compiler structure named " ++ txt ++ "\n"],
-          errDistDir = False, errLastStage = False }
-
 distDir :: String -> Args
 distDir dir = mempty { argDistDir = Single dir }
 
@@ -305,9 +283,7 @@ optionsDesc = [
     Option [] ["keep"] (OptArg keepText "STAGE")
       "save intermediate structures as text",
     Option [] ["keep-xml"] (OptArg keepXML "STAGE")
-      "save intermediate structures as text",
-    Option [] ["keep-dot"] (OptArg keepDot "STAGE")
-      "save intermediate structures as graphviz"
+      "save intermediate structures as text"
   ]
 
 -- | Get compiler options from the command line.

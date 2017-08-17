@@ -52,7 +52,7 @@ import Data.Symbol
 import Language.Salt.Compiler.Options
 import Language.Salt.Frontend
 import Language.Salt.Message
-import Language.Salt.Surface.AST(AST, astDot)
+import Language.Salt.Surface.AST(AST)
 import Language.Salt.Surface.Collect
 import Language.Salt.Surface.Lexer hiding (lex)
 import Language.Salt.Surface.Parser
@@ -104,9 +104,6 @@ collectedName = Strict.fromString $! extSeparator : "collected"
 xmlExt :: Strict.ByteString
 xmlExt = Strict.fromString $! extSeparator : "xml"
 
-dotExt :: Strict.ByteString
-dotExt = Strict.fromString $! extSeparator : "dot"
-
 printTextTokens :: (MonadPositions m, MonadSymbols m, MonadMessages Message m,
                     MonadArtifacts Strict.ByteString m) =>
                    Strict.ByteString -> [Token] -> m ()
@@ -152,16 +149,6 @@ printTextAST fname ast =
     astdoc <- formatM ast
     createArtifact astfile (buildDynamic 120 False astdoc)
 
-printDotAST :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m,
-                MonadPositions m, MonadSymbols m) =>
-                Strict.ByteString -> AST -> m ()
-printDotAST fname ast =
-  let
-    dotfile = Strict.concat [fname, astExt, dotExt]
-  in do
-    astdoc <- astDot ast
-    createArtifact dotfile (buildFast astdoc)
-
 printXMLAST :: (MonadArtifacts Strict.ByteString m, MonadMessages Message m) =>
                Strict.ByteString -> AST -> m ()
 printXMLAST fname ast =
@@ -177,12 +164,11 @@ printXMLAST fname ast =
 printAST :: (MonadIO m, MonadPositions m, MonadSymbols m,
              MonadMessages Message m, MonadArtifacts Strict.ByteString m) =>
             Save -> Filename -> AST -> m ()
-printAST Save { saveXML = savexml, saveText = savetxt, saveDot = savedot }
+printAST Save { saveXML = savexml, saveText = savetxt }
          fname ast =
   do
     FileInfo { fileInfoName = fstr } <- fileInfo fname
     when savetxt (printTextAST fstr ast)
-    when savedot (printDotAST fstr ast)
     when savexml (printXMLAST fstr ast)
 
 printTextCollected :: (MonadPositions m, MonadSymbols m,
