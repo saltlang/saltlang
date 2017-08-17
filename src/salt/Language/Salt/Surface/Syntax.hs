@@ -70,6 +70,9 @@ module Language.Salt.Surface.Syntax(
        -- ** Scopes
        Scope(..),
        Resolved(..),
+       Params(..),
+
+       -- ** Elements
        Syntax(..),
        Truth(..),
        Proof(..),
@@ -259,18 +262,27 @@ data Builder expty =
     -- | The visibility of this definition.
     builderVisibility :: !Visibility,
     -- | The parameters of the builder entity.
-
-    -- XXX This is wrong; this needs to be an expty representing a
-    -- scope expression
-    builderParams :: !(Fields expty),
+    builderParams :: !(Params expty),
     -- | The declared supertypes for this builder entity.
     builderSuperTypes :: ![expty],
     -- | The entities declared by the builder.
-    builderContent :: !expty,
+    builderContent :: !(Maybe expty),
     -- | The position in source from which this arises.
     builderPos :: !Position
   }
   deriving (Functor, Foldable, Traversable)
+
+-- | Builder parameters.
+data Params linkty =
+    -- | A scope, representing a signature which defines the parameters
+    Params {
+      paramsScope :: !linkty
+    }
+    -- | An empty parameter list.
+  | Empty
+    -- | No parameters.
+  | None
+  deriving (Eq, Ord, Functor, Foldable, Traversable)
 
 -- | Proofs.  These are proof scripts targeted at individual truths,
 -- or at proof obligations.
@@ -520,10 +532,7 @@ data Exp callty refty =
       -- | The type of entity the builder represents.
       anonKind :: !BuilderKind,
       -- | The parameters of the builder entity.
-
-      -- XXX This is wrong; this needs to be an expty representing a
-      -- scope expression
-      anonParams :: !(Fields (Exp callty refty)),
+      anonParams :: !(Params (Exp callty refty)),
       -- | The entities declared by the builder.
       anonScope :: !ScopeID,
       -- | The position in source from which this arises.
@@ -1159,6 +1168,12 @@ instance (Hashable expty, Ord expty) => Hashable (Resolved expty) where
       imports `hashWithSalt` namelist `hashWithSalt`
       enclosing `hashWithSalt` inherits `hashWithSalt` value
 
+instance (Hashable linkty) => Hashable (Params linkty) where
+  hashWithSalt s Params { paramsScope = scope } =
+    s `hashWithSalt` (0 :: Int) `hashWithSalt` scope
+  hashWithSalt s Empty = s `hashWithSalt` (1 :: Int)
+  hashWithSalt s None = s `hashWithSalt` (2 :: Int)
+
 instance (Hashable expty, Ord expty) => Hashable (Builder expty) where
   hashWithSalt s Builder { builderKind = kind, builderVisibility = vis,
                            builderParams = params, builderSuperTypes = supers,
@@ -1476,11 +1491,34 @@ instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
                                       (string "names", namesdoc),
                                       (string "proofs", listDoc proofsdoc)]
 
+instance (MonadSymbols m, MonadPositions m, FormatM m linkty) =>
+         FormatM m (Params linkty) where
+  formatM Params { paramsScope = scope } =
+    do
+      scopedoc <- formatM scope
+      return (compoundApplyDoc (string "Params")
+                               [((string "scope"), scopedoc)])
+  formatM Empty = return (string "Empty")
+  formatM None = return (string "None")
+
 instance (MonadSymbols m, MonadPositions m, FormatM m expty) =>
          FormatM m (Builder expty) where
   formatM Builder { builderVisibility = vis, builderKind = cls,
                     builderSuperTypes = supers, builderParams = params,
-                    builderContent = body, builderPos = pos } =
+                    builderContent = Nothing, builderPos = pos } =
+    do
+      posdoc <- formatM pos
+      superdocs <- mapM formatM supers
+      paramdocs <- formatM params
+      return (compoundApplyDoc (string "Builder")
+                             [(string "visibility", format vis),
+                              (string "pos", posdoc),
+                              (string "kind", format cls),
+                              (string "params", paramdocs),
+                              (string "supers", listDoc superdocs)])
+  formatM Builder { builderVisibility = vis, builderKind = cls,
+                    builderSuperTypes = supers, builderParams = params,
+                    builderContent = Just body, builderPos = pos } =
     do
       posdoc <- formatM pos
       superdocs <- mapM formatM supers
@@ -1987,6 +2025,32 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
                                           (xpElemNodes (gxFromString "eval")
                                                        (xpList xpickle)))))
 
+paramsPickler :: (GenericXMLString tag, Show tag,
+                  GenericXMLString text, Show text,
+                  XmlPickler [NodeG [] tag text] linkty) =>
+                 PU [NodeG [] tag text] (Params linkty)
+paramsPickler =
+  let
+    revfunc Params { paramsScope = s } = s
+    revfunc _ = error $! "Can't convert"
+  in
+    xpWrap (Params, revfunc) (xpElemNodes (gxFromString "Params") xpickle)
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
+          XmlPickler [NodeG [] tag text] linkty) =>
+         XmlPickler [NodeG [] tag text] (Params linkty) where
+  xpickle =
+    let
+      picker Params {} = 0
+      picker Empty {} = 1
+      picker None {} = 2
+    in
+      xpAlt picker [paramsPickler,
+                    xpWrap (const Empty, const ())
+                           (xpElemNodes (gxFromString "Empty") xpUnit),
+                    xpWrap (const None, const ())
+                           (xpElemNodes (gxFromString "None") xpUnit)]
+
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
           XmlPickler [NodeG [] tag text] expty) =>
          XmlPickler [NodeG [] tag text] (Builder expty) where
@@ -2002,7 +2066,8 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,
            (xpElem (gxFromString "Builder") (xpPair xpickle xpickle)
                    (xp4Tuple (xpElemNodes (gxFromString "params") xpickle)
                              (xpElemNodes (gxFromString "supers") xpickle)
-                             (xpElemNodes (gxFromString "body") xpickle)
+                             (xpOption (xpElemNodes (gxFromString "body")
+                                                    xpickle))
                              (xpElemNodes (gxFromString "pos") xpickle)))
 
 instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text,

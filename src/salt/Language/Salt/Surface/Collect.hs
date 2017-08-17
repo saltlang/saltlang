@@ -639,7 +639,7 @@ collectCompound accum AST.Element {
   do
     -- Collect the initializer and pattern
     collectedInit <- case init of
-      Just exp -> liftM Just (collectExp exp)
+      Just exp -> fmap Just (collectExp exp)
       Nothing -> return Nothing
     (collectedPat, binds) <- collectPattern pat
     -- Add the definition to the scope
@@ -834,13 +834,30 @@ collectExp AST.Anon { AST.anonKind = kind, AST.anonSuperTypes = supers,
                       AST.anonPos = pos } =
   do
     collectedSupers <- mapM collectExp supers
-    collectedParams <- collectFields params pos
+    collectedParams <- collectScopeParams params
     collectedContent <- collectScope pos collectedSupers content
     return Syntax.Anon { Syntax.anonKind = kind,
                          Syntax.anonParams = collectedParams,
                          Syntax.anonScope = collectedContent,
                          Syntax.anonPos = pos }
 collectExp (AST.Literal lit) = return (Syntax.Literal lit)
+
+collectScopeParams :: (MonadMessages Message m, MonadSymbols m, MonadIO m) =>
+                      Maybe AST.Params
+                   -> CollectT m (Syntax.Params SyntaxExp)
+collectScopeParams Nothing = return Syntax.None
+collectScopeParams (Just AST.Params { AST.paramsDefs = [] }) =
+  return Syntax.Empty
+collectScopeParams (Just AST.Params { AST.paramsDefs = paramdefs,
+                                      AST.paramsPos = pos }) =
+  do
+    (_, scopeid) <- makeScope pos (mapM_ (collectElement Public) paramdefs)
+    return Syntax.Params {
+             Syntax.paramsScope = Syntax.Anon { Syntax.anonKind = Signature,
+                                                Syntax.anonParams = Syntax.None,
+                                                Syntax.anonScope = scopeid,
+                                                Syntax.anonPos = pos }
+           }
 
 -- | Collect a list of AST fields into a Syntax fields structure (a HashMap
 -- and an ordering), and report duplicates.
@@ -943,7 +960,7 @@ collectElement vis AST.Builder { AST.builderName = sym,
                                  AST.builderPos = pos } =
   do
     collectedSupers <- mapM collectExp supers
-    collectedParams <- collectFields params pos
+    collectedParams <- collectScopeParams params
     case content of
         AST.Body body ->
           do
@@ -954,11 +971,11 @@ collectElement vis AST.Builder { AST.builderName = sym,
                              Syntax.builderParams = collectedParams,
                              Syntax.builderSuperTypes = collectedSupers,
                              Syntax.builderContent =
-                               Syntax.Anon {
-                                 Syntax.anonKind = kind,
-                                 Syntax.anonParams = collectedParams,
-                                 Syntax.anonScope = collectedBody,
-                                 Syntax.anonPos = pos },
+                               Just Syntax.Anon {
+                                      Syntax.anonKind = kind,
+                                      Syntax.anonParams = collectedParams,
+                                      Syntax.anonScope = collectedBody,
+                                      Syntax.anonPos = pos },
                              Syntax.builderPos = pos
                            }
         AST.Value value ->
@@ -969,7 +986,19 @@ collectElement vis AST.Builder { AST.builderName = sym,
                              Syntax.builderVisibility = vis,
                              Syntax.builderParams = collectedParams,
                              Syntax.builderSuperTypes = collectedSupers,
-                             Syntax.builderContent = collectedValue,
+                             Syntax.builderContent = Just collectedValue,
+                             Syntax.builderPos = pos
+                           }
+        AST.None ->
+          do
+            -- Report an opaque builder if we have no signature and no body
+            when (null collectedSupers) (opaqueBuilder kind pos)
+            addBuilder sym Syntax.Builder {
+                             Syntax.builderKind = kind,
+                             Syntax.builderVisibility = vis,
+                             Syntax.builderParams = collectedParams,
+                             Syntax.builderSuperTypes = collectedSupers,
+                             Syntax.builderContent = Nothing,
                              Syntax.builderPos = pos
                            }
 -- For Defs and Imports, collect the components and add them to the list of
@@ -978,7 +1007,7 @@ collectElement vis AST.Def { AST.defPattern = pat, AST.defInit = init,
                              AST.defPos = pos } =
   do
     collectedInit <- case init of
-      Just exp -> liftM Just (collectExp exp)
+      Just exp -> fmap Just (collectExp exp)
       Nothing -> return Nothing
     (collectedPat, binds) <- collectPattern pat
     defid <- addDef Syntax.Def { Syntax.defPattern = collectedPat,

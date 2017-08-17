@@ -153,7 +153,7 @@ import qualified Language.Salt.Message as Message
 %%
 
 top_level :: { AST }
-          : component use_list def_list
+          : component use_list elem_list
               { AST { astComponent = $1, astUses = reverse $2,
                       astScope = reverse $3 } }
 
@@ -260,41 +260,41 @@ qual_id :: { ([Symbol], Position) }
                 ([idname], idpos)
             }
 
-def_list :: { [Element] }
-         : closed_def_list
-             { $1 }
-         | open_def_list
-             { $1 }
-         |
-             { [] }
+elem_list :: { [Element] }
+          : closed_elem_list
+              { $1 }
+          | open_elem_list
+              { $1 }
+          |
+              { [] }
 
-closed_def_list :: { [Element] }
-                : open_def_list SEMICOLON
-                    { $1 }
-                | closed_def_list SEMICOLON
-                    { $1 }
-                | closed_def_list closed_def
-                    { $2 : $1 }
-                | closed_def_list closed_value_def
-                    { $2 : $1 }
-                | closed_def
-                    { [ $1 ] }
-                | closed_value_def
-                    { [ $1 ] }
+closed_elem_list :: { [Element] }
+                 : open_elem_list SEMICOLON
+                     { $1 }
+                 | closed_elem_list SEMICOLON
+                     { $1 }
+                 | closed_elem_list closed_elem
+                     { $2 : $1 }
+                 | closed_elem_list closed_value_def
+                     { $2 : $1 }
+                 | closed_elem
+                     { [ $1 ] }
+                 | closed_value_def
+                     { [ $1 ] }
 
-open_def_list :: { [Element] }
-              : closed_def_list open_def
-                  { $2 : $1 }
-              | closed_def_list open_value_def
-                  { $2 : $1 }
-              | open_def
-                  { [ $1 ] }
-              | open_value_def
-                  { [ $1 ] }
+open_elem_list :: { [Element] }
+               : closed_elem_list open_elem
+                   { $2 : $1 }
+               | closed_elem_list open_value_def
+                   { $2 : $1 }
+               | open_elem
+                   { [ $1 ] }
+               | open_value_def
+                   { [ $1 ] }
 
 closed_def :: { Element }
-           : type_builder_kind ident args_opt extends
-             LBRACE def_list group_list RBRACE
+           : type_builder_kind ident builder_params_opt extends
+             LBRACE elem_list group_list RBRACE
                { let
                    (idname, _) = $2
                    content = case $6 of
@@ -313,33 +313,37 @@ closed_def :: { Element }
                    Builder { builderKind = fst $1,
                              builderName = idname,
                              builderSuperTypes = reverse $4,
-                             builderParams = reverse $3,
+                             builderParams = $3,
                              builderContent = Body content,
                              builderPos = builderpos }
                }
-           | truth_kind ident args_opt EQUAL exp PROOF LBRACE stm_list RBRACE
-               { let
-                   (idname, _) = $2
-                   content = buildExp $5
-                   compoundpos = position $7 <> position $9
-                   pos = snd $1 <> position $9
-                 in
-                   Truth { truthName = idname, truthKind = fst $1,
-                           truthProof =
-                             Just Compound { compoundBody = reverse $8,
-                                             compoundPos = compoundpos },
-                           truthContent = content, truthPos = pos }
-             }
-           | PROOF static_exp LBRACE stm_list RBRACE
-               { let
-                   compoundpos = position $3 <> position $5
-                   pos = position $1 <> position $5
-                 in
-                   Proof { proofName = $2,
-                           proofBody = Compound { compoundBody = reverse $4,
-                                                  compoundPos = compoundpos },
-                           proofPos = pos }
-               }
+
+closed_elem :: { Element }
+            : closed_def
+                { $1 }
+            | truth_kind ident params_opt EQUAL exp PROOF LBRACE stm_list RBRACE
+                { let
+                    (idname, _) = $2
+                    content = buildExp $5
+                    compoundpos = position $7 <> position $9
+                    pos = snd $1 <> position $9
+                  in
+                    Truth { truthName = idname, truthKind = fst $1,
+                            truthProof =
+                              Just Compound { compoundBody = reverse $8,
+                                              compoundPos = compoundpos },
+                            truthContent = content, truthPos = pos }
+              }
+            | PROOF static_exp LBRACE stm_list RBRACE
+                { let
+                    compoundpos = position $3 <> position $5
+                    pos = position $1 <> position $5
+                  in
+                    Proof { proofName = $2,
+                            proofBody = Compound { compoundBody = reverse $4,
+                                                   compoundPos = compoundpos },
+                            proofPos = pos }
+                }
 
 fixity :: { (Fixity, Position) }
        : POSTFIX
@@ -395,7 +399,24 @@ default_level :: { Level Exp }
 
 
 open_def :: { Element }
-         : type_builder_kind ident args_opt extends EQUAL exp
+         : type_builder_kind ident builder_params_opt extends
+             { let
+                 (idname, idpos) = $2
+                 endpos = case $4 of
+                   first : _ -> position first
+                   [] -> case $3 of
+                     Just params -> position params
+                     Nothing -> idpos
+                 builderpos = snd $1 <> endpos
+               in
+                 Builder { builderKind = fst $1,
+                           builderName = idname,
+                           builderSuperTypes = reverse $4,
+                           builderParams = $3,
+                           builderContent = None,
+                           builderPos = builderpos }
+             }
+         | type_builder_kind ident builder_params_opt extends EQUAL exp
              { let
                  (idname, _) = $2
                  builderpos = snd $1 <> position content
@@ -404,11 +425,11 @@ open_def :: { Element }
                  Builder { builderKind = fst $1,
                            builderName = idname,
                            builderSuperTypes = reverse $4,
-                           builderParams = reverse $3,
+                           builderParams = $3,
                            builderContent = Value content,
                            builderPos = builderpos }
              }
-         | truth_kind ident args_opt EQUAL exp
+         | truth_kind ident params_opt EQUAL exp
              { let
                  (idname, _) = $2
                  content = buildExp $5
@@ -418,82 +439,88 @@ open_def :: { Element }
                          truthProof = Nothing, truthContent = content,
                          truthPos = pos }
              }
-         | truth_kind ident args_opt EQUAL exp PROOF EQUAL exp
-             { let
-                 (idname, _) = $2
-                 content = buildExp $5
-                 proof = buildExp $8
-                 pos = snd $1 <> position proof
-               in
-                 Truth { truthName = idname, truthKind = fst $1,
-                         truthProof = Just proof, truthContent = content,
-                         truthPos = pos }
-             }
-         | PROOF static_exp EQUAL exp
-             { let
-                 body = buildExp $4
-                 pos = position $1 <> position body
-               in
-                 Proof { proofName = $2, proofBody = body, proofPos = pos }
-             }
-         | IMPORT static_exp DOT ident
-             { let
-                 (idsym, idpos) = $4
-                 pos = position $1 <> idpos
-                 names = [Name { nameSym = idsym, namePos = idpos }]
-               in
-                 Import { importExp = $2, importNames = names, importPos = pos }
-             }
-         | IMPORT static_exp DOT LPAREN project_list RPAREN
-             { let
-                 pos = position $1 <> position $2
 
-                 mapfun n @ Name { nameSym = FieldName { fieldSym = sym } } =
-                   n { nameSym = sym }
-               in
-                 Import { importExp = $2, importNames = map mapfun $5,
-                          importPos = pos }
-             }
-         | IMPORT static_exp DOT LPAREN ELLIPSIS RPAREN
-             { let
-                 pos = position $1 <> position $6
-               in
-                 Import { importExp = $2, importNames = [], importPos = pos }
-             }
-         | SYNTAX ident fixity precs
-             { let
-                 (idname, _) = $2
-                 (fixity, _) = $3
-                 pos = position $1 <> position (head $4)
-               in
-                 Syntax { syntaxSym = idname, syntaxFixity = fixity,
-                          syntaxPrecs = $4, syntaxPos = pos }
-             }
-         | SYNTAX ident fixity
-             { let
-                 (idname, _) = $2
-                 (fixity, fixitypos) = $3
-                 pos = position $1 <> fixitypos
-               in
-                 Syntax { syntaxSym = idname, syntaxFixity = fixity,
-                          syntaxPrecs = [], syntaxPos = pos }
-             }
-         | SYNTAX ident precs
-             { let
-                 (idname, _) = $2
-                 pos = position $1 <> position (head $3)
-               in
-                 Syntax { syntaxSym = idname, syntaxFixity = Prefix,
-                          syntaxPrecs = $3, syntaxPos = pos }
-             }
-         | SYNTAX ident
-             { let
-                 (idname, idpos) = $2
-                 pos = position $1 <> idpos
-               in
-                 Syntax { syntaxSym = idname, syntaxFixity = Prefix,
-                          syntaxPrecs = [], syntaxPos = pos }
-             }
+open_elem :: { Element }
+          : open_def
+              { $1 }
+          | truth_kind ident params_opt EQUAL exp PROOF EQUAL exp
+              { let
+                  (idname, _) = $2
+                  content = buildExp $5
+                  proof = buildExp $8
+                  pos = snd $1 <> position proof
+                in
+                  Truth { truthName = idname, truthKind = fst $1,
+                          truthProof = Just proof, truthContent = content,
+                          truthPos = pos }
+              }
+          | PROOF static_exp EQUAL exp
+              { let
+                  body = buildExp $4
+                  pos = position $1 <> position body
+                in
+                  Proof { proofName = $2, proofBody = body, proofPos = pos }
+              }
+          | IMPORT static_exp DOT ident
+              { let
+                  (idsym, idpos) = $4
+                  pos = position $1 <> idpos
+                  names = [Name { nameSym = idsym, namePos = idpos }]
+                in
+                  Import { importExp = $2, importNames = names,
+                           importPos = pos }
+              }
+            -- XXX turn this into a match_list
+          | IMPORT static_exp DOT LPAREN project_list RPAREN
+              { let
+                  pos = position $1 <> position $2
+
+                  mapfun n @ Name { nameSym = FieldName { fieldSym = sym } } =
+                    n { nameSym = sym }
+                in
+                  Import { importExp = $2, importNames = map mapfun $5,
+                           importPos = pos }
+              }
+          | IMPORT static_exp DOT LPAREN ELLIPSIS RPAREN
+              { let
+                  pos = position $1 <> position $6
+                in
+                  Import { importExp = $2, importNames = [], importPos = pos }
+              }
+          | SYNTAX ident fixity precs
+              { let
+                  (idname, _) = $2
+                  (fixity, _) = $3
+                  pos = position $1 <> position (head $4)
+                in
+                  Syntax { syntaxSym = idname, syntaxFixity = fixity,
+                           syntaxPrecs = $4, syntaxPos = pos }
+              }
+          | SYNTAX ident fixity
+              { let
+                  (idname, _) = $2
+                  (fixity, fixitypos) = $3
+                  pos = position $1 <> fixitypos
+                in
+                  Syntax { syntaxSym = idname, syntaxFixity = fixity,
+                           syntaxPrecs = [], syntaxPos = pos }
+              }
+          | SYNTAX ident precs
+              { let
+                  (idname, _) = $2
+                  pos = position $1 <> position (head $3)
+                in
+                  Syntax { syntaxSym = idname, syntaxFixity = Prefix,
+                           syntaxPrecs = $3, syntaxPos = pos }
+              }
+          | SYNTAX ident
+              { let
+                  (idname, idpos) = $2
+                  pos = position $1 <> idpos
+                in
+                  Syntax { syntaxSym = idname, syntaxFixity = Prefix,
+                           syntaxPrecs = [], syntaxPos = pos }
+              }
 
 closed_value_def :: { Element }
                  : FUN ident case_list pattern LBRACE stm_list RBRACE
@@ -540,21 +567,21 @@ open_value_def :: { Element }
                    }
 
 group_list :: { [Group] }
-           : group_list PRIVATE COLON def_list
+           : group_list PRIVATE COLON elem_list
                { let
                    pos = position $2 <> position (head $4)
                  in
                    Group { groupVisibility = Private, groupElements = $4,
                            groupPos = pos } : $1
                }
-           | group_list PROTECTED COLON def_list
+           | group_list PROTECTED COLON elem_list
                { let
                    pos = position $2 <> position (head $4)
                  in
                    Group { groupVisibility = Protected, groupElements = $4,
                            groupPos = pos } : $1
                }
-           | group_list PUBLIC COLON def_list
+           | group_list PUBLIC COLON elem_list
                { let
                    pos = position $2 <> position (head $4)
                  in
@@ -584,11 +611,42 @@ type_builder_kind :: { (BuilderKind, Position) }
                   | INSTANCE
                       { (Instance, position $1) }
 
-args_opt :: { [Field] }
-         : LPAREN field_list RPAREN
-             { $2 }
-         |
-             { [] }
+builder_params_opt :: { Maybe Params }
+                   : LPAREN builder_param_list RPAREN
+                       { let
+                           pos = position $1 <> position $3
+                         in
+                           Just Params { paramsDefs = reverse $2,
+                                         paramsPos = pos }
+                       }
+                   | LPAREN RPAREN
+                       { let
+                           pos = position $1 <> position $2
+                         in
+                           Just Params { paramsDefs = [], paramsPos = pos }
+                       }
+                   |
+                       { Nothing }
+
+builder_param :: { Element }
+builder_param : open_def
+                { $1 }
+              | closed_def
+                { $1 }
+              | open_value_def
+                { $1 }
+
+builder_param_list :: { [Element] }
+builder_param_list : builder_param_list COMMA builder_param
+                     { $3 : $1 }
+                   | builder_param
+                     { [$1] }
+
+params_opt :: { [Field] }
+           : LPAREN field_list RPAREN
+               { $2 }
+           |
+               { [] }
 
 field_list :: { [Field] }
            : field_list COMMA ident COLON exp
@@ -630,7 +688,7 @@ bind_list :: { [Field] }
                             fieldVal = val, fieldPos = pos } ]
               }
 
-extends :: { [Exp] }
+extends :: { [Exp]  }
         : COLON static_exp_list
             { $2 }
         |
@@ -705,15 +763,15 @@ static_exp :: { Exp }
                                                      namePos = idpos }],
                              projectPos = pos }
                }
-           | type_builder_kind args_opt extends
-             LBRACE def_list group_list RBRACE
+           | type_builder_kind builder_params_opt extends
+             LBRACE elem_list group_list RBRACE
                { let
                    grouppos = position (last $5) <> position (head $5)
                    builderpos = snd $1 <> position $7
                  in
                    Anon { anonKind = fst $1,
                           anonSuperTypes = reverse $3,
-                          anonParams = reverse $2,
+                          anonParams = $2,
                           anonContent = Group { groupVisibility = Public,
                                                 groupElements = reverse $5,
                                                 groupPos = grouppos } :
@@ -783,14 +841,15 @@ compound_exp :: { Exp }
                  { $1 }
 
 inner_exp :: { Exp }
-          : type_builder_kind args_opt extends LBRACE def_list group_list RBRACE
+          : type_builder_kind builder_params_opt extends
+            LBRACE elem_list group_list RBRACE
              { let
                  grouppos = position (last $5) <> position (head $5)
                  builderpos = snd $1 <> position $7
                in
                  Anon { anonKind = fst $1,
                         anonSuperTypes = reverse $3,
-                        anonParams = reverse $2,
+                        anonParams = $2,
                         anonContent = Group { groupVisibility = Public,
                                               groupElements = reverse $5,
                                               groupPos = grouppos } :
@@ -905,15 +964,15 @@ closed_stm_list :: { [Compound] }
                     { $1 }
                 | closed_stm_list SEMICOLON
                     { $1 }
-                | closed_stm_list closed_def
+                | closed_stm_list closed_elem
                     { Element $2 : $1 }
                 | LET closed_value_def
                     { [ Element $2 ] }
-                | closed_def
+                | closed_elem
                     { [ Element $1 ] }
 
 open_stm :: { Compound }
-         : open_def
+         : open_elem
              { Element $1 }
          | LET open_value_def
              { Element $2 }

@@ -52,6 +52,7 @@ module Language.Salt.Surface.AST(
        Group(..),
        Scope,
        Element(..),
+       Params(..),
 
        -- ** Expressions
        Exp(..),
@@ -63,29 +64,20 @@ module Language.Salt.Surface.AST(
        Case(..),
        Pattern(..),
        Entry(..),
-
-       -- * Graphviz Renderer
-       astDot
        ) where
 
 import Control.Monad
 import Control.Monad.Positions
-import Control.Monad.State
 import Control.Monad.Symbols
 import Data.Hashable
-import Data.List hiding (init, concat)
 import Data.PositionElement
 import Data.Symbol
-import Data.Word
 import Language.Salt.Format
 import Language.Salt.Surface.Common
 import Prelude hiding (sequence, init, exp, concat)
 import Text.Format
 import Text.XML.Expat.Pickle
 import Text.XML.Expat.Tree(NodeG)
-
-import qualified Data.ByteString as Strict
-import qualified Data.ByteString.UTF8 as Strict
 
 -- | Top-level AST structure
 data AST =
@@ -139,9 +131,19 @@ data Content =
     Body { bodyScope :: !Scope }
     -- | An expression referencing another definition.
   | Value { valueExp :: !Exp }
+  | None
 
 -- | Type of a scope.
 type Scope = [Group]
+
+-- | Parameters to a 'Builder'.
+data Params =
+  Params {
+    -- | The definitions for the parameters
+    paramsDefs :: ![Element],
+    -- | The position in source from which this arises.
+    paramsPos :: !Position
+  }
 
 -- | Scope elements.  These represent declarations, imports, and truth
 -- statements inside a scope.  Note: some of these can be built from
@@ -156,7 +158,7 @@ data Element =
       -- | The type of entity the builder represents.
       builderKind :: !BuilderKind,
       -- | The parameters of the builder entity.
-      builderParams :: ![Field],
+      builderParams :: !(Maybe Params),
       -- | The declared supertypes for this builder entity.
       builderSuperTypes :: ![Exp],
       -- | The entities declared by the builder.
@@ -174,15 +176,6 @@ data Element =
       -- | The position in source from which this arises.
       defPos :: !Position
     }
-    -- | A function definition.
-  | Fun {
-      -- | The name of the function.
-      funName :: !Symbol,
-      -- | The cases, in order.
-      funCases :: ![Case],
-      -- | The position in source from which this arises.
-      funPos :: !Position
-    }
     -- | Truths.  These are similar to declarations, except that they
     -- affect the proof environment.  These include theorems and
     -- invariants.
@@ -197,6 +190,15 @@ data Element =
       truthProof :: !(Maybe Exp),
       -- | The position in source from which this arises.
       truthPos :: !Position
+    }
+    -- | A function definition.
+  | Fun {
+      -- | The name of the function.
+      funName :: !Symbol,
+      -- | The cases, in order.
+      funCases :: ![Case],
+      -- | The position in source from which this arises.
+      funPos :: !Position
     }
     -- | A proof.  This is just a code block with the name of the
     -- theorem being proven.
@@ -408,7 +410,7 @@ data Exp =
       -- | The declared supertypes for this builder entity.
       anonSuperTypes :: ![Exp],
       -- | The parameters of the builder entity.
-      anonParams :: ![Field],
+      anonParams :: !(Maybe Params),
       -- | The entities declared by the builder.
       anonContent :: !Scope,
       -- | The position in source from which this arises.
@@ -471,6 +473,9 @@ instance PositionElement Use where
 
 instance PositionElement Group where
   position Group { groupPos = pos } = pos
+
+instance PositionElement Params where
+  position Params { paramsPos = pos } = pos
 
 instance PositionElement (Name n) where
   position Name { namePos = pos } = pos
@@ -540,7 +545,12 @@ instance Eq n => Eq (Name n) where
 instance Eq Content where
   Body { bodyScope = b1 } == Body { bodyScope = b2 } = b1 == b2
   Value { valueExp = v1 } == Value { valueExp = v2 } = v1 == v2
+  None == None = True
   _ == _ = False
+
+instance Eq Params where
+  Params { paramsDefs = defs1 } == Params { paramsDefs = defs2 } =
+    defs1 == defs2
 
 instance Eq Element where
   Builder { builderName = name1, builderKind = cls1, builderParams = params1,
@@ -668,11 +678,18 @@ instance Ord n => Ord (Name n) where
   compare Name { nameSym = name1 } Name { nameSym = name2 } =
     compare name1 name2
 
+instance Ord Params where
+  compare Params { paramsDefs = defs1 } Params { paramsDefs = defs2 } =
+    compare defs1 defs2
+
 instance Ord Content where
   compare Body { bodyScope = b1 } Body { bodyScope = b2 } = compare b1 b2
   compare Body {} _ = GT
   compare _ Body {} = LT
   compare Value { valueExp = v1 } Value { valueExp = v2 } = compare v1 v2
+  compare Value {} _ = LT
+  compare _ Value {} = GT
+  compare None None = EQ
 
 instance Ord Element where
   compare Builder { builderName = name1, builderKind = cls1,
@@ -911,11 +928,15 @@ instance Hashable Group where
 instance Hashable n => Hashable (Name n) where
   hashWithSalt s Name { nameSym = sym } = s `hashWithSalt` sym
 
+instance Hashable Params where
+  hashWithSalt s Params { paramsDefs = defs } = s `hashWithSalt` defs
+
 instance Hashable Content where
   hashWithSalt s Body { bodyScope = b } =
     s `hashWithSalt` (1 :: Int) `hashWithSalt` b
   hashWithSalt s Value { valueExp = v } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` v
+  hashWithSalt s None = s `hashWithSalt` (3 :: Int)
 
 instance Hashable Element where
   hashWithSalt s Builder { builderName = sym, builderKind = cls,
@@ -1005,670 +1026,21 @@ instance Hashable Entry where
   hashWithSalt s Unnamed { unnamedPat = p } =
     s `hashWithSalt` (2 :: Int) `hashWithSalt` p
 
-astDot :: MonadSymbols m => AST -> m Doc
-astDot AST { astComponent = Just component, astUses = uses, astScope = scope } =
-  let
-    astedge (_, nodename) = string "\"ast\":scope" <>
-                            string "-> " <> dquoted (string nodename)
-    astnode = string ("\"ast\" [ label = \"AST | <uses> uses | " ++
-                      "<scope> scope\" shape = \"record\" ]")
-  in do
-    (componentcontents, aftercomponent) <- runStateT (componentDot component) 0
-    (usecontents, afteruses) <- runStateT (mapM useDot uses) aftercomponent
-    (contents, _) <- runStateT (mapM elementDot scope) afteruses
-    return (string "digraph g " <>
-            braces (line <>
-                    fst componentcontents <!>
-                    vcat (map fst usecontents) <!>
-                    vcat (map fst contents) <!>
-                    astnode <!>
-                    astedge componentcontents <!>
-                    vcat (map astedge usecontents) <!>
-                    vcat (map astedge contents) <> line))
-astDot AST { astComponent = Nothing, astUses = uses, astScope = scope } =
-  let
-    astedge (_, nodename) = string "\"ast\":scope" <>
-                            string "-> " <> dquoted (string nodename)
-    astnode = string ("\"ast\" [ label = \"AST | <uses> uses | " ++
-                      "<scope> scope\" shape = \"record\" ]")
-  in do
-    (usecontents, afteruses) <- runStateT (mapM useDot uses) 0
-    (contents, _) <- runStateT (mapM elementDot scope) afteruses
-    return (string "digraph g " <>
-            braces (line <>
-                    vcat (map fst usecontents) <!>
-                    vcat (map fst contents) <!>
-                    astnode <!>
-                    vcat (map astedge usecontents) <!>
-                    vcat (map astedge contents) <> line))
-
-componentDot :: MonadSymbols m => Component -> StateT Word m (Doc, String)
-componentDot Component { componentName = cname } =
-  do
-    unames <- mapM formatM cname
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Component | " <>
-                               concat (punctuate dot unames)) <!>
-                      string "shape = \"record\"") <> char ';', nodeid)
-
-useDot :: MonadSymbols m => Use -> StateT Word m (Doc, String)
-useDot Use { useName = uname } =
-  do
-    unames <- mapM formatM uname
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Use | " <>
-                               concat (punctuate dot unames)) <!>
-                      string "shape = \"record\"") <> char ';', nodeid)
-
-groupDot :: MonadSymbols m => Group -> StateT Word m (Doc, String)
-groupDot Group { groupVisibility = vis, groupElements = elems } =
-  let
-    elemEdge nodeid (_, elemname) =
-      dquoted (string nodeid) <> string ":elements" <>
-      string " -> " <> dquoted (string elemname)
-  in do
-    nodeid <- getNodeID
-    bodyContents <-mapM elementDot elems
-    return (vcat (map fst bodyContents) <!>
-            dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Group | " <>
-                               string (show vis) <>
-                               string " | <elements> elements") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (elemEdge nodeid) bodyContents), nodeid)
-
-builderBodyDot :: MonadSymbols m => Content -> StateT Word m (Doc, String)
-builderBodyDot Body { bodyScope = elems } =
-  let
-    groupEdge nodeid (_, groupname) =
-      dquoted (string nodeid) <> string ":groups" <>
-      string " -> " <> dquoted (string groupname)
-  in do
-    nodeid <- getNodeID
-    bodyContents <-mapM groupDot elems
-    return (vcat (map fst bodyContents) <!>
-            dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Body | " <>
-                               string "<groups> groups") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (groupEdge nodeid) bodyContents), nodeid)
-builderBodyDot Value { valueExp = elems } =
-  do
-    nodeid <- getNodeID
-    (valuenode, valuename) <-expDot elems
-    return (valuenode <!>
-            dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Value | " <>
-                               string "<value> value\"") <!>
-                      string "shape = \"record\"") <>
-            dquoted (string nodeid <> string ":value") <>
-            string " -> " <> string valuename, nodeid)
-
-elementDot :: MonadSymbols m => Element -> StateT Word m (Doc, String)
-elementDot Builder { builderName = sym, builderKind = cls,
-                     builderParams = params, builderSuperTypes = supers,
-                     builderContent = body } =
-  let
-    paramEdge nodeid (_, paramname) =
-      dquoted (string nodeid) <> string ":params" <>
-      string " -> " <> dquoted (string paramname)
-
-    supersEdge nodeid (_, supername) =
-      dquoted (string nodeid) <> string ":supers" <>
-      string " -> " <> dquoted (string supername)
-  in do
-    nodeid <- getNodeID
-    namestr <- name sym
-    paramContents <- mapM fieldDot params
-    supersContents <- mapM expDot supers
-    (bodynode, bodyname) <- builderBodyDot body
-    return (vcat (map fst paramContents) <!> vcat (map fst supersContents) <!>
-            bodynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Builder | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string " | " <> string (show cls) <>
-                               string (" | <params> params" ++
-                                       " | <supers> supers" ++
-                                       " | <body> body")) <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (paramEdge nodeid) paramContents) <!>
-            vcat (map (supersEdge nodeid) supersContents) <!>
-            dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname), nodeid)
-elementDot Def { defPattern = pat, defInit = Just init } =
-  do
-    nodeid <- getNodeID
-    (patnode, patname) <- patternDot pat
-    (initnode, initname) <- expDot init
-    return (patnode <!> initnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Def | " <>
-                               string ("<pat> pattern" ++
-                                       " | <init> init")) <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
-            string " -> " <> dquoted (string patname) <!>
-            dquoted (string nodeid) <> string ":init" <>
-            string " -> " <> dquoted (string initname), nodeid)
-elementDot Def { defPattern = pat, defInit = Nothing } =
-  do
-    nodeid <- getNodeID
-    (patnode, patname) <- patternDot pat
-    return (patnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Def | " <>
-                               string "<pat> pattern | <init> init") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
-            string " -> " <> dquoted (string patname), nodeid)
-elementDot Fun { funName = sym, funCases = cases } =
-  let
-    caseEdge nodeid (_, casename) =
-      dquoted (string nodeid) <> string ":cases" <>
-      string " -> " <> dquoted (string casename)
-  in do
-    nodeid <- getNodeID
-    namestr <- name sym
-    caseContents <- mapM caseDot cases
-    return (vcat (map fst caseContents) <!>
-            dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Fun | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string " | <cases> cases") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (caseEdge nodeid) caseContents), nodeid)
-elementDot Truth { truthName = sym, truthKind = kind,
-                   truthContent = prop, truthProof = Nothing } =
-  do
-    namestr <- name sym
-    nodeid <- getNodeID
-    (bodynode, bodyname) <- expDot prop
-    return (bodynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Truth | " <>
-                               string (show kind) <> string " | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string " | <body> body") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname), nodeid)
-elementDot Truth { truthName = sym, truthKind = kind,
-                   truthContent = prop, truthProof = Just proof } =
-  do
-    namestr <- name sym
-    nodeid <- getNodeID
-    (bodynode, bodyname) <- expDot prop
-    (proofnode, proofname) <- expDot proof
-    return (bodynode <!> proofnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Truth | " <>
-                               string (show kind) <> string " | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string " | <body> body" <!>
-                               string " | <proof> proof") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname) <!>
-            dquoted (string nodeid) <> string ":proof" <>
-            string " -> " <> dquoted (string proofname), nodeid)
-elementDot Proof { proofName = pname, proofBody = body } =
-  do
-    nodeid <- getNodeID
-    (namenode, namename) <- expDot pname
-    (bodynode, bodyname) <- expDot body
-    return (namenode <!> bodynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Proof | <name> name | <body> body") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname) <!>
-            dquoted (string nodeid) <> string ":name" <>
-            string " -> " <> dquoted (string namename), nodeid)
-elementDot Import { importExp = exp } =
-  do
-    nodeid <- getNodeID
-    (namenode, namename) <- expDot exp
-    return (namenode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Import | <exp> exp") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":exp" <>
-            string " -> " <> dquoted (string namename), nodeid)
-elementDot Syntax { } =
-  do
-    nodeid <- getNodeID
-    --(expnode, expname) <- expDot exp
-    return ({-expnode <!>-} dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Syntax | <exp> exp") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":exp" <>
-            string " -> " {-<> dquoted (string expname)-}, nodeid)
-
-compoundDot :: MonadSymbols m => Compound -> StateT Word m (Doc, String)
-compoundDot Exp { expVal = e } = expDot e
-compoundDot Element { elemVal = e } = elementDot e
-
-patternDot :: MonadSymbols m => Pattern -> StateT Word m (Doc, String)
-patternDot Option { optionPats = pats } =
-  let
-    patEdge nodeid (_, patname) =
-      dquoted (string nodeid) <> string ":pats" <>
-      string " -> " <> dquoted (string patname)
-  in do
-    patContents <- mapM patternDot pats
-    nodeid <- getNodeID
-    return (vcat (map fst patContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Options | " <>
-                              string "<pats> patterns") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (patEdge nodeid) patContents), nodeid)
-patternDot Deconstruct { deconstructName = sym, deconstructPat = pat } =
-  do
-    namestr <- name sym
-    nodeid <- getNodeID
-    (patnode, patname) <- patternDot pat
-    return (patnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Deconstruct | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string "<pat> pattern") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
-          string " -> " <> dquoted (string patname), nodeid)
-patternDot Split { splitFields = fields, splitStrict = True } =
-  let
-    fieldEdge nodeid (_, patname) =
-      dquoted (string nodeid) <> string ":fields" <>
-      string " -> " <> dquoted (string patname)
-  in do
-    fieldContents <- mapM entryDot fields
-    nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Split | strict | " <>
-                               string "<fields> fields") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
-patternDot Split { splitFields = fields, splitStrict = False } =
-  let
-    fieldEdge nodeid (_, fieldname) =
-      dquoted (string nodeid) <> string ":fields" <>
-      string " -> " <> dquoted (string fieldname)
-  in do
-    fieldContents <- mapM entryDot fields
-    nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Split | non-strict | " <>
-                              string "<body> fields") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
-patternDot Typed { typedPat = pat, typedType = ty } =
-  do
-    nodeid <- getNodeID
-    (patnode, patname) <- patternDot pat
-    (tynode, tyname) <- expDot ty
-    return (patnode <!> tynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Typed | " <>
-                               string " <type> type | " <>
-                               string "<pat> pat") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
-          string " -> " <> dquoted (string patname) <!>
-          dquoted (string nodeid) <> string ":type" <>
-          string " -> " <> dquoted (string tyname), nodeid)
-patternDot As { asName = sym, asPat = pat } =
-  do
-    namestr <- name sym
-    nodeid <- getNodeID
-    (patnode, patname) <- patternDot pat
-    return (patnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "As | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string "<pat> pat") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
-          string " -> " <> dquoted (string patname), nodeid)
-patternDot Bind { bindSym = sym } =
-  do
-    namestr <- name sym
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Name | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"") <!>
-                      string "shape = \"record\"") <> char ';', nodeid)
-patternDot Exact { exactLit = e } =
-  do
-    nodeid <- getNodeID
-    (bodynode, bodyname) <- literalDot e
-    return (bodynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Exact | " <>
-                               string "<body>") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":body" <>
-          string " -> " <> dquoted (string bodyname), nodeid)
-
-expDot :: MonadSymbols m => Exp -> StateT Word m (Doc, String)
-expDot Compound { compoundBody = body } =
-  let
-    compoundEdge nodeid (_, compoundname) =
-      dquoted (string nodeid) <> string ":body" <>
-      string " -> " <> dquoted (string compoundname)
-  in do
-    compoundContents <- mapM compoundDot body
-    nodeid <- getNodeID
-    return (vcat (map fst compoundContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Compound | " <>
-                              string "<body> body") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (compoundEdge nodeid)
-                                   compoundContents), nodeid)
-expDot Abs { absKind = kind, absCases = cases } =
-  let
-    caseEdge nodeid (_, casename) =
-      dquoted (string nodeid) <> string ":cases" <>
-      string " -> " <> dquoted (string casename)
-  in do
-    caseContents <- mapM caseDot cases
-    nodeid <- getNodeID
-    return (vcat (map fst caseContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Abs | " <>
-                               string " | " <> format kind <>
-                               string "<cases> cases") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (caseEdge nodeid) caseContents), nodeid)
-expDot Match { matchVal = val, matchCases = cases } =
-  let
-    caseEdge nodeid (_, casename) =
-      dquoted (string nodeid) <> string ":cases" <>
-      string " -> " <> dquoted (string casename)
-  in do
-    caseContents <- mapM caseDot cases
-    nodeid <- getNodeID
-    (valnode, valname) <- expDot val
-    return (valnode <!> vcat (map fst caseContents) <!>
-            dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Match | " <>
-                               string " <val> value | " <>
-                               string "<cases> cases") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":val" <>
-            string " -> " <> dquoted (string valname) <!>
-            vcat (map (caseEdge nodeid) caseContents), nodeid)
-expDot Ascribe { ascribeVal = val, ascribeType = ty } =
-  do
-    nodeid <- getNodeID
-    (valnode, valname) <- expDot val
-    (tynode, tyname) <- expDot ty
-    return (valnode <!> tynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Ascribe | " <>
-                               string " <type> type | " <>
-                               string "<val> value") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":val" <>
-          string " -> " <> dquoted (string valname) <!>
-          dquoted (string nodeid) <> string ":type" <>
-          string " -> " <> dquoted (string tyname), nodeid)
-expDot Seq { seqExps = exps } =
-  let
-    seqEdge nodeid (_, casename) =
-      dquoted (string nodeid) <> string ":vals" <>
-      string " -> " <> dquoted (string casename)
-  in do
-    nodeid <- getNodeID
-    seqContents <- mapM expDot exps
-    return (vcat (map fst seqContents) <!>
-            brackets (string "label = " <>
-                      dquoted (string "Seq | " <>
-                               string "<vals> values") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":val1" <>
-            vcat (map (seqEdge nodeid) seqContents), nodeid)
-expDot Record { recordType = True, recordFields = fields } =
-  let
-    fieldEdge nodeid (_, patname) =
-      dquoted (string nodeid) <> string ":fields" <>
-      string " -> " <> dquoted (string patname)
-  in do
-    fieldContents <- mapM fieldDot fields
-    nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Record | type | " <>
-                               string "<fields> fields") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
-expDot Record { recordType = False, recordFields = fields } =
-  let
-    fieldEdge nodeid (_, patname) =
-      dquoted (string nodeid) <> string ":fields" <>
-      string " -> " <> dquoted (string patname)
-  in do
-    fieldContents <- mapM fieldDot fields
-    nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Record | value | " <>
-                               string "<fields> fields") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
-expDot Tuple { tupleFields = fields } =
-  let
-    fieldEdge nodeid (_, patname) =
-      dquoted (string nodeid) <> string ":fields" <>
-      string " -> " <> dquoted (string patname)
-  in do
-    fieldContents <- mapM expDot fields
-    nodeid <- getNodeID
-    return (vcat (map fst fieldContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Tuple | " <>
-                               string "<fields> fields") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (fieldEdge nodeid) fieldContents), nodeid)
-expDot Project { projectVal = val, projectFields = fields } =
-  let
-    commabstr = Strict.fromString ", "
-  in do
-    names <- mapM (name . fieldSym . nameSym) fields
-    nodeid <- getNodeID
-    (valnode, valname) <- expDot val
-    return (valnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Project | " <>
-                               string "\\\"" <>
-                               bytestring (Strict.intercalate commabstr
-                                                              names) <>
-                               string "\\\"" <>
-                               string "<val> value") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":val" <>
-          string " -> " <> dquoted (string valname), nodeid)
-expDot Sym { symName = sym } =
-  do
-    namestr <- name sym
-    nodeid <- getNodeID
-    return (dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Sym | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"") <!>
-                      string "shape = \"record\"") <> char ';', nodeid)
-expDot With { withVal = val, withArgs = args } =
-  do
-    nodeid <- getNodeID
-    (valnode, valname) <- expDot val
-    (argsnode, argsname) <- expDot args
-    return (valnode <!> argsnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "With | " <>
-                               string " <val> value | " <>
-                               string "<args> args") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":val" <>
-          string " -> " <> dquoted (string valname) <!>
-          dquoted (string nodeid) <> string ":args" <>
-          string " -> " <> dquoted (string argsname), nodeid)
-expDot Where { whereVal = val, whereProp = prop } =
-  do
-    nodeid <- getNodeID
-    (valnode, valname) <- expDot val
-    (propnode, propname) <- expDot prop
-    return (valnode <!> propnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Where | " <>
-                               string " <val> value | " <>
-                               string "<prop> prop") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":val" <>
-          string " -> " <> dquoted (string valname) <!>
-          dquoted (string nodeid) <> string ":prop" <>
-          string " -> " <> dquoted (string propname), nodeid)
-expDot Anon { anonKind = cls, anonParams = params,
-              anonContent = body, anonSuperTypes = supers } =
-  let
-    paramEdge nodeid (_, paramname) =
-      dquoted (string nodeid) <> string ":params" <>
-      string " -> " <> dquoted (string paramname)
-
-    supersEdge nodeid (_, supername) =
-      dquoted (string nodeid) <> string ":supers" <>
-      string " -> " <> dquoted (string supername)
-
-    groupEdge nodeid (_, groupname) =
-      dquoted (string nodeid) <> string ":groups" <>
-      string " -> " <> dquoted (string groupname)
-  in do
-    nodeid <- getNodeID
-    paramContents <- mapM fieldDot params
-    supersContents <- mapM expDot supers
-    bodyContents <- mapM groupDot body
-    return (vcat (map fst paramContents) <!> vcat (map fst supersContents) <!>
-            vcat (map fst bodyContents) <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Anon | " <>
-                               string " | " <> string (show cls) <>
-                               string (" | <params> params" ++
-                                       " | <supers> supers" ++
-                                       " | <body> body")) <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> vcat (map (paramEdge nodeid) paramContents) <!>
-            vcat (map (supersEdge nodeid) supersContents) <!>
-            vcat (map (groupEdge nodeid) bodyContents), nodeid)
-expDot Literal { literalVal = l } =
-  do
-    nodeid <- getNodeID
-    (bodynode, bodyname) <- literalDot l
-    return (bodynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Literal | " <>
-                               string "<body>") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":body" <>
-          string " -> " <> dquoted (string bodyname), nodeid)
-
-entryDot :: MonadSymbols m => Entry -> StateT Word m (Doc, String)
-entryDot Named { namedSym = sym, namedVal = val } =
-  do
-    namestr <- name sym
-    nodeid <- getNodeID
-    (expnode, expname) <- patternDot val
-    return (expnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Named | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string "<value> value") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":value" <>
-            string " -> " <> dquoted (string expname), nodeid)
-entryDot Unnamed { unnamedPat = p } =
-  do
-    nodeid <- getNodeID
-    (patnode, patname) <- patternDot p
-    return (patnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Unnamed | " <>
-                               string "<value> value") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":value" <>
-          string " -> " <> dquoted (string patname), nodeid)
-
-fieldDot :: MonadSymbols m => Field -> StateT Word m (Doc, String)
-fieldDot Field { fieldName = FieldName { fieldSym = sym },
-                 fieldVal = val } =
-  do
-    nodeid <- getNodeID
-    namestr <- name sym
-    (valnode, valname) <- expDot val
-    return (valnode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Field | " <>
-                               string "\\\"" <> bytestring namestr <>
-                               string "\\\"" <>
-                               string " | <value> value") <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":value" <>
-            string " -> " <> dquoted (string valname), nodeid)
-
-caseDot :: MonadSymbols m => Case -> StateT Word m (Doc, String)
-caseDot Case { casePat = pat, caseBody = body } =
-  do
-    nodeid <- getNodeID
-    (patnode, patname) <- patternDot pat
-    (bodynode, bodyname) <- expDot body
-    return (patnode <!> bodynode <!> dquoted (string nodeid) <+>
-            brackets (string "label = " <>
-                      dquoted (string "Case | " <>
-                               string (" | <pat> pattern" ++
-                                       " | <body> body")) <!>
-                      string "shape = \"record\"") <>
-            char ';' <!> dquoted (string nodeid) <> string ":pat" <>
-            string " -> " <> dquoted (string patname) <!>
-            dquoted (string nodeid) <> string ":body" <>
-            string " -> " <> dquoted (string bodyname), nodeid)
-
 instance (MonadPositions m, MonadSymbols m) => FormatM m AST where
   formatM AST { astComponent = Just component,
                 astUses = uses, astScope = scope } =
     do
       componentdoc <- formatM component
-      usesdoc <- liftM listDoc (mapM formatM uses)
-      scopedoc <- liftM listDoc (mapM formatM scope)
+      usesdoc <- fmap listDoc (mapM formatM uses)
+      scopedoc <- fmap listDoc (mapM formatM scope)
       return (compoundApplyDoc (string "AST")
                              [(string "component", componentdoc),
                               (string "uses", usesdoc),
                               (string "scope", scopedoc)])
   formatM AST { astComponent = Nothing, astUses = uses, astScope = scope } =
     do
-      usesdoc <- liftM listDoc (mapM formatM uses)
-      scopedoc <- liftM listDoc (mapM formatM scope)
+      usesdoc <- fmap listDoc (mapM formatM uses)
+      scopedoc <- fmap listDoc (mapM formatM scope)
       return (compoundApplyDoc (string "AST")
                              [(string "uses", usesdoc),
                               (string "scope", scopedoc)])
@@ -1704,7 +1076,7 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Group where
                               (string "elems", listDoc elemdocs)])
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m [Group] where
-  formatM = liftM listDoc . mapM formatM
+  formatM = fmap listDoc . mapM formatM
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Content where
   formatM Body { bodyScope = b } =
@@ -1717,22 +1089,43 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Content where
       valdoc <- formatM v
       return (compoundApplyDoc (string "Value")
                              [(string "value", valdoc)])
+  formatM None = return (string "None")
+
+instance (MonadPositions m, MonadSymbols m) => FormatM m Params where
+  formatM Params { paramsDefs = defs } =
+    do
+      paramdocs <- mapM formatM defs
+      return (listDoc paramdocs)
 
 instance (MonadPositions m, MonadSymbols m) => FormatM m Element where
   formatM Builder { builderName = sym, builderKind = cls,
-                    builderSuperTypes = supers, builderParams = params,
+                    builderSuperTypes = supers, builderParams = Just params,
                     builderContent = body, builderPos = pos } =
     do
       namedoc <- formatM sym
       posdoc <- formatM pos
       superdocs <- mapM formatM supers
-      paramdocs <- mapM formatM params
+      paramsdoc <- formatM params
       bodydoc <- formatM body
       return (compoundApplyDoc (string "Builder")
                              [(string "name", namedoc),
                               (string "pos", posdoc),
                               (string "kind", format cls),
-                              (string "params", listDoc paramdocs),
+                              (string "params", paramsdoc),
+                              (string "supers", listDoc superdocs),
+                              (string "body", bodydoc)])
+  formatM Builder { builderName = sym, builderKind = cls,
+                    builderSuperTypes = supers, builderParams = Nothing,
+                    builderContent = body, builderPos = pos } =
+    do
+      namedoc <- formatM sym
+      posdoc <- formatM pos
+      superdocs <- mapM formatM supers
+      bodydoc <- formatM body
+      return (compoundApplyDoc (string "Builder")
+                             [(string "name", namedoc),
+                              (string "pos", posdoc),
+                              (string "kind", format cls),
                               (string "supers", listDoc superdocs),
                               (string "body", bodydoc)])
   formatM Def { defPattern = pat, defInit = Just init, defPos = pos } =
@@ -1979,18 +1372,30 @@ instance (MonadPositions m, MonadSymbols m) => FormatM m Exp where
                              [(string "pos", posdoc),
                               (string "val", valdoc),
                               (string "prop", propdoc)])
-  formatM Anon { anonKind = cls, anonParams = params, anonContent = body,
+  formatM Anon { anonKind = cls, anonParams = Just params, anonContent = body,
                  anonSuperTypes = supers, anonPos = pos } =
 
     do
       posdoc <- formatM pos
       superdocs <- mapM formatM supers
-      paramdocs <- mapM formatM params
+      paramsdoc <- formatM params
       bodydoc <- mapM formatM body
       return (compoundApplyDoc (string "Anon")
                              [(string "pos", posdoc),
                               (string "kind", format cls),
-                              (string "params", listDoc paramdocs),
+                              (string "params", paramsdoc),
+                              (string "supers", listDoc superdocs),
+                              (string "body", listDoc bodydoc)])
+  formatM Anon { anonKind = cls, anonParams = Nothing, anonContent = body,
+                 anonSuperTypes = supers, anonPos = pos } =
+
+    do
+      posdoc <- formatM pos
+      superdocs <- mapM formatM supers
+      bodydoc <- mapM formatM body
+      return (compoundApplyDoc (string "Anon")
+                             [(string "pos", posdoc),
+                              (string "kind", format cls),
                               (string "supers", listDoc superdocs),
                               (string "body", listDoc bodydoc)])
   formatM Literal { literalVal = l } = formatM l
@@ -2116,8 +1521,23 @@ instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
     let
       picker Body {} = 0
       picker Value {} = 1
+      picker None = 2
     in
-      xpAlt picker [bodyPickler, valuePickler]
+      xpAlt picker [bodyPickler, valuePickler,
+                    xpWrap (const None, const ())
+                          (xpElemNodes (gxFromString "None") xpUnit)]
+
+instance (GenericXMLString tag, Show tag, GenericXMLString text, Show text) =>
+         XmlPickler [NodeG [] tag text] Params where
+  xpickle = xpWrap (\(defs, pos) -> Params { paramsDefs = defs,
+                                             paramsPos = pos },
+                    \Params { paramsDefs = defs, paramsPos = pos } ->
+                     (defs, pos))
+                   (xpElemNodes (gxFromString "Params")
+                                (xpPair (xpElemNodes (gxFromString "defs")
+                                                     xpickle)
+                                        (xpElemNodes (gxFromString "pos")
+                                                     xpickle)))
 
 builderPickler :: (GenericXMLString tag, Show tag,
                    GenericXMLString text, Show text) =>
@@ -2127,16 +1547,17 @@ builderPickler =
     revfunc Builder { builderName = sym, builderKind = kind,
                       builderParams = params, builderSuperTypes = supers,
                       builderContent = body, builderPos = pos } =
-      ((sym, kind), (params, supers, body, pos))
+      ((sym, kind), (supers, params, body, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\((sym, kind), (params, supers, body, pos)) ->
+    xpWrap (\((sym, kind), (supers, params, body, pos)) ->
              Builder { builderName = sym, builderKind = kind,
                        builderParams = params, builderSuperTypes = supers,
                        builderContent = body, builderPos = pos }, revfunc)
            (xpElem (gxFromString "Builder") (xpPair xpickle xpickle)
-                   (xp4Tuple (xpElemNodes (gxFromString "params") xpickle)
-                             (xpElemNodes (gxFromString "supers") xpickle)
+                   (xp4Tuple (xpElemNodes (gxFromString "supers") xpickle)
+                             (xpOption (xpElemNodes (gxFromString "params")
+                                                    xpickle))
                              (xpElemNodes (gxFromString "body") xpickle)
                              (xpElemNodes (gxFromString "pos") xpickle)))
 
@@ -2578,15 +1999,16 @@ anonPickler =
   let
     revfunc Anon { anonKind = kind, anonParams = params, anonContent = body,
                    anonSuperTypes = supers, anonPos = pos } =
-      (kind, (params, supers, body, pos))
+      (kind, (supers, params, body, pos))
     revfunc _ = error $! "Can't convert"
   in
-    xpWrap (\(kind, (params, supers, body, pos)) ->
+    xpWrap (\(kind, (supers, params, body, pos)) ->
              Anon { anonKind = kind, anonParams = params, anonContent = body,
                     anonSuperTypes = supers, anonPos = pos }, revfunc)
            (xpElem (gxFromString "Anon") xpickle
-                   (xp4Tuple (xpElemNodes (gxFromString "params") xpickle)
-                             (xpElemNodes (gxFromString "supers") xpickle)
+                   (xp4Tuple (xpElemNodes (gxFromString "supers") xpickle)
+                             (xpOption (xpElemNodes (gxFromString "params")
+                                                    xpickle))
                              (xpElemNodes (gxFromString "body") xpickle)
                              (xpElemNodes (gxFromString "pos") xpickle)))
 

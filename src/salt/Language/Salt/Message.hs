@@ -69,6 +69,7 @@ module Language.Salt.Message(
        duplicateSyntax,
        duplicateBuilder,
        duplicateName,
+       opaqueBuilder,
 
        -- ** Resolution Messages
        cyclicDefs,
@@ -348,6 +349,10 @@ data Message =
       duplicateElemName :: !Strict.ByteString,
       duplicateNamePosList :: ![Position]
     }
+  | OpaqueBuilder {
+      opaqueBuilderKind :: !BuilderKind,
+      opaqueBuilderPos :: !Position
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -512,11 +517,14 @@ instance Hashable Message where
   hashWithSalt s DuplicateName { duplicateElemName = sym,
                                  duplicateNamePosList = pos } =
     s `hashWithSalt` (40 :: Int) `hashWithSalt` sym `hashWithSalt` pos
+  hashWithSalt s OpaqueBuilder { opaqueBuilderPos = pos } =
+    s `hashWithSalt` (41 :: Int) `hashWithSalt` pos
 
 instance Msg.Message Message where
   severity HardTabs {} = Msg.Warning
   severity TrailingWhitespace {} = Msg.Warning
   severity NamelessUninitDef {} = Msg.Warning
+  severity OpaqueBuilder {} = Msg.Warning
   severity InternalError {} = Msg.Internal
   severity CallNonFunc {} = Msg.Internal
   severity NoMatch {} = Msg.Internal
@@ -599,6 +607,8 @@ instance Msg.Message Message where
     | otherwise = string "Not enough fields in tuple"
   brief DuplicateName { duplicateElemName = namestr } =
     string "Duplicate name reference" <+> bytestring namestr
+  brief OpaqueBuilder { opaqueBuilderKind = kind } =
+    string "Opaque" <+> format kind <+> string " declaration"
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -694,6 +704,7 @@ instance Msg.MessagePosition BasicPosition Message where
   positions MissingFields { missingFieldsPos = pos } = [pos]
   positions TupleMismatch { tupleMismatchPos = pos } = [pos]
   positions DuplicateName { duplicateNamePosList = poslist } = poslist
+  positions OpaqueBuilder { opaqueBuilderPos = pos } = [pos]
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1179,3 +1190,14 @@ duplicateName sym poslist =
     str <- name sym
     message DuplicateName { duplicateElemName = str,
                             duplicateNamePosList = poslist }
+
+-- | Report an opaque builder declaration.
+opaqueBuilder :: (MonadMessages Message m) =>
+                 BuilderKind
+              -- ^ The duplicate field name.
+              -> Position
+              -- ^ The position at which the duplicated field occurs.
+              -> m ()
+opaqueBuilder kind pos =
+  message OpaqueBuilder { opaqueBuilderKind = kind,
+                          opaqueBuilderPos = pos }
