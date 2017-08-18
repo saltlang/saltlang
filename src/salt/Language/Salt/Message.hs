@@ -76,6 +76,8 @@ module Language.Salt.Message(
        illegalAccess,
        outOfContextAccess,
        undefSymbol,
+       ambiguousInherit,
+       importCollision,
 
        namelessField,
        noTopLevelDef,
@@ -353,6 +355,14 @@ data Message =
       opaqueBuilderKind :: !BuilderKind,
       opaqueBuilderPos :: !Position
     }
+  | AmbiguousInherit {
+      ambiguousInheritSym :: !Strict.ByteString,
+      ambiguousInheritPosList :: ![Position]
+    }
+  | ImportCollision {
+      importCollisionSym :: !Strict.ByteString,
+      importCollisionPosList :: ![Position]
+    }
 {-
   -- | An error message representing an undefined proposition in the
   -- truth envirnoment.
@@ -519,6 +529,12 @@ instance Hashable Message where
     s `hashWithSalt` (40 :: Int) `hashWithSalt` sym `hashWithSalt` pos
   hashWithSalt s OpaqueBuilder { opaqueBuilderPos = pos } =
     s `hashWithSalt` (41 :: Int) `hashWithSalt` pos
+  hashWithSalt s AmbiguousInherit { ambiguousInheritSym = sym,
+                                    ambiguousInheritPosList = poslist } =
+    s `hashWithSalt` (42 :: Int) `hashWithSalt` sym `hashWithSalt` poslist
+  hashWithSalt s ImportCollision { importCollisionSym = sym,
+                                   importCollisionPosList = poslist } =
+    s `hashWithSalt` (43 :: Int) `hashWithSalt` sym `hashWithSalt` poslist
 
 instance Msg.Message Message where
   severity HardTabs {} = Msg.Warning
@@ -609,6 +625,10 @@ instance Msg.Message Message where
     string "Duplicate name reference" <+> bytestring namestr
   brief OpaqueBuilder { opaqueBuilderKind = kind } =
     string "Opaque" <+> format kind <+> string " declaration"
+  brief AmbiguousInherit { ambiguousInheritSym = sym } =
+    string "Ambiguous inheritance of symbol" <+> dquoted (bytestring sym)
+  brief ImportCollision { importCollisionSym = sym } =
+    string "Multiple imports of symbol" <+> dquoted (bytestring sym)
 
   details m | Msg.severity m == Msg.Internal =
     Just $! string "An internal compiler error has occurred."
@@ -705,6 +725,8 @@ instance Msg.MessagePosition BasicPosition Message where
   positions TupleMismatch { tupleMismatchPos = pos } = [pos]
   positions DuplicateName { duplicateNamePosList = poslist } = poslist
   positions OpaqueBuilder { opaqueBuilderPos = pos } = [pos]
+  positions AmbiguousInherit { ambiguousInheritPosList = poslist } = poslist
+  positions ImportCollision { importCollisionPosList = poslist } = poslist
 
 -- | Report bad characters in lexer input.
 badChars :: MonadMessages Message m =>
@@ -1201,3 +1223,29 @@ opaqueBuilder :: (MonadMessages Message m) =>
 opaqueBuilder kind pos =
   message OpaqueBuilder { opaqueBuilderKind = kind,
                           opaqueBuilderPos = pos }
+
+-- | Report an ambiguous inheritance.
+ambiguousInherit :: (MonadMessages Message m, MonadSymbols m) =>
+                    Symbol
+                 -- ^ The missing field symbols.
+                 -> [Position]
+                 -- ^ The position at which the extra symbol occurs.
+                 -> m ()
+ambiguousInherit sym poslist =
+  do
+    str <- name sym
+    message AmbiguousInherit { ambiguousInheritSym = str,
+                               ambiguousInheritPosList = poslist }
+
+-- | Report an import collision.
+importCollision :: (MonadMessages Message m, MonadSymbols m) =>
+                    Symbol
+                -- ^ The missing field symbols.
+                -> [Position]
+                -- ^ The position at which the extra symbol occurs.
+                -> m ()
+importCollision sym poslist =
+  do
+    str <- name sym
+    message ImportCollision { importCollisionSym = str,
+                              importCollisionPosList = poslist }
