@@ -38,12 +38,14 @@ module Language.Salt.Surface.Resolve.Resolution(
 
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
+import Data.HashSet(HashSet)
 import Data.List(sort)
 import Data.Semigroup
 import Data.ScopeID
 import Data.Symbol
 
 import qualified Data.HashMap.Strict as HashMap
+import qualified Data.HashSet as HashSet
 
 -- | Resolution path element.  A sequence of these describe how an
 -- indirect resolution is resolved.
@@ -69,12 +71,11 @@ data PathElem =
     deriving (Eq, Ord)
 
 data ResolvedScope expty =
-    ResolvedScope {
-      resolvedScopeID :: !ScopeID,
-      resolvedScopeDeps :: !(HashMap (ScopeID, expty) ScopeID)
-    }
-  | NotScope
-    deriving (Eq)
+  ResolvedScope {
+    resolvedScopeID :: !ScopeID,
+    resolvedScopeDeps :: !(HashMap (ScopeID, expty) (HashSet ScopeID))
+  }
+  deriving (Eq)
 
 -- | Non-Local resolution result.  This is separate, because we only
 -- store non-local resolutions in the dependence set.
@@ -91,11 +92,12 @@ data NonLocal expty =
     -- derived.
     nonLocalTail :: ![PathElem],
     -- | All resolution results on which this resolution depends.
+
+    -- XXX This may be duplicated by the deps field in ResolvedScope
     nonLocalDeps :: !(HashMap (ScopeID, expty) ScopeID),
     -- | If this resolution points to a builder and we can resolve
     -- the scope, it is stored here.
     nonLocalResolvedScope :: !(Maybe (ResolvedScope expty))
-
   }
   deriving (Eq)
 
@@ -141,15 +143,14 @@ instance Ord expty => Ord (ResolvedScope expty) where
           ResolvedScope { resolvedScopeID = scopeid2,
                           resolvedScopeDeps = deps2 } =
     let
-      sorteddeps1 = sort (HashMap.toList deps1)
-      sorteddeps2 = sort (HashMap.toList deps2)
+      sorteddeps1 = sort (map (\(key, val) -> (key, sort (HashSet.toList val)))
+                              (HashMap.toList deps1))
+      sorteddeps2 = sort (map (\(key, val) -> (key, sort (HashSet.toList val)))
+                              (HashMap.toList deps2))
     in
       case compare scopeid1 scopeid2 of
         EQ -> compare sorteddeps1 sorteddeps2
         out -> out
-  compare ResolvedScope {} _ = LT
-  compare _ ResolvedScope {} = GT
-  compare NotScope NotScope = EQ
 
 instance Hashable PathElem where
   hashWithSalt s Imported { importedScope = scope } =
@@ -160,14 +161,13 @@ instance Hashable PathElem where
     s `hashWithSalt` (2 :: Word) `hashWithSalt` scope `hashWithSalt` depth
 
 instance (Ord expty, Hashable expty) => Hashable (ResolvedScope expty) where
-  hashWithSalt s NotScope = s `hashWithSalt` (0 :: Int)
   hashWithSalt s ResolvedScope { resolvedScopeID = scopeid,
                                  resolvedScopeDeps = deps } =
     let
-      sorteddeps = sort (HashMap.toList deps)
+      sorteddeps = sort (map (\(key, val) -> (key, sort (HashSet.toList val)))
+                             (HashMap.toList deps))
     in
-      s `hashWithSalt` (1 :: Int) `hashWithSalt`
-      scopeid `hashWithSalt` sorteddeps
+      s `hashWithSalt` scopeid `hashWithSalt` sorteddeps
 
 instance Hashable expty => Hashable (NonLocal expty) where
   hashWithSalt s NonLocal { nonLocalScope = scopeid, nonLocalSym = sym,
