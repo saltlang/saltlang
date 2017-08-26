@@ -38,14 +38,12 @@ module Language.Salt.Surface.Resolve.Resolution(
 
 import Data.Hashable
 import Data.HashMap.Strict(HashMap)
-import Data.HashSet(HashSet)
 import Data.List(sort)
 import Data.Semigroup
 import Data.ScopeID
 import Data.Symbol
 
 import qualified Data.HashMap.Strict as HashMap
-import qualified Data.HashSet as HashSet
 
 -- | Resolution path element.  A sequence of these describe how an
 -- indirect resolution is resolved.
@@ -73,7 +71,7 @@ data PathElem =
 data ResolvedScope expty =
   ResolvedScope {
     resolvedScopeID :: !ScopeID,
-    resolvedScopeDeps :: !(HashMap (ScopeID, expty) (HashSet ScopeID))
+    resolvedScopeDeps :: !(HashMap (ScopeID, expty) ScopeID)
   }
   deriving (Eq)
 
@@ -143,10 +141,8 @@ instance Ord expty => Ord (ResolvedScope expty) where
           ResolvedScope { resolvedScopeID = scopeid2,
                           resolvedScopeDeps = deps2 } =
     let
-      sorteddeps1 = sort (map (\(key, val) -> (key, sort (HashSet.toList val)))
-                              (HashMap.toList deps1))
-      sorteddeps2 = sort (map (\(key, val) -> (key, sort (HashSet.toList val)))
-                              (HashMap.toList deps2))
+      sorteddeps1 = sort (HashMap.toList deps1)
+      sorteddeps2 = sort (HashMap.toList deps2)
     in
       case compare scopeid1 scopeid2 of
         EQ -> compare sorteddeps1 sorteddeps2
@@ -164,8 +160,7 @@ instance (Ord expty, Hashable expty) => Hashable (ResolvedScope expty) where
   hashWithSalt s ResolvedScope { resolvedScopeID = scopeid,
                                  resolvedScopeDeps = deps } =
     let
-      sorteddeps = sort (map (\(key, val) -> (key, sort (HashSet.toList val)))
-                             (HashMap.toList deps))
+      sorteddeps = sort (HashMap.toList deps)
     in
       s `hashWithSalt` scopeid `hashWithSalt` sorteddeps
 

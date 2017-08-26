@@ -72,7 +72,7 @@ data TempRefError =
     Cyclic { cyclicRefs :: !(HashSet (ScopeID, TempRef)) }
     -- | A resolution result which depends on itself resolving to
     -- something else.
-  | Inconsistent { inconsistentRes :: !(NonLocal TempRef) }
+  | Inconsistent { inconsistentDeps :: !(HashMap (ScopeID, TempRef) ScopeID) }
     -- | Resolution of the TempRef relies on a symbol which resolves
     -- to an error.
   | SymbolError { symbolError :: !SymbolError }
@@ -89,7 +89,6 @@ data SymbolError =
   | Illegal {
       -- | Visibility of the symbol.
       illegalVisibility :: !Visibility
-
     }
     -- | Access to a non-static definition from a static context.
   | Inaccessible {
@@ -109,13 +108,13 @@ newtype TempRef = TempRef { tempRefID :: Word }
 data TempInherit =
   TempInherit {
     tempInheritScope :: !ScopeID,
-    tempInheritDeps :: !(HashMap (ScopeID, TempRef) (HashSet ScopeID))
+    tempInheritDeps :: !(HashMap (ScopeID, TempRef) ScopeID)
   }
 
 data TempImport =
   TempImport {
     tempImportData :: !ScopeID,
-    tempImportDeps :: !(HashMap (ScopeID, TempRef) (HashSet ScopeID))
+    tempImportDeps :: !(HashMap (ScopeID, TempRef) ScopeID)
   }
 
 data TempScope =
@@ -134,10 +133,6 @@ data TempScope =
     tempScopeDefs :: !(Array DefID (Def (Exp Seq TempRef))),
     tempScopeEval :: ![Compound (Exp Seq TempRef)],
 
-    -- XXX We may delete this
-    -- | Symbol references that get resolved by local definitions.
---    tempScopeLocalRefs :: !(HashSet Symbol),
-
     -- | Definitions of 'TempRef's
     tempScopeRenameTab :: !(Array TempRef TempExp),
     tempScopeSymbolTempRefs :: !(HashMap Symbol TempRef),
@@ -148,7 +143,7 @@ data TempScope =
     tempScopeResTabMask :: !(IOBitArray TempRef)
   }
 
-type ResolveDeps = HashMap (ScopeID, TempRef) (HashSet ScopeID)
+type ResolveDeps = HashMap (ScopeID, TempRef) ScopeID
 
 type SymbolResult = Either SymbolError (Resolution TempRef)
 
@@ -191,9 +186,13 @@ instance Ord TempRefError where
       compare sortedrefs1 sortedrefs2
   compare Cyclic {} _ = LT
   compare _ Cyclic {} = GT
-  compare Inconsistent { inconsistentRes = res1 }
-          Inconsistent { inconsistentRes = res2 } =
-    compare res1 res2
+  compare Inconsistent { inconsistentDeps = deps1 }
+          Inconsistent { inconsistentDeps = deps2 } =
+    let
+      sorteddeps1 = sort (HashMap.toList deps1)
+      sorteddeps2 = sort (HashMap.toList deps2)
+    in
+      compare sorteddeps1 sorteddeps2
   compare Inconsistent {} _ = LT
   compare _ Inconsistent {} = GT
 
@@ -233,8 +232,11 @@ instance Hashable TempRefError where
       sortedRefs = sort (HashSet.toList refs)
     in
       s `hashWithSalt` (0 :: Int) `hashWithSalt` sortedRefs
-  hashWithSalt s Inconsistent { inconsistentRes = res } =
-    s `hashWithSalt` (1 :: Word) `hashWithSalt` res
+  hashWithSalt s Inconsistent { inconsistentDeps = deps } =
+    let
+      sorteddeps = sort (HashMap.toList deps)
+    in
+      s `hashWithSalt` (1 :: Word) `hashWithSalt` deps
 
 instance Hashable SymbolError where
   hashWithSalt s Ambiguous { ambiguousRefs = refs } =
@@ -534,7 +536,6 @@ renameScope Scope { scopeBuilders = builders, scopeSyntax = syntax,
                        tempScopeTruths = newtruths,
                        tempScopeDefs = newdefs,
                        tempScopeEval = neweval,
---                       tempScopeLocalRefs = localrefs,
                        tempScopeRenameTab = renametab endidx tab,
                        tempScopeSymbolTempRefs = symtab,
                        tempScopeSymbolPos = sympos,
@@ -803,24 +804,13 @@ finishScopes finalscopes resolvetabs scopelinks =
                                  TempExp
                               -> m (Position -> Exp Seq Ref)
                 finishTempExp TempSym { tempSym = sym } =
-{-
-                    -- Directly-defined symbols are generated on the fly
-                  | isDirect sym =
-                    let
-                      ref = Ref { refScopeID = scopeid, refSymbol = sym }
-                    in
+                  case HashMap.lookup sym finishedsyms of
+                    Just ref ->
                       return (\pos -> Id { idRef = ref, idPos = pos })
-                    -- Lookup non-locally-defined symbols in the
-                    -- finished symbols table
-                  | otherwise =
--}
-                    case HashMap.lookup sym finishedsyms of
-                      Just ref ->
-                        return (\pos -> Id { idRef = ref, idPos = pos })
-                      Nothing ->
-                        do
-                          internalError "Symbol not present in resolved syms" []
-                          return (\pos -> Bad { badPos = pos })
+                    Nothing ->
+                      do
+                        internalError "Symbol not present in resolved syms" []
+                        return (\pos -> Bad { badPos = pos })
                 finishTempExp TempExp { tempExp = ex } = finishExp ex
 
                 finishTempRef :: (MonadIO m, MonadMessages Message m) =>
@@ -884,14 +874,7 @@ finishScopes finalscopes resolvetabs scopelinks =
               return Link { linkScopeID = scopeid, linkPos = pos }
             -- Anything else is a bad link.
             _ -> return BadLink { badLinkPos = pos }
-{-
-        -- All the locally-defined symbol references
-        finishedlocals =
-          let
-            mapfun sym = (sym, Ref { refScopeID = scopeid, refSymbol = sym })
-          in
-            HashMap.fromList (map mapfun (HashSet.toList localrefs))
--}
+
         finishedinherits = fmap mapinherits inherits
       in do
         -- Pull in all the resolved symbols
@@ -948,7 +931,7 @@ illegal = throwError . Illegal
 
 -- | Report an inconsistent resolution
 inconsistent :: (Monad m) =>
-                NonLocal TempRef
+                HashMap (ScopeID, TempRef) ScopeID
              -> ExceptT TempRefError m a
 inconsistent = throwError . Inconsistent
 
@@ -1041,7 +1024,19 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                        -> Symbol
                        -> ExceptT TempRefError m (ResolvedScope TempRef)
     resolveScopeSymbol deps scopeid sym =
-      do
+      let
+        foldfun :: (MonadIO m, MonadMessages Message m) =>
+                   HashMap (ScopeID, TempRef) ScopeID
+                -> ((ScopeID, TempRef), ScopeID)
+                -> m (HashMap (ScopeID, TempRef) ScopeID)
+        foldfun accum (key @ (scopeid, tempref), resscope)
+          | not (HashMap.member key accum) =
+            return (HashMap.insert key resscope accum)
+          | otherwise =
+            do
+              internalError "Inconsistent dependencies" []
+              return accum
+      in do
         syms <- liftIO $! IOArray.readArray resolvetabs scopeid
         case HashMap.lookup sym syms of
           Just (Right Direct {
@@ -1050,11 +1045,10 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                                                      resolvedScopeDeps = resdeps
                                                    }
                       }) ->
-            return ResolvedScope {
-                     resolvedScopeID = resscope,
-                     resolvedScopeDeps = HashMap.unionWith HashSet.union
-                                                           deps resdeps
-                   }
+            do
+              uniondeps <- foldM foldfun deps (HashMap.toList resdeps)
+              return ResolvedScope { resolvedScopeID = resscope,
+                                     resolvedScopeDeps = uniondeps }
           Just (Right Indirect {
                         indirectSrc =
                           NonLocal {
@@ -1063,11 +1057,10 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                                                    resolvedScopeDeps = resdeps }
                                    }
                       }) ->
-            return ResolvedScope {
-                     resolvedScopeID = resscope,
-                     resolvedScopeDeps = HashMap.unionWith HashSet.union
-                                                           deps resdeps
-                   }
+            do
+              uniondeps <- foldM foldfun deps (HashMap.toList resdeps)
+              return ResolvedScope { resolvedScopeID = resscope,
+                                     resolvedScopeDeps = uniondeps }
           -- Report non-scopes
           Just (Right Direct { directResolvedScope = Nothing }) -> notScope
           Just (Right Indirect {
@@ -1130,10 +1123,11 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
     -- For a builder expression, return the scope id.
     resolveScopeExpTail _ deps scopeid tempref Anon { anonScope = resscopeid } =
       let
-        residset = HashSet.singleton resscopeid
         key = (scopeid, tempref)
-        newdeps = HashMap.insertWith HashSet.union key residset deps
-      in
+        newdeps = HashMap.insert key resscopeid deps
+      in do
+        when (HashMap.member (scopeid, tempref) deps)
+             (internalError "Inconsistent dependencies" [])
         return ResolvedScope { resolvedScopeID = resscopeid,
                                resolvedScopeDeps = newdeps }
     -- Skip bad scopes
@@ -1163,6 +1157,23 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
         return (Left Cyclic { cyclicRefs = history })
       | otherwise =
         let
+          -- | Check that the resolution result is consistent.
+          checkConsistent :: (MonadIO m, MonadMessages Message m) =>
+                             (ResolvedScope TempRef)
+                          -> ExceptT TempRefError m (ResolvedScope TempRef)
+          checkConsistent out @ ResolvedScope { resolvedScopeID = expected,
+                                                resolvedScopeDeps = deps } =
+            case HashMap.lookup (scopeid, tempref) deps of
+              -- If we depend on our own resolution being something
+              -- different, then this is an inconsistent resolution
+              -- result.
+              Just actual
+                | expected /= actual -> inconsistent deps
+                  -- Otherwise the result is fine.
+              _ -> return out
+          -- In all other cases, resolution is consistent
+          checkConsistent out = return out
+
           TempScope { tempScopeRenameTab = renametab,
                       tempScopeResTab = restab,
                       tempScopeResTabMask = mask } = tempscopes Array.! scopeid
@@ -1171,11 +1182,15 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
           -- builder reference.
           resolveScopeTempExp :: (MonadIO m, MonadMessages Message m) =>
                                  TempExp
-                              -> m TempRefResult
+                              -> ExceptT TempRefError m (ResolvedScope TempRef)
           resolveScopeTempExp TempSym { tempSym = sym } =
-            runExceptT $! resolveScopeSymbol deps scopeid sym
+            do
+              res <- resolveScopeSymbol deps scopeid sym
+              checkConsistent res
           resolveScopeTempExp TempExp { tempExp = ex } =
-            runExceptT $! resolveScopeExpTail history deps scopeid tempref ex
+            do
+              res <- resolveScopeExpTail history deps scopeid tempref ex
+              checkConsistent res
 
           logError :: (MonadIO m, MonadMessages Message m) =>
                       TempRefError
@@ -1194,7 +1209,7 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
             -- If we do, then return it
             then lookupScopeTempRef scopeid tempref
             else do
-              out <- resolveScopeTempExp tempexp
+              out <- runExceptT $! resolveScopeTempExp tempexp
               liftIO $! IOArray.writeArray restab tempref out
               liftIO $! IOBitArray.writeArray mask tempref True
               return out
@@ -1345,21 +1360,14 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
 
             builderLookup = case HashMap.lookup sym builders of
               Just Builder { builderVisibility = actualvis,
-                             -- XXX This should be a tempref, not an exp
                              builderContent = content } ->
                 -- There should be a tempref for this symbol
-                case HashMap.lookup sym symtemprefs of
-                  Just tempref ->
-                    do
-                      -- Attempt to resolve the scope expression.
-                      ent <- lookupScopeTempRef scopeid tempref
-                      case ent of
-                        Left _ -> undef
-                        Right res -> checkVisibility (Just res) actualvis
-                  Nothing ->
-                    do
-                      internalError "No tempref mapping for symbol" []
-                      undef
+                do
+                  -- Attempt to resolve the scope expression.
+                  ent <- lookupScopeTempRef scopeid content
+                  case ent of
+                    Left _ -> undef
+                    Right res -> checkVisibility (Just res) actualvis
               Nothing -> undef
 
             truthLookup = case HashMap.lookup sym truths of
@@ -1424,6 +1432,42 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                   -- Otherwise, we can't possibly import the symbol here.
               | otherwise = undef
 
+            reconcileFiltered :: (MonadIO m, MonadMessages Message m) =>
+                                 [Resolution TempRef]
+                              -> ExceptT SymbolError m (Resolution TempRef)
+            reconcileFiltered [] = undef
+            reconcileFiltered valids =
+              let
+                foldfun accum Direct {} =
+                  do
+                    internalError "Shouldn't see direct resolution" []
+                    return accum
+                foldfun accum Indirect {
+                                indirectSrc = nl @ NonLocal {
+                                                     nonLocalScope = nlscope,
+                                                     nonLocalSym = nlsym
+                                                   }
+                              } =
+                  let
+                    ref = Ref { refScopeID = nlscope, refSymbol = nlsym }
+                  in do
+                    when (HashMap.member ref accum)
+                         (internalError "Inconsistent dependencies" [])
+                    return (HashMap.insert ref nl accum)
+              in do
+                -- Combine all valids by the definition they
+                -- actually reference
+                validtab <- foldM foldfun HashMap.empty valids
+                case HashMap.toList validtab of
+                  [] ->
+                    do
+                      internalError "Shouldn't see empty list" []
+                      undef
+                  -- One unique object imported: this is what we want.
+                  [(_, src)] -> return Indirect { indirectSrc = src }
+                  -- If we have more than one, it's an import collision
+                  _ -> collision validtab
+
             reconcileImports :: (MonadIO m, MonadMessages Message m) =>
                                 [Either SymbolError (Resolution TempRef)]
                              -> ExceptT SymbolError m (Resolution TempRef)
@@ -1433,45 +1477,7 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
             reconcileImports [Left out] = throwError out
             reconcileImports [Right out] = return out
             reconcileImports resolutions =
-              let
-                valids = rights resolutions
-              in
-                case valids of
-                  -- If there's no valid results, report undefined
-                  [] -> undef
-                  [out] -> return out
-                  -- Harder case, there's more than one valid (maybe)
-                  _ ->
-                    let
-                      foldfun accum Direct {} =
-                        do
-                          internalError "Shouldn't see direct resolution" []
-                          return accum
-                      foldfun accum Indirect {
-                                      indirectSrc =
-                                        nl @ NonLocal {
-                                               nonLocalScope = nlscope,
-                                               nonLocalSym = nlsym
-                                             }
-                                    } =
-                        let
-                          ref = Ref { refScopeID = nlscope, refSymbol = nlsym }
-                        in
-                          -- XXX Should we merge the dependencies?
-                          return (HashMap.insert ref nl accum)
-                    in do
-                      -- Combine all valids by the definition they
-                      -- actually reference
-                      validtab <- foldM foldfun HashMap.empty valids
-                      case HashMap.toList validtab of
-                        [] ->
-                          do
-                            internalError "Shouldn't see empty list" []
-                            undef
-                        -- One unique object imported: this is what we want.
-                        [(_, src)] -> return Indirect { indirectSrc = src }
-                        -- If we have more than one, it's an import collision
-                        _ -> collision validtab
+              reconcileFiltered (rights resolutions)
 
             mapfun (_, Left _, _) = return (Left Undefined)
             mapfun (imp, Right timp, _) =
@@ -1484,7 +1490,6 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
               liftIO $! IOArray.readArray scopelinks scopeid
             resolved <- mapM mapfun imports
             reconcileImports (filter filterfun resolved)
-
 
         resolveFromInherits :: (MonadIO m, MonadMessages Message m) =>
                                ExceptT SymbolError m (Resolution TempRef)
@@ -1531,18 +1536,11 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                 -- Add the inherit path element.
                 addPathElem res
 
-            -- | Take a raw set of inherited resolutions and eliminate
-            -- all overridden resolutions.  If this reduces the set to
-            -- a singleton, that is the result; otherwise, it's an
-            -- ambiguous resolution.
-            reconcileInherits :: (MonadIO m, MonadMessages Message m) =>
-                                 [Resolution TempRef]
+            reconcileFiltered :: (MonadIO m, MonadMessages Message m) =>
+                                 [(Resolution TempRef)]
                               -> ExceptT SymbolError m (Resolution TempRef)
-            -- Easy case: we found nothing
-            reconcileInherits [] = undef
-            -- Easy case; we found exactly one, no reconciliation required
-            reconcileInherits [out] = return out
-            reconcileInherits resolutions =
+            reconcileFiltered [] = undef
+            reconcileFiltered resolutions =
               let
                 -- Filter out all the resolutions that are overridden
                 -- by other resolutions.
@@ -1617,16 +1615,34 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
                   -- Ambiguous resolution
                   _ -> ambiguous nonoverrides
 
-            -- XXX This is wrong, see how it's done with imports
-            mapfun (Left _, _) = undef
-            mapfun (Right inherit, _) = resolveFromInherit inherit
+            -- | Take a raw set of inherited resolutions and eliminate
+            -- all overridden resolutions.  If this reduces the set to
+            -- a singleton, that is the result; otherwise, it's an
+            -- ambiguous resolution.
+            reconcileInherits :: (MonadIO m, MonadMessages Message m) =>
+                                 [Either SymbolError (Resolution TempRef)]
+                              -> ExceptT SymbolError m (Resolution TempRef)
+            -- Easy case: we found nothing
+            reconcileInherits [] = undef
+            -- Easy case; we found exactly one, no reconciliation required
+            reconcileInherits [Left err] = throwError err
+            reconcileInherits [Right out] = return out
+            reconcileInherits resolutions =
+              reconcileFiltered (rights resolutions)
+
+            mapfun (Left _, _) = return (Left Undefined)
+            mapfun (Right inherit, _) =
+              runExceptT (resolveFromInherit inherit)
+
+            filterfun (Left Undefined) = False
+            filterfun _ = True
           in do
             TempScopeLinks { tempScopeResolvedInherits = inherits } <-
               liftIO $! IOArray.readArray scopelinks scopeid
             -- First resolve all inherits
             resolved <- mapM mapfun inherits
             -- Now reconcile all the results down to one
-            reconcileInherits resolved
+            reconcileInherits (filter filterfun resolved)
 
         -- | Attempt to resolve enclosing definitions, if we are
         -- allowed to look there.
@@ -1688,44 +1704,10 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
               Nothing -> undef
             -- Otherwise, report undefined.
           | otherwise = undef
-
-        -- | Check that the resolution result is consistent.
-        checkConsistent :: (MonadIO m, MonadMessages Message m) =>
-                           (Resolution TempRef)
-                        -> ExceptT SymbolError m (Resolution TempRef)
-        checkConsistent out @ Indirect {
-                                indirectSrc =
-                                  src @ NonLocal {
-                                          nonLocalDeps = deps,
-                                          nonLocalResolvedScope =
-                                            Just ResolvedScope {
-                                                   resolvedScopeID = expectscope
-                                                 }
-                                        }
-                              } =
-          -- See if there's a tempref for this symbol.
-          case HashMap.lookup sym symtemprefs of
-            -- If there's not, then there's nothing to do.
-            Nothing -> return out
-            -- If there is, then we do the consistency check
-            Just tempref ->
-              -- Check if the scope, tempref pair is in the dependencies
-              case HashMap.lookup (scopeid, tempref) deps of
-                -- If we depend on our own resolution being something
-                -- different, then this is an inconsistent resolution
-                -- result.
-                Just actualscope
-                  | expectscope /= actualscope -> inconsistent src
-                -- Otherwise the result is fine.
-                _ -> return out
-        -- In all other cases, resolution is consistent
-        checkConsistent out = return out
-      in do
+      in
         -- Search for results in precedence order
-        res <- firstValid [resolveDirect, resolveFromImports,
-                           resolveFromInherits, resolveFromEnclosing]
-        -- Check consistency
-        checkConsistent res
+        firstValid [resolveDirect, resolveFromImports,
+                    resolveFromInherits, resolveFromEnclosing]
 
     -- | Attempt to resolve all symbols in a scope, if it's in the
     -- workset.
@@ -1768,13 +1750,8 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
       let
         TempScope { tempScopeRenameTab = renametab,
                     tempScopeResTab = restab } = tempscopes Array.! scopeid
-
-        updateEntry idx =
-          do
-            _ <- _
-            return ()
       in
-        mapM_ updateEntry (Array.indices renametab)
+        mapM_ (resolveScopeTempRef scopeid) (Array.indices renametab)
 
     resolveScopeLinks :: (MonadIO m, MonadMessages Message m) =>
                          ScopeID
@@ -1868,6 +1845,8 @@ resolveScopes resolvetabs scopelinks tempscopes workset nextworkset =
         updateResolved (idx, newrestab) =
           liftIO $! IOArray.writeArray resolvetabs idx newrestab
       in do
+        -- XXX Refactor this part; it's probably wrong
+
         changedset <- liftIO (IOBitArray.newArray arrbounds True)
         -- Attempt to resolve all the external symbols in scopes that
         -- were in the work-set
@@ -1927,15 +1906,6 @@ resolve surface @ Surface { surfaceScopes = scopes } =
           let
             -- Gather up all the symbols referenced in the scope
             syms = foldl (foldl (flip HashSet.insert)) HashSet.empty scope
-{-
-            isDirect sym = any (HashMap.member sym) (Array.elems names) ||
-                           HashMap.member sym builders ||
-                           HashMap.member sym truths
-
-            -- Filter out all local definitions
-            (localsyms, nonlocalsyms) = partition isDirect (HashSet.toList syms)
-            -- Make everything undefined initially
--}
             ents = zip (HashSet.toList syms) (repeat (Left Undefined))
           in do
             tempscope <- renameScope scope
